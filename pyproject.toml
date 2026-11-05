@@ -37,7 +37,7 @@ dev = [
     "loguru>=0.7.3",
 ]
 lint = [
-    "ruff>=0.15.22",
+    "ruff>=0.17.3",
 ]
 typecheck = [
     "ty>=0.0.83",
