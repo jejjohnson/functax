@@ -51,7 +51,7 @@ docs = [
     "zensical>=0.0.74",
     "mkdocstrings[python]>=1.0.6",
     "jupytext>=1.19.6",
-    "ipykernel>=7.3.0",
+    "ipykernel>=7.4.0",
     "nbconvert>=7.17.2",
     # matplotlib + watermark used by the example notebooks during local
     # re-execution. The guarded watermark cell in each notebook no-ops
