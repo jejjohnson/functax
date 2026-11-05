@@ -49,7 +49,7 @@ docs = [
     # on 2026-11-05) builds only the API reference from mkdocs.yml; its
     # `objects.inv` is what lets the MyST prose cross-reference into it.
     "zensical>=0.0.74",
-    "mkdocstrings[python]>=1.0.6",
+    "mkdocstrings[python]>=1.0.8",
     "jupytext>=1.19.6",
     "ipykernel>=7.3.0",
     "nbconvert>=7.17.2",
