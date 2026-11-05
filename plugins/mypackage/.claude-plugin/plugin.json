@@ -1,0 +1,11 @@
+{
+  "name": "mypackage",
+  "description": "Analyse one-dimensional numeric series on mypackage — descriptive statistics and streaming accumulators, moving-average, median and exponential smoothing with explicit boundary handling, and fit / apply transforms composed into pipelines — instead of hand-rolling loops, validators and scalers.",
+  "author": {
+    "name": "jejjohnson"
+  },
+  "homepage": "https://jejjohnson.github.io/pypackage_template/agents/",
+  "repository": "https://github.com/jejjohnson/pypackage_template",
+  "license": "MIT",
+  "keywords": ["statistics", "smoothing", "time-series", "transforms", "pipeline"]
+}

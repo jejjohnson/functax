@@ -1,0 +1,45 @@
+# mypackage
+
+> Descriptive statistics, smoothing filters and composable transforms for one-dimensional numeric series, with zero runtime dependencies. Batch statistics (`summarize`, `quantile`, `zscores`) and a streaming accumulator (`RunningStats`); moving-average, median and exponential smoothing with explicit boundary padding; and fit / apply transforms (`Standardize`, `MinMaxScale`, `Clip`, `MovingAverage`) that compose into a `Pipeline`, plus a `mypackage` command-line tool. It is the worked example of the pypackage_template project template. Use these instead of hand-writing statistics loops, rolling windows, validators and scalers.
+
+One package, `mypackage` (import `mypackage as mp`), installed from GitHub: `uv add "mypackage @ git+https://github.com/jejjohnson/pypackage_template.git"`. Before writing a helper, search the capability index — every public name with a one-line summary. Code you add should keep three rules:
+
+- **Inputs are never mutated:** no function changes the series it is given, and any sequence of numbers is accepted; the series-to-series functions and every `apply` return a new list.
+- **Fit, then apply:** `Standardize` and `MinMaxScale` learn from `fit(train)` (which returns the transform) and raise `NotFittedError` if applied before it; reuse the fitted object on new data.
+- **Transforms are structural:** anything with `apply(series) -> list[float]` is a `Transform` and composes in a `Pipeline`, with no base class; bad input raises `ValidationError` (a `ValueError`), and every error is a `MypackageError`.
+
+Claude Code users can install the `mypackage` plugin: `/plugin marketplace add jejjohnson/pypackage_template`, then `/plugin install mypackage@mypackage`.
+
+## Start here
+
+- [Home](https://jejjohnson.github.io/pypackage_template/): what the package does, the three layers, its design rules
+- [Quickstart](https://jejjohnson.github.io/pypackage_template/quickstart/): every feature in five minutes
+- [Capability index](https://jejjohnson.github.io/pypackage_template/reference/capabilities/): every public name, grouped by module, with a summary
+- [Building with agents](https://jejjohnson.github.io/pypackage_template/agents/): the Claude Code plugin, this file, and rules to paste into your project's AGENTS.md
+- [Guided tour](https://jejjohnson.github.io/pypackage_template/tour/): the whole public API on one dataset
+
+## Guides
+
+- [Statistics](https://jejjohnson.github.io/pypackage_template/statistics/): batch and streaming statistics, `ddof`, numerical stability
+- [Smoothing](https://jejjohnson.github.io/pypackage_template/smoothing/): the three filters and the padding strategies
+- [Transforms](https://jejjohnson.github.io/pypackage_template/transforms/): the fit / apply lifecycle, pipelines, writing your own transform
+- [Command-line interface](https://jejjohnson.github.io/pypackage_template/cli/): `mypackage summarize` and `mypackage smooth`, exit codes
+
+## API reference
+
+- [Overview](https://jejjohnson.github.io/pypackage_template/reference/)
+- [Statistics](https://jejjohnson.github.io/pypackage_template/reference/stats/): `summarize`, `Summary`, `quantile`, `zscores`, `RunningStats`
+- [Smoothing](https://jejjohnson.github.io/pypackage_template/reference/smoothing/): `moving_average`, `exponential_moving_average`, `median_filter`, `Padding`
+- [Transforms](https://jejjohnson.github.io/pypackage_template/reference/transforms/): `Standardize`, `MinMaxScale`, `Clip`, `MovingAverage`, `Pipeline`, `chain`
+- [Utilities](https://jejjohnson.github.io/pypackage_template/reference/utils/): validators, `Window`, `timer`
+- [Protocols](https://jejjohnson.github.io/pypackage_template/reference/typing/): `Series`, `Transform`, `Fittable`
+- [Exceptions](https://jejjohnson.github.io/pypackage_template/reference/exceptions/): `MypackageError` and its subclasses
+- [CLI](https://jejjohnson.github.io/pypackage_template/reference/cli/): `main`, `build_parser`
+
+## Optional
+
+- [Smoothing deep dive](https://jejjohnson.github.io/pypackage_template/smoothing-deep-dive/)
+- [Contributing](https://jejjohnson.github.io/pypackage_template/contributing/)
+- [Source code](https://github.com/jejjohnson/pypackage_template)
+
+<!-- template-example: this file describes the bundled example package; rewrite it for your package on adoption, and check every URL against the built site. -->

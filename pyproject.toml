@@ -1,0 +1,304 @@
+[project]
+name = "mypackage"
+version = "0.1.7"
+description = "My short description for my project."
+authors = [
+    {name="J. Emmanuel Johnson", email="jemanjohnson34@gmail.com"},
+]
+license = { file = "LICENSE" }
+readme = "README.md"
+keywords = []
+requires-python = ">=3.12"
+classifiers = [
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Natural Language :: English",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Science/Research",
+    "Development Status :: 2 - Pre-Alpha",
+]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/jejjohnson/mypackage"
+
+[project.scripts]
+mypackage = "mypackage.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "pre-commit>=4.6.0",
+    "poethepoet>=0.49.0",
+    "cyclopts>=5.3.3",
+    "loguru>=0.7.3",
+]
+lint = [
+    "ruff>=0.15.22",
+]
+typecheck = [
+    "ty>=0.0.83",
+]
+docs = [
+    # The prose half of the site is built by mystmd, a Node CLI installed with
+    # `npm install -g mystmd` rather than through uv. See docs/README.md.
+    # Zensical (the successor to Material for MkDocs, which reached end of life
+    # on 2026-11-05) builds only the API reference from mkdocs.yml; its
+    # `objects.inv` is what lets the MyST prose cross-reference into it.
+    "zensical>=0.0.74",
+    "mkdocstrings[python]>=1.0.6",
+    "jupytext>=1.19.6",
+    "ipykernel>=7.3.0",
+    "nbconvert>=7.17.2",
+    # matplotlib + watermark used by the example notebooks during local
+    # re-execution. The guarded watermark cell in each notebook no-ops
+    # if the package is missing, but installing it here lets the version
+    # readout actually print under `nbconvert --execute`.
+    "matplotlib>=3.11.2",
+    "watermark>=2.6.0",
+    # pygments 2.20.0 dropped the None -> '' coercion for HtmlFormatter(filename=...),
+    # but pymdownx.highlight 10.21.x still passes the untitled-code-block title
+    # through as None. Pin until a fixed pymdown-extensions release ships (#38).
+    "pygments>=2.21.0,<2.22",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mypackage"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E402", "E721", "E731", "E741"]
+# Docstrings and comments carry Unicode maths (eman-style-math, "Maths
+# notation" in AGENTS.md), so the maths glyphs that look like ASCII are allowed.
+allowed-confusables = ["−", "×", "∗", "∣", "α", "γ", "ι", "ν", "ο", "ρ", "σ", "υ"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+lines-after-imports = 2
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately construct invalid inputs and assert on the failure.
+"tests/**" = ["B011"]
+
+[tool.ruff.format]
+# Format the code inside ``Examples:`` doctest blocks like real source.
+docstring-code-format = true
+docstring-code-line-length = 72
+
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.pytest.ini_options]
+# `src/mypackage` is a testpath so that --doctest-modules collects the
+# ``Examples:`` blocks in every Google-style docstring. They are executable
+# documentation: if an example in the docs goes stale, CI fails.
+testpaths = ["tests", "src/mypackage"]
+# Test tiers (see "Test tiers" in AGENTS.md). CI runs every tier.
+strict_markers = true
+markers = [
+    "slow: takes over ~1 s; deselect with -m 'not slow'",
+    "integration: end-to-end workflows, optional dependencies, external tools",
+]
+addopts = """\
+    --doctest-modules \
+    --cov=src/mypackage \
+    --cov-report=term-missing \
+    --cov-report=xml:coverage.xml\
+"""
+
+[tool.coverage.run]
+source = ["src/mypackage"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]
+
+# ---------------------------------------------------------------------------
+# Task runner (Poe the Poet) — replaces the old Makefile.
+#   uv run poe            # list every task with its help text
+#   uv run poe install    # first run: `uv run` syncs the dev group, so poe exists
+# Extra arguments are passed through to the underlying command, e.g.
+#   uv run poe test tests/test_stats.py -k summarize
+# ---------------------------------------------------------------------------
+[tool.poe]
+# Tasks call `uv run --group …` themselves, exactly as CI does, so poe must not
+# wrap them in a second `uv run`.
+executor = { type = "simple" }
+# Load .env when present (see .env.example); a missing file is fine.
+envfile = { optional = ".env" }
+
+[tool.poe.env]
+# Overridable from .env or the shell.
+PKGROOT.default = "src/mypackage"
+TYPECHECK_EXTRA.default = "scripts"
+
+# --- Meta -------------------------------------------------------------------
+
+[tool.poe.tasks.version]
+verbosity = -1  # don't echo the inline script
+help = "Display package version and git hash"
+interpreter = "python"
+shell = """
+import subprocess, tomllib
+with open("pyproject.toml", "rb") as f:
+    version = tomllib.load(f)["project"]["version"]
+git = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+print(f"Package : {version}")
+print(f"Git hash: {git.stdout.strip() or 'unknown'}")
+"""
+
+# --- Setup ------------------------------------------------------------------
+
+[tool.poe.tasks.install]
+help = "Install all dependency groups via uv + pre-commit hooks"
+sequence = [
+    { cmd = "uv sync --all-groups" },
+    { cmd = "uv run pre-commit install" },
+]
+
+[tool.poe.tasks.init]
+verbosity = -1  # don't echo the inline script
+help = "Bootstrap .env from .env.example (skip if .env already exists)"
+interpreter = "python"
+shell = """
+import pathlib, shutil
+if pathlib.Path(".env").exists():
+    print(".env already exists — skipping.")
+else:
+    shutil.copy(".env.example", ".env")
+    print(".env created from .env.example")
+"""
+
+# --- Quality ----------------------------------------------------------------
+
+[tool.poe.tasks.lint]
+help = "Lint with ruff (no auto-fix) — entire repo"
+cmd = "uv run --group lint ruff check ."
+
+[tool.poe.tasks.format]
+help = "Format with ruff (format + auto-fix) — entire repo"
+sequence = [
+    { cmd = "uv run --group lint ruff format ." },
+    { cmd = "uv run --group lint ruff check --fix ." },
+]
+
+[tool.poe.tasks.format-check]
+help = "Check formatting without changing files (what CI runs)"
+cmd = "uv run --group lint ruff format --check ."
+
+[tool.poe.tasks.typecheck]
+help = "Type-check with ty ($PKGROOT and $TYPECHECK_EXTRA)"
+cmd = "uv run --group typecheck ty check ${PKGROOT} ${TYPECHECK_EXTRA}"
+
+# --- Testing ----------------------------------------------------------------
+
+[tool.poe.tasks.test]
+help = "Run tests + doctests (no coverage, fast)"
+cmd = "uv run pytest -v -o addopts=--doctest-modules"
+
+[tool.poe.tasks.test-cov]
+help = "Run tests with coverage and the 90 % gate (what CI runs)"
+cmd = "uv run pytest -v"
+
+[tool.poe.tasks.check]
+help = "Everything CI checks: lint, format-check, typecheck, test-cov"
+sequence = ["lint", "format-check", "typecheck", "test-cov"]
+
+# --- Pre-commit -------------------------------------------------------------
+
+[tool.poe.tasks.precommit]
+help = "Run pre-commit hooks on all files"
+cmd = "uv run pre-commit run --all-files"
+
+# --- Build ------------------------------------------------------------------
+
+[tool.poe.tasks.build]
+help = "Build wheel and sdist into dist/"
+cmd = "uv build"
+
+[tool.poe.tasks.clean]
+verbosity = -1  # don't echo the inline script
+help = "Remove build artefacts and cache directories"
+interpreter = "python"
+shell = """
+import pathlib, shutil
+root = pathlib.Path(".")
+targets = [
+    "dist", "build", ".eggs", ".pytest_cache", ".ruff_cache", ".mypy_cache",
+    "site", "public", "docs/_build", ".coverage", "coverage.xml",
+]
+paths = [root / t for t in targets] + list(root.glob("*.egg-info"))
+paths += [p for p in root.rglob("__pycache__") if ".venv" not in p.parts]
+for p in paths:
+    if p.is_dir():
+        shutil.rmtree(p, ignore_errors=True)
+    elif p.exists():
+        p.unlink()
+print("Clean complete.")
+"""
+
+# --- Docs -------------------------------------------------------------------
+
+[tool.poe.tasks.docs]
+help = "Build the full site (MyST prose + Zensical API) into public/"
+cmd = "uv run python scripts/build_docs.py"
+
+[tool.poe.tasks.docs-check]
+help = "Validate docs sources without rendering the MyST theme"
+cmd = "uv run python scripts/build_docs.py --check"
+
+[tool.poe.tasks.docs-api]
+help = "Build only the Zensical API reference into site/"
+cmd = "uv run --group docs zensical build --strict"
+
+[tool.poe.tasks.docs-serve]
+help = "Build, then serve the assembled site at http://127.0.0.1:8000"
+sequence = ["docs", { cmd = "uv run python -m http.server 8000 --directory public" }]
+
+[tool.poe.tasks.capabilities]
+help = "Regenerate docs/api/capabilities.md (every public name, for reuse)"
+cmd = "uv run python scripts/capabilities.py"
+
+# --- GitHub housekeeping ----------------------------------------------------
+
+[tool.poe.tasks.gh-labels]
+help = "Bootstrap the GitHub label taxonomy (idempotent)"
+cmd = "bash .github/scripts/create-labels.sh"
+
+[tool.poe.tasks.gh-sub]
+help = "Link CHILDREN as sub-issues of PARENT (e.g. poe gh-sub 7 42 43 44)"
+cmd = "bash .github/scripts/link-issues.sh sub ${parent} ${children}"
+args = [
+    { name = "parent", positional = true, required = true, help = "Parent issue number" },
+    { name = "children", positional = true, multiple = true, required = true, help = "Child issue numbers" },
+]
+
+[tool.poe.tasks.gh-block]
+help = "Mark ISSUE as blocked by BLOCKED_BY (e.g. poe gh-block 44 43)"
+cmd = "bash .github/scripts/link-issues.sh block ${issue} ${blocked_by}"
+args = [
+    { name = "issue", positional = true, required = true, help = "The blocked issue" },
+    { name = "blocked_by", positional = true, required = true, help = "The blocking issue" },
+]
+
+[tool.poe.tasks.gh-show]
+help = "Show parent / sub-issues / blocking / blocked-by for ISSUE"
+cmd = "bash .github/scripts/link-issues.sh show ${issue}"
+args = [{ name = "issue", positional = true, required = true, help = "Issue number" }]

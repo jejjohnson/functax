@@ -1,0 +1,78 @@
+# PR auto-labeling rules.
+#
+# Applied by .github/workflows/label-pr.yml using actions/labeler.
+# Labels referenced here must exist — run `uv run poe gh-labels` to create them.
+# The `dependencies` label is also created by the bootstrap script so this
+# file works on a fresh repo with no manual label setup.
+#
+# Scopes below map file paths to the standard taxonomy:
+#   area:*   — which part of the project the change touches
+#   layer:*  — which implementation layer (if the project has a layer stack)
+#   type:*   — left to issue templates (NOT auto-applied on PRs)
+#
+# Adjust paths under layer:* to match your project's internal module layout.
+
+"area:engineering":
+  - changed-files:
+    - any-glob-to-any-file:
+      - ".github/**"
+      - "pyproject.toml"
+      - ".pre-commit-config.yaml"
+      - "uv.lock"
+
+"area:docs":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "notebooks/**"
+      - "*.md"
+
+"area:testing":
+  - changed-files:
+    - any-glob-to-any-file: "tests/**"
+
+# Catch-all for source changes that don't match a specific layer scope.
+# Ensures every `src/**` PR receives at least one area label.
+"area:code":
+  - changed-files:
+    - any-glob-to-any-file: "src/**"
+
+# --- Layer scopes — edit to match your project's layer stack --------------
+# The bundled demo package has a strict one-way dependency chain, and these
+# globs mirror it. Rename or delete them to match your own module layout.
+#
+#   layer:0-primitives  types, errors, validators — depend on nothing
+#   layer:1-components  the computational core — depends on primitives
+#   layer:2-models      user-facing composition — depends on the core
+
+"layer:0-primitives":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "src/**/_typing.py"
+      - "src/**/exceptions.py"
+      - "src/**/utils.py"
+      - "src/**/_primitives/**"
+
+"layer:1-components":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "src/**/stats.py"
+      - "src/**/smoothing.py"
+      - "src/**/_components/**"
+
+"layer:2-models":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "src/**/transforms.py"
+      - "src/**/cli.py"
+      - "src/**/_models/**"
+
+# --- Default / legacy labels retained for Dependabot compatibility ---------
+
+"dependencies":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "pyproject.toml"
+      - ".pre-commit-config.yaml"
+      - "uv.lock"
