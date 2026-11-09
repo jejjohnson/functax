@@ -222,6 +222,24 @@ class Stencil(Readout):
         structure = jax.ShapeDtypeStruct((self.n_source,), self.weights.dtype)
         return lx.FunctionLinearOperator(self.apply, structure)
 
+    def __matmul__(self, inner: Stencil) -> Stencil:
+        """H_self H_inner, the stencil of ``inner`` then ``self``: see `compose`.
+
+        Examples:
+            >>> import jax.numpy as jnp
+            >>> from functax.interp import Stencil
+            >>> average = Stencil(
+            ...     jnp.array([[0, 1]]), jnp.full((1, 2), 0.5), n_source=2
+            ... )
+            >>> swap = Stencil(jnp.array([[1], [0]]), jnp.ones((2, 1)), n_source=2)
+            >>> (average @ swap).indices.tolist()
+            [[1, 0]]
+        """
+        # _compose imports this module, so the import waits for the first call
+        from functax._src.interp._compose import compose
+
+        return compose(self, inner)
+
     def to_dense(self) -> Float[Array, "target source"]:
         """H as a dense (M, N) matrix, repeated indices summed.
 

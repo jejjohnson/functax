@@ -3,7 +3,10 @@
 A plan holds a fit 𝒮, a read-out H and the policies. It is built once (the
 locate and the weights are paid then) and applied to every field, and its
 adjoint 𝒮ᵀ Hᵀ sends residuals back. Building may use the host; applying
-traces.
+traces. Two plans compose into one (``outer @ inner``, a `ComposedPlan`), a
+plan on a grid target cuts to a window of it (``plan[window]``, a
+`WindowedPlan`), and a local plan exports its stencil for gaussx
+(`Plan.to_gaussx`).
 """
 
 from __future__ import annotations
@@ -13,23 +16,31 @@ from functax._src._backend import require_jax
 
 require_jax(__name__)
 
+import dataclasses
+import math
+
 import einx
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
-from jaxtyping import Array, Bool, Float
+import numpy as np
+from jaxtyping import Array, Bool, Float, Int
 
+from functax._src.interp._compose import compose
 from functax._src.interp._derivative import LocalGeometry, derivative_stencil
 from functax._src.interp._fit import Fit, Identity
 from functax._src.interp._policies import Policies
 from functax._src.interp._stencil import Readout, Stencil
+from functax._typing import Shape
 from functax.exceptions import PolicyError, ValidationError
 
 
 __all__ = [
+    "ComposedPlan",
     "DerivativePlan",
     "Plan",
+    "WindowedPlan",
 ]
 
 
@@ -46,6 +57,12 @@ class Plan(eqx.Module):
             with; ``missing`` and ``fill_value`` act when it is applied.
         local: The source, target coordinates and bases of a local scheme's
             plan, which `derivative` needs; ``None`` for a plan built by hand.
+        target_shape: The shape of a grid target, whose nodes are the rows in
+            row-major order (``einx.id("... y x -> ... (y x)")``); ``None``
+            for a flat list of M targets. `__getitem__` cuts windows of it.
+
+    Raises:
+        ValidationError: If ``target_shape`` does not hold the plan's M rows.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -64,11 +81,82 @@ class Plan(eqx.Module):
     read: Readout
     policies: Policies = eqx.field(default_factory=Policies)
     local: LocalGeometry | None = None
+    target_shape: Shape | None = eqx.field(static=True, default=None)
+
+    def __check_init__(self) -> None:
+        n_target = self.read.valid.shape[0]
+        if self.target_shape is not None and math.prod(self.target_shape) != n_target:
+            msg = (
+                f"'target_shape' {self.target_shape} must hold the plan's "
+                f"{n_target} target rows"
+            )
+            raise ValidationError(msg)
 
     @property
     def valid(self) -> Bool[Array, " target"]:
         """Whether each target row is a real read-out (before missing samples)."""
         return self.read.valid
+
+    @property
+    def grid_shape(self) -> Shape:
+        """The shape of the targets: ``target_shape``, or (M,) for a flat list."""
+        if self.target_shape is None:
+            return (self.read.valid.shape[0],)
+        return self.target_shape
+
+    def __matmul__(self, inner: Plan) -> ComposedPlan:
+        """``inner`` then this plan, as one `ComposedPlan`: H_self H_inner 𝒮_inner."""
+        return ComposedPlan(self, inner)
+
+    def __getitem__(self, window: slice | tuple[slice, ...]) -> WindowedPlan:
+        """The rows of the targets inside ``window``, as a `WindowedPlan`."""
+        return WindowedPlan(self, window)
+
+    def to_gaussx(self) -> tuple[Int[Array, "target tap"], Float[Array, "target tap"]]:
+        """The stencil arrays (iₖₛ, wₖₛ) in gaussx's row layout, invalid rows zeroed.
+
+        Row k of W has weights wₖₛ at source indices iₖₛ, repeated indices
+        adding: the ``(interp_indices, interp_values)`` of gaussx's
+        ``InterpolatedOperator`` (W K Wᵀ), and the rows of a ``SparseOperator``.
+        Invalid rows get index 0 and weight 0, so W is the linear map of
+        `operator`. Nothing from gaussx is imported.
+
+        Returns:
+            The (M, S) indices and the (M, S) weights.
+
+        Raises:
+            PolicyError: If the plan is not local (identity fit, stencil
+                read-out), or its weights depend on the data
+                (``missing="renormalise"``).
+
+        Examples:
+            >>> import jax.numpy as jnp
+            >>> from functax.geometry import Axis, Points
+            >>> from functax.interp import Linear
+            >>> plan = Linear().plan(
+            ...     Axis(jnp.arange(4.0)), Points(jnp.array([[0.5], [9.0]]))
+            ... )
+            >>> indices, weights = plan.to_gaussx()
+            >>> indices.tolist(), weights.tolist()
+            ([[0, 1], [0, 0]], [[0.5, 0.5], [0.0, 0.0]])
+        """
+        stencil = self._local_stencil("to_gaussx()")
+        if self.policies.missing == "renormalise":
+            msg = (
+                "to_gaussx() needs fixed weights, but under missing='renormalise' "
+                "they depend on the data"
+            )
+            raise PolicyError(msg)
+        valid = self.valid
+        zero_index = jnp.zeros((), stencil.indices.dtype)
+        zero_weight = jnp.zeros((), stencil.weights.dtype)
+        indices = einx.where(
+            "target, target tap, -> target tap", valid, stencil.indices, zero_index
+        )
+        weights = einx.where(
+            "target, target tap, -> target tap", valid, stencil.weights, zero_weight
+        )
+        return indices, weights
 
     def _fill(self, data: jax.Array) -> jax.Array:
         """Replace non-finite samples by ``fill_value`` under ``missing="fill"``."""
@@ -240,7 +328,13 @@ class Plan(eqx.Module):
             self.local, self.read, self.policies, axis=axis, order=order
         )
         return DerivativePlan(
-            self.fit, read, self.policies, None, axis=axis, order=order
+            self.fit,
+            read,
+            self.policies,
+            None,
+            self.target_shape,
+            axis=axis,
+            order=order,
         )
 
     def __add__(self, other: Plan) -> Plan:
@@ -282,7 +376,9 @@ class Plan(eqx.Module):
         zero = jnp.zeros((), weights.dtype)
         weights = einx.where("target, target tap, -> target tap", valid, weights, zero)
         read = Stencil(indices, weights, n_source=self.read.n_source, valid=valid)
-        return Plan(self.fit, read, self.policies)
+        same_shape = self.target_shape == other.target_shape
+        target_shape = self.target_shape if same_shape else None
+        return Plan(self.fit, read, self.policies, None, target_shape)
 
 
 class DerivativePlan(Plan):
@@ -294,3 +390,165 @@ class DerivativePlan(Plan):
 
     axis: int = eqx.field(static=True, kw_only=True)
     order: int = eqx.field(static=True, kw_only=True)
+
+
+class ComposedPlan(Plan):
+    """``outer @ inner``: H_outer H_inner 𝒮_inner, one plan with the product stencil.
+
+    The product stencil is computed when the plan is built (`compose`), so
+    applying it costs one gather of S_outer · S_inner taps per row. A row of
+    ``outer`` that reads an invalid row of ``inner`` is invalid; on every row
+    it marks valid, the composed plan equals ``outer(inner(y))``. It applies
+    ``inner``'s missing policy to the samples and writes ``outer``'s fill value
+    at invalid rows, and its adjoint is 𝒮ᵀ_inner Hᵀ_inner Hᵀ_outer.
+
+    Args:
+        outer: The plan applied second: a local plan (identity fit, stencil
+            read-out) with ``missing="propagate"``.
+        inner: The plan applied first: a stencil read-out after any fit, with
+            ``missing="propagate"``, or ``"fill"`` with ``outer``'s fill value.
+        merge: Whether to merge repeated indices of the product on the host
+            (see `compose`).
+
+    Raises:
+        PolicyError: If the two plans cannot fold into one stencil: ``outer``
+            is not local or has another missing policy, or ``inner`` has no
+            stencil read-out, uses ``missing="renormalise"``, or fills missing
+            samples with a value ``outer`` does not share. Their linear
+            maps still compose in lineax, as
+            ``outer.operator() @ inner.operator()``.
+        ValidationError: If ``outer`` does not read ``inner``'s targets.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis, Points
+        >>> from functax.interp import Linear
+        >>> # 5 fine samples read at 3 points, then those 3 read at 2 points
+        >>> spectral = Linear().plan(
+        ...     Axis(jnp.arange(5.0)), Points(jnp.array([[0.5], [2.0], [3.5]]))
+        ... )
+        >>> srf = Linear().plan(
+        ...     Axis(jnp.arange(3.0)), Points(jnp.array([[0.5], [1.5]]))
+        ... )
+        >>> instrument = srf @ spectral
+        >>> data = jnp.array([0.0, 2.0, 4.0, 6.0, 8.0])
+        >>> instrument(data).tolist(), srf(spectral(data)).tolist()
+        ([2.5, 5.5], [2.5, 5.5])
+        >>> instrument.read.n_taps
+        4
+    """
+
+    def __init__(self, outer: Plan, inner: Plan, *, merge: bool = False) -> None:
+        outer_stencil = outer._local_stencil("the outer plan of a composition")
+        if not isinstance(inner.read, Stencil):
+            msg = (
+                "the inner plan of a composition needs a stencil read-out; compose "
+                "the operators in lineax instead (outer.operator() @ inner.operator())"
+            )
+            raise PolicyError(msg)
+        if outer.policies.missing != "propagate":
+            msg = (
+                "the outer plan of a composition needs missing='propagate', got "
+                f"{outer.policies.missing!r}, which would act on intermediate values"
+            )
+            raise PolicyError(msg)
+        if inner.policies.missing == "renormalise":
+            msg = (
+                "the inner plan of a composition cannot use missing='renormalise', "
+                "whose weights depend on the data"
+            )
+            raise PolicyError(msg)
+        inner_fill = inner.policies.fill_value
+        outer_fill = outer.policies.fill_value
+        same_fill = inner_fill == outer_fill or (
+            math.isnan(inner_fill) and math.isnan(outer_fill)
+        )
+        if inner.policies.missing == "fill" and not same_fill:
+            # one fill value serves both the missing samples and invalid rows
+            msg = (
+                "under missing='fill' the inner plan of a composition must share "
+                f"the outer plan's fill_value, got {inner_fill!r} and {outer_fill!r}"
+            )
+            raise PolicyError(msg)
+        self.fit = inner.fit
+        self.read = compose(outer_stencil, inner.read, merge=merge)
+        self.policies = dataclasses.replace(
+            inner.policies, fill_value=outer.policies.fill_value
+        )
+        self.local = None
+        self.target_shape = outer.target_shape
+
+
+class WindowedPlan(Plan):
+    """``plan[window]``: the rows of a grid target inside a window, sources unchanged.
+
+    The window holds one slice per target axis (a bare slice for a flat list
+    of targets) and keeps the rows of the nodes inside it, in row-major
+    order, with ``valid`` sliced alongside. Each row is the parent's row, so
+    ``plan[window](y)`` equals the matching slice of ``plan(y)`` bit for bit:
+    one plan on the destination grid, cut per chip, gives chips that agree
+    with the full read-out.
+
+    Args:
+        plan: The plan to cut; its read-out must be a `Stencil`.
+        window: One slice per axis of ``plan.grid_shape``.
+
+    Raises:
+        ValidationError: If ``window`` does not hold one slice per target axis,
+            or selects no targets.
+        PolicyError: If ``plan`` has no stencil read-out.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis, RectilinearGrid
+        >>> from functax.interp import Linear
+        >>> source = RectilinearGrid((Axis(jnp.arange(3.0)), Axis(jnp.arange(4.0))))
+        >>> target = RectilinearGrid(
+        ...     (Axis(jnp.array([0.5, 1.5])), Axis(jnp.array([0.5, 1.5, 2.5])))
+        ... )
+        >>> plan = Linear().plan(source, target)
+        >>> plan(jnp.arange(12.0)).tolist()
+        [2.5, 3.5, 4.5, 6.5, 7.5, 8.5]
+        >>> chip = plan[0:2, 1:3]
+        >>> chip.grid_shape, chip(jnp.arange(12.0)).tolist()
+        ((2, 2), [3.5, 4.5, 7.5, 8.5])
+    """
+
+    window: tuple[slice, ...] = eqx.field(static=True, default=())
+
+    def __init__(self, plan: Plan, window: slice | tuple[slice, ...]) -> None:
+        window = (window,) if isinstance(window, slice) else tuple(window)
+        shape = plan.grid_shape
+        all_slices = all(isinstance(axis_window, slice) for axis_window in window)
+        if len(window) != len(shape) or not all_slices:
+            msg = (
+                f"'window' must hold one slice per target axis ({len(shape)}), "
+                f"got {window!r}"
+            )
+            raise ValidationError(msg)
+        if not isinstance(plan.read, Stencil):
+            msg = "a window needs a plan with a stencil read-out"
+            raise PolicyError(msg)
+        # the nodes kept on each axis, then their flat row-major row numbers
+        kept = [
+            np.arange(n_nodes)[axis_window]
+            for n_nodes, axis_window in zip(shape, window, strict=True)
+        ]
+        window_shape = tuple(axis_nodes.size for axis_nodes in kept)
+        if math.prod(window_shape) == 0:
+            msg = f"'window' {window!r} selects no targets of a grid of {shape}"
+            raise ValidationError(msg)
+        mesh = np.meshgrid(*kept, indexing="ij")
+        rows = einx.id("... -> (...)", np.ravel_multi_index(mesh, shape))
+        stencil = plan.read
+        self.fit = plan.fit
+        self.read = Stencil(
+            stencil.indices[rows],
+            stencil.weights[rows],
+            n_source=stencil.n_source,
+            valid=stencil.valid[rows],
+        )
+        self.policies = plan.policies
+        self.local = None
+        self.target_shape = window_shape
+        self.window = window

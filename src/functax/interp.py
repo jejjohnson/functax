@@ -3,7 +3,9 @@
 A scheme is configuration; a plan freezes it for one source and one target
 geometry. Every plan reads a field as f̂(X*) = H 𝒮(y), with a fit 𝒮 (the
 identity for local schemes) and a read-out H, and sends residuals back with
-the hand-written adjoint 𝒮ᵀ Hᵀ. Needs the ``functax[jax]`` extra.
+the hand-written adjoint 𝒮ᵀ Hᵀ. Plans compose (``outer @ inner``), cut to
+windows of a grid target (``plan[window]``) and export their stencil for
+gaussx (``plan.to_gaussx()``). Needs the ``functax[jax]`` extra.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from functax._src.interp._bases import (
     NearestBasis,
     bspline,
 )
+from functax._src.interp._compose import compose
 from functax._src.interp._derivative import LocalGeometry
 from functax._src.interp._fit import Fit, Identity
 from functax._src.interp._locate import (
@@ -24,7 +27,7 @@ from functax._src.interp._locate import (
     locate,
     remap_taps,
 )
-from functax._src.interp._plan import DerivativePlan, Plan
+from functax._src.interp._plan import ComposedPlan, DerivativePlan, Plan, WindowedPlan
 from functax._src.interp._policies import Policies
 from functax._src.interp._prefilter import BandedPrefilter, spline_poles
 from functax._src.interp._schemes import (
@@ -45,6 +48,7 @@ __all__ = [
     "BSplineBasis",
     "BandedPrefilter",
     "Basis",
+    "ComposedPlan",
     "Cubic",
     "CubicBasis",
     "DerivativePlan",
@@ -62,8 +66,10 @@ __all__ = [
     "Scheme",
     "Stencil",
     "Tensor",
+    "WindowedPlan",
     "bspline",
     "check_outside",
+    "compose",
     "index_positions",
     "locate",
     "remap_taps",
