@@ -40,13 +40,13 @@ One concept per file: a protocol and its implementations share a file. The first
 ## 4. Export and document
 
 - Re-export from the area module's sorted `__all__`. Nothing is added to the top-level `functax.__all__`.
-- A **new area module** joins `SUBMODULES` (a package, `SUBPACKAGES`) in `tests/test_public_api.py`, and gets `docs/api/<area>.md` with a `::: functax.<area>` block, a `nav` entry in `mkdocs.yml` and a row in `docs/api/index.md`.
-- A new module in the NumPy-only base joins the lists in `tests/test_backend.py` and the import in the `base-install` job of `ci.yml`.
+- A **new area module** joins `SUBMODULES` (a package, `SUBPACKAGES`) in `tests/fast/test_public_api.py`, and gets `docs/api/<area>.md` with a `::: functax.<area>` block, a `nav` entry in `mkdocs.yml` and a row in `docs/api/index.md`.
+- A new module in the NumPy-only base joins `BASE_MODULES` in `tests/integration/test_install.py` and the import in the `base-install` job of `ci.yml`.
 - `uv run poe capabilities`.
 
 ## 5. Tests
 
-In `tests/<area>/test_<name>.py`, with x64 on (from `conftest.py`), using the helpers in `tests/_harness.py` ("Testing a scheme" in `docs/contributing.md`):
+In `tests/fast/<area>/test_<name>.py`, and in `tests/slow/<area>/test_<name>.py` for any test that takes over a second (the oracle sweeps across orders and policies, gradient and trace checks; "Test tiers" in `AGENTS.md`), with x64 on (from `conftest.py`), using the helpers in `tests/_harness.py` ("Testing a scheme" in `docs/contributing.md`):
 
 - **Oracle** (`assert_matches_oracle`): equal to the SciPy reference the issue names (`scipy.ndimage.map_coordinates`, `scipy.interpolate.RegularGridInterpolator`, `scipy.integrate`, …) at the stated tolerance, 1e-12 relative in float64 unless the issue says otherwise, on interior targets.
 - **Properties** with hypothesis: reproduces constants (and linear fields, for linear and higher schemes), weights sum to one, a rule integrates its exact degree.
@@ -58,7 +58,7 @@ In `tests/<area>/test_<name>.py`, with x64 on (from `conftest.py`), using the he
 ## 6. Verify
 
 ```bash
-uv run pytest --no-cov tests/<area>/ src/functax/_src/<area>/ tests/test_public_api.py tests/test_capabilities.py tests/test_backend.py -v
+uv run pytest --no-cov tests/fast/<area>/ tests/slow/<area>/ src/functax/_src/<area>/ tests/fast/test_public_api.py tests/fast/test_capabilities.py tests/fast/test_backend.py -v
 uv run poe test-cov
 ```
 

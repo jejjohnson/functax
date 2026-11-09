@@ -53,7 +53,7 @@ Skip anything ruff, ty or the tests already enforce (formatting, import order, `
 
 ### 3. Public API and documentation
 
-- New names: logic in `functax._src.<area>`, re-exported from the area module's `__all__`; a new module in `SUBMODULES` or a new package in `SUBPACKAGES` (`tests/test_public_api.py`), with its `docs/api/<module>.md` page, a `nav` entry in `mkdocs.yml` and a row in `docs/api/index.md`; `docs/api/capabilities.md` regenerated (`uv run poe capabilities`).
+- New names: logic in `functax._src.<area>`, re-exported from the area module's `__all__`; a new module in `SUBMODULES` or a new package in `SUBPACKAGES` (`tests/fast/test_public_api.py`), with its `docs/api/<module>.md` page, a `nav` entry in `mkdocs.yml` and a row in `docs/api/index.md`; `docs/api/capabilities.md` regenerated (`uv run poe capabilities`).
 - Docstrings in the `python-style` layout: summary, the defining equation in Unicode (`eman-style-math`; `$…$` in a docstring is a finding), `Algorithm:` for a method, `Args:` with meaning and symbol, `Returns:` and `Raises:` matching the code, and two or three executable `Examples:` (typical, edge, composition) whose output is what the code prints (shapes, `allclose` booleans or reprs, never raw floats).
 - Maths in MyST and MkDocs pages uses the `eman-style-math` macros, defines every symbol with its shape, keeps each expression on one line and has no spacing macros (`\,`, `\quad`, …).
 - Prose pages: MyST directives, not MkDocs-Material syntax; API links by the top-level name (`xref:api#functax.<Name>`); a new page or notebook in the `docs/myst.yml` toc with a basename unique across `docs/`.

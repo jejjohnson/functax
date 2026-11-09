@@ -24,7 +24,7 @@ The diff (`git diff <base>...HEAD`, default base `main`) or the files / commit r
    - `.T`, `reshape`, `[:, None]` or `axis=` reductions → einx;
    - bilinear or nearest weights, a cell locate, a scatter-add adjoint, a quadrature rule or a basis written inline in one caller → the area that owns it (`interp`, `quad`, `basis`), or a note that it belongs there;
    - code copied from geonnax, interpax, orthax, xrtoolz or another stack library instead of moved in with its parity test (Wave 1's G1-parity gate);
-   - a public name that duplicates another public name for a different object (`tests/test_capabilities.py` will fail on it).
+   - a public name that duplicates another public name for a different object (`tests/fast/test_capabilities.py` will fail on it).
 
 ## Report
 
