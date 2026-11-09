@@ -12,6 +12,7 @@ from functax import (
     FunctaxError,
     GeometryError,
     MissingExtraError,
+    NonlinearSchemeError,
     OutsideDomainError,
     PolicyError,
     ValidationError,
@@ -26,6 +27,7 @@ from functax import (
         PolicyError,
         OutsideDomainError,
         MissingExtraError,
+        NonlinearSchemeError,
     ],
 )
 def test_every_error_derives_from_the_base(error: type[Exception]) -> None:
@@ -40,6 +42,7 @@ def test_every_error_derives_from_the_base(error: type[Exception]) -> None:
         (PolicyError, ValueError),
         (OutsideDomainError, ValueError),
         (MissingExtraError, ImportError),
+        (NonlinearSchemeError, TypeError),
     ],
 )
 def test_errors_alias_the_closest_stdlib_exception(

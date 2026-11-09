@@ -248,7 +248,9 @@ class Plan(eqx.Module):
         Returns:
             A ``lineax.FunctionLinearOperator`` from ℝᴺ to ℝᴹ.
         """
-        structure = self.read.operator().in_structure()
+        coefficients = self.read.operator().in_structure()
+        n_data = self.fit.data_size(coefficients.shape[0])
+        structure = jax.ShapeDtypeStruct((n_data,), coefficients.dtype)
 
         def apply(data: jax.Array) -> jax.Array:
             return self.read.apply(self.fit.apply(data))
