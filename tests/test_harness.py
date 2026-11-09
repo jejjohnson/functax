@@ -66,6 +66,11 @@ class TestMatchesOracle:
         with pytest.raises(AssertionError, match=r"worst at index \(0,\)"):
             assert_matches_oracle(np.array([0.0, 1.0]), expected, rtol=1e-12)
 
+    def test_booleans_and_integers_match_exactly(self) -> None:
+        assert_matches_oracle(np.array([True, False]), np.array([True, False]), rtol=1.0)
+        with pytest.raises(AssertionError, match=r"worst at index \(1,\)"):
+            assert_matches_oracle(np.array([3, 4]), np.array([3, 5]), rtol=1.0)
+
     def test_shape_mismatch_fails(self) -> None:
         with pytest.raises(AssertionError, match="shape mismatch"):
             assert_matches_oracle(np.zeros(3), np.zeros(4), rtol=1e-12)
