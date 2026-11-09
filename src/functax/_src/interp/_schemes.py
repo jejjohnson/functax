@@ -80,7 +80,8 @@ class LocalScheme(Scheme):
         """H for ``source`` read at ``target``, with ``Policies()`` by default.
 
         Args:
-            source: An `Axis`, a `RectilinearGrid` or an `AffineGrid`; data on
+            source: An `Axis`, a `RectilinearGrid`, an `AffineGrid` or a
+                `CurvilinearGrid` (located by `locate_curvilinear`); data on
                 it is flattened row-major (``einx.id("... y x -> ... (y x)")``).
             target: `Points`, or a grid read at its nodes (see
                 `tensor_stencil`).
@@ -145,7 +146,10 @@ class Nearest(LocalScheme):
     """Nearest neighbour on every axis: one tap per target, weight 1.
 
     A tie goes to the lower node, as in SciPy's ``RegularGridInterpolator``.
-    The gradient with respect to the target positions is 0.
+    The gradient with respect to the target positions is 0. On a
+    `CurvilinearGrid` it rounds the index position (r + s, c + t), the
+    nearest corner in the cell's own (s, t), which on a warped cell need not
+    be the nearest node in distance.
 
     Examples:
         >>> import jax.numpy as jnp
