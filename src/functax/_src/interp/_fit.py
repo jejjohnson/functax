@@ -38,6 +38,13 @@ class Fit(eqx.Module):
     ) -> Float[Array, "*batch source"]:
         """𝒮ᵀ g, over any leading batch dims."""
 
+    def data_size(self, n_coefficients: int) -> int:
+        """N, the length of the data that ``n_coefficients`` coefficients come from.
+
+        The same for most fits; a Hermite fit returns values and slopes, 2N.
+        """
+        return n_coefficients
+
 
 class Identity(Fit):
     """The fit of every local scheme: c = y.

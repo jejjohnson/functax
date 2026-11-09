@@ -14,6 +14,7 @@ __all__ = [
     "FunctaxError",
     "GeometryError",
     "MissingExtraError",
+    "NonlinearSchemeError",
     "OutsideDomainError",
     "PolicyError",
     "ValidationError",
@@ -80,6 +81,19 @@ class OutsideDomainError(ValidationError):
     Examples:
         >>> from functax import OutsideDomainError
         >>> issubclass(OutsideDomainError, ValueError)
+        True
+    """
+
+
+class NonlinearSchemeError(FunctaxError, TypeError):
+    """Raised when a linear-only operation meets a plan whose fit is nonlinear in y.
+
+    PCHIP, Akima and Steffen slopes depend on the data, so their plans have no
+    fixed operator or adjoint; use ``plan.linearize(y)``. Also a `TypeError`.
+
+    Examples:
+        >>> from functax import NonlinearSchemeError
+        >>> issubclass(NonlinearSchemeError, TypeError)
         True
     """
 

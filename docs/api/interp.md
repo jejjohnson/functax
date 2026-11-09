@@ -61,6 +61,16 @@ A plan on a grid target keeps the grid's shape, and `plan[window]` takes one sli
 
 `plan.to_gaussx()` returns the indices and weights of a local plan in gaussx's row layout, with invalid rows zeroed, which is what `InterpolatedOperator(base_operator, interp_indices, interp_values)` takes for $\mat{W} \mat{K} \mat{W}^\top$; functax imports nothing from gaussx.
 
+## 1-D series schemes
+
+`CubicSpline`, `Pchip`, `Akima` and `Steffen` read one `Axis` (increasing or decreasing) with a cubic Hermite read-out: on cell $[x_i, x_{i+1}]$ of width $h_i$ at offset $t$,
+
+$$
+\hat{f} = h_{00}(t) y_i + h_{10}(t) h_i m_i + h_{01}(t) y_{i+1} + h_{11}(t) h_i m_{i+1},
+$$
+
+and they differ in the slopes $m$. `CubicSpline(bc)` solves one tridiagonal system for the $C^2$ spline (not-a-knot, natural, clamped, or periodic by Sherman-Morrison, as `scipy.interpolate.CubicSpline`); its fit is linear in $\vect{y}$, so it builds an ordinary `Plan` with an adjoint. `Pchip` (Fritsch-Carlson), `Akima` and `Steffen` preserve shape (PCHIP and Steffen never overshoot monotone data), and their slopes depend on $\vect{y}$ nonlinearly, so they build a `NonlinearPlan`: it reads like any plan, has no fixed operator or adjoint (`NonlinearSchemeError`), and `linearize(y)` returns the tangent-linear `Stencil` at $\vect{y}$, 4 taps per target (6 for Akima). `scheme.fit(axis, y)` returns a `SeriesInterpolant` whose fit runs in JAX, so gradients reach both $\vect{y}$ and the knots.
+
 ## Reference
 
 ::: functax.interp

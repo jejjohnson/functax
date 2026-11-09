@@ -76,6 +76,7 @@ Before writing a helper, a validator, a sampler, a basis or a rule, find out whe
 | Bilinear (or D-linear) weights, a nearest-neighbour sampler, Keys cubic weights, a spline prefilter, `map_coordinates`, a hand-written transpose of a sampler | `Nearest`, `Linear`, `Cubic`, `BSpline`, `Tensor` and their `Plan` (`plan(y)`, `plan.adjoint(r)`, `plan.operator()`), or `tensor_stencil` with a `Basis` per axis (`functax.interp`) |
 | Two samplers applied in turn, a product of sparse matrices, a chip warped with a margin, interpolation indices and weights for gaussx (SKI) | `outer @ inner` (`ComposedPlan`, or `compose` on two `Stencil`s), `plan[window]` (`WindowedPlan`), `plan.to_gaussx()` (`functax.interp`) |
 | A sampler rebuilt inside `lax.scan` for moving particles, a `map_coordinates` call at departure points | `scheme.fit(source, data)` → `Interpolant`, called at the current positions (`functax.interp`) |
+| A 1-D cubic spline, PCHIP, Akima or Steffen, `interpax.interp1d`, a monotone lookup table | `CubicSpline`, `Pchip`, `Akima`, `Steffen` and `scheme.fit(axis, y)` (`functax.interp`); interpax stays out of the stack (decision 14) |
 
 ## The contracts
 
