@@ -10,8 +10,8 @@ The full standard is `.github/instructions/docs-examples.instructions.md`; read 
 ## 1. Plan it
 
 - One question per notebook; check the existing ones in `docs/notebooks/` and the `toc` in `docs/myst.yml` so you extend rather than duplicate.
-- The basename must be unique across `docs/`, `docs/guide/` and `docs/notebooks/`: mystmd builds flat URLs from basenames, underscores becoming hyphens (`smoothing_deep_dive.ipynb` → `/smoothing-deep-dive/`), and a clash gets an unstable `-1` suffix.
-- Use the public API the way a user would (`import functax as mp`); no private names.
+- The basename must be unique across `docs/`, `docs/guide/` and `docs/notebooks/`: mystmd builds flat URLs from basenames, underscores becoming hyphens (`gap_fill.ipynb` → `/gap-fill/`), and a clash gets an unstable `-1` suffix.
+- Use the public API the way a user would (`import functax as fx`); no private names.
 
 ## 2. Draft in `.py`, commit the `.ipynb`
 
@@ -30,7 +30,7 @@ The full standard is `.github/instructions/docs-examples.instructions.md`; read 
 ## 3. Content rules
 
 - Figures inline with `plt.show()`: no `savefig`, no committed PNGs; keep the notebook under the pre-commit `check-added-large-files` limit (500 kB by default) with few, small figures.
-- Link API names with ``[`summarize`](xref:api#functax.summarize)`` — the **top-level** name; a missing target fails the strict build.
+- Link API names with ``[`FunctaxError`](xref:api#functax.FunctaxError)`` — the **top-level** name; a missing target fails the strict build.
 - Every number quoted in a markdown cell matches what the cells print.
 - Maths in markdown cells follows `eman-style-math` (the macros in `docs/myst.yml`, every symbol defined with its shape, one expression per source line); prose follows `eman-prose-tech` (docs register); code cells follow `python-style` (comments above the line, the Unicode equation above each mathematical line).
 - Random draws, if any, are seeded so a re-run reproduces the outputs.

@@ -5,8 +5,8 @@ Everything listed in `functax.__all__` is importable from the top level, and eac
 ```python
 import functax as fx
 
-fx.FunctaxError        # the base of every functax error
-fx.geometry            # CRS-free axes, grids, point sets and affine raster maths
+fx.FunctaxError  # the base of every functax error
+fx.geometry  # CRS-free axes, grids, point sets and affine raster maths
 ```
 
 The [capability index](capabilities.md) lists every public name on one page, with a one-line summary each, together with the public API of JAX, Equinox, lineax and einx.

@@ -14,7 +14,7 @@ Usage::
 ``tests/test_capabilities.py`` runs the check, so a public API change that
 skips ``uv run poe capabilities`` fails the test suite.
 
-The script needs no editing when the template is adopted: the import package
+The script needs no editing when a module is added: the import package
 is read from ``pyproject.toml`` and the public submodules are discovered. Two
 settings are yours to fill in:
 

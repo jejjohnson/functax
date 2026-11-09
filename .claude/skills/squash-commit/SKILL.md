@@ -27,8 +27,7 @@ Co-authored-by: <every unique human Co-authored-by line from the individual comm
 ### Rules
 
 - Conventional Commits types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`; a lowercase subject (`conventional-commits.yml` enforces it on PR titles). The scope is optional and names the area.
-  <!-- template-example: the scopes are the example package's modules; list yours. -->
-  Scopes used here: `stats`, `smoothing`, `transforms`, `utils`, `cli`, `docs`, `agents`, `ci`, `deps`.
+  Scopes used here: the modules `geometry`, `basis`, `diffops`, `interp`, `quad`, `transform`, `project`, and `template`, `docs`, `agents`, `ci`, `deps`, `test`.
 - release-please (`release-please-config.json`) builds the changelog from `feat`, `fix`, `perf` and `revert` commits and hides the other types, so the type decides whether a change is listed. Before 1.0 (`bump-minor-pre-major`, `bump-patch-for-minor-pre-major`), a breaking change bumps the minor version and a `feat` or `fix` the patch.
 - The type/scope reflect the dominant change across all commits; mention the rest in the body.
 - A breaking change keeps its `!` and `BREAKING CHANGE:` footer.

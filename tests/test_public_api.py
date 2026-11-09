@@ -59,9 +59,7 @@ def test_no_unexpected_submodules() -> None:
 
 def test_no_unexpected_subpackages() -> None:
     """A new subpackage must be added to SUBPACKAGES (and given an API doc page)."""
-    found = {
-        info.name for info in pkgutil.iter_modules(functax.__path__) if info.ispkg
-    }
+    found = {info.name for info in pkgutil.iter_modules(functax.__path__) if info.ispkg}
     assert found == set(SUBPACKAGES)
 
 

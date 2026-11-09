@@ -14,7 +14,7 @@ Importing `functax` never imports JAX:
 ```python
 import functax as fx
 
-fx.__version__   # '0.0.1'
+fx.__version__  # '0.0.1'
 ```
 
 ## Without the extra

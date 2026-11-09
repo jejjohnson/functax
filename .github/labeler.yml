@@ -7,10 +7,7 @@
 #
 # Scopes below map file paths to the standard taxonomy:
 #   area:*   — which part of the project the change touches
-#   layer:*  — which implementation layer (if the project has a layer stack)
 #   type:*   — left to issue templates (NOT auto-applied on PRs)
-#
-# Adjust paths under layer:* to match your project's internal module layout.
 
 "area:engineering":
   - changed-files:
@@ -32,41 +29,55 @@
   - changed-files:
     - any-glob-to-any-file: "tests/**"
 
-# Catch-all for source changes that don't match a specific layer scope.
-# Ensures every `src/**` PR receives at least one area label.
-"area:code":
-  - changed-files:
-    - any-glob-to-any-file: "src/**"
-
-# --- Layer scopes — edit to match your project's layer stack --------------
-# The bundled demo package has a strict one-way dependency chain, and these
-# globs mirror it. Rename or delete them to match your own module layout.
-#
-#   layer:0-primitives  types, errors, validators — depend on nothing
-#   layer:1-components  the computational core — depends on primitives
-#   layer:2-models      user-facing composition — depends on the core
-
-"layer:0-primitives":
+# One area per public module: the public re-export and its private tree under _src.
+"area:geometry":
   - changed-files:
     - any-glob-to-any-file:
-      - "src/**/_typing.py"
-      - "src/**/exceptions.py"
-      - "src/**/utils.py"
-      - "src/**/_primitives/**"
+      - "src/functax/geometry.py"
+      - "src/functax/geometry/**"
+      - "src/functax/_src/geometry/**"
 
-"layer:1-components":
+"area:basis":
   - changed-files:
     - any-glob-to-any-file:
-      - "src/**/stats.py"
-      - "src/**/smoothing.py"
-      - "src/**/_components/**"
+      - "src/functax/basis.py"
+      - "src/functax/basis/**"
+      - "src/functax/_src/basis/**"
 
-"layer:2-models":
+"area:diffops":
   - changed-files:
     - any-glob-to-any-file:
-      - "src/**/transforms.py"
-      - "src/**/cli.py"
-      - "src/**/_models/**"
+      - "src/functax/diffops.py"
+      - "src/functax/diffops/**"
+      - "src/functax/_src/diffops/**"
+
+"area:interp":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "src/functax/interp.py"
+      - "src/functax/interp/**"
+      - "src/functax/_src/interp/**"
+
+"area:quad":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "src/functax/quad.py"
+      - "src/functax/quad/**"
+      - "src/functax/_src/quad/**"
+
+"area:transform":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "src/functax/transform.py"
+      - "src/functax/transform/**"
+      - "src/functax/_src/transform/**"
+
+"area:project":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "src/functax/project.py"
+      - "src/functax/project/**"
+      - "src/functax/_src/project/**"
 
 # --- Default / legacy labels retained for Dependabot compatibility ---------
 

@@ -47,7 +47,7 @@ Before filing, confirm these with the user (or infer them and echo them back):
    Subjects are lowercase and say the outcome, not the activity.
 3. **Parent** theme or wave epic, if any.
 4. **Wave and milestone**: the `wave:*` label and the `vX.Y-<slug>` milestone.
-5. **Other labels**: `area:*`, `layer:*`, `priority:*` (step 4).
+5. **Other labels**: `area:*`, `priority:*` (step 4).
 
 Then check for duplicates, searching titles and bodies of open and closed issues for the key name or phrase:
 
@@ -101,22 +101,18 @@ uv run --with cyclopts --with loguru --with pyyaml python ~/.claude/skills/eman-
 
 ## 4. Pick labels
 
-Every issue carries exactly one `type:*`, one or more `area:*`, at most one `layer:*`, one `wave:*` and one `priority:*`. Apply only labels that exist (`gh api "repos/$R/labels?per_page=100" --jq '.[].name'`).
-
-<!-- template-example: the layer column maps the example package's modules onto the template's layer labels; remap it for your package. -->
+Every issue carries exactly one `type:*`, one or more `area:*`, one `wave:*` and one `priority:*`. Apply only labels that exist (`gh api "repos/$R/labels?per_page=100" --jq '.[].name'`).
 
 | Work type | Labels |
 |---|---|
-| L0 primitive (a validator, a statistic, a filter: `utils`, `stats`, `smoothing`) | `type:feature`, `area:code`, `layer:0-primitives`, `wave:N`, `priority:p1` |
-| L1 component (a transform, a pipeline feature: `transforms`) | `type:feature`, `area:code`, `layer:1-components`, `wave:N` |
-| L2 public API / wrapper (a CLI subcommand, a top-level export: `cli`, `__init__`) | `type:feature`, `area:code`, `layer:2-models`, `wave:N` |
-| Test coverage | `type:feature`, `area:testing`, `wave:N` |
+| A feature in one module (a scheme, a basis, a rule, a geometry type) | `type:feature`, `area:<module>` (`geometry`, `basis`, `diffops`, `interp`, `quad`, `transform`, `project`), `wave:N`, `priority:p1` |
+| Test coverage, the oracle harness | `type:feature`, `area:testing`, `wave:N` |
 | Notebook / docs page | `type:docs`, `area:docs`, `wave:N` |
-| Design / ADR | `type:design`, `area:code` (or `area:engineering`), `wave:N` |
-| Research / survey | `type:research`, `area:code` (or the relevant area) |
+| Design / ADR | `type:design`, the module's `area:*` (or `area:engineering`), `wave:N` |
+| Research / survey | `type:research`, the relevant `area:*` |
 | Engineering / CI / packaging | `type:chore`, `area:engineering`, `wave:0` |
 
-The labels come from `.github/scripts/create-labels.sh` (`uv run poe gh-labels`): `type:{epic-wave,epic-theme,feature,bug,design,chore,docs,research}`, `area:{engineering,testing,docs,code}`, `dependencies`, `layer:{0-primitives,1-components,2-models}`, `wave:0`…`wave:4`, `priority:{p0,p1,p2}`. A project that needs more areas (`area:algorithmic`, `area:performance`, …) adds them to that script first. Check `docs/contributing.md` for the current waves and milestones.
+The labels come from `.github/scripts/create-labels.sh` (`uv run poe gh-labels`): `type:{epic-wave,epic-theme,feature,bug,design,chore,docs,research}`, `area:{geometry,basis,diffops,interp,quad,transform,project,engineering,testing,docs}`, `dependencies`, `wave:0`…`wave:5`, `priority:{p0,p1,p2}`. A new area is added to that script first. Check `docs/contributing.md` for the current waves and milestones.
 
 ## 5. Create
 
@@ -128,9 +124,9 @@ gh api "repos/$R/milestones?state=open" --jq '.[] | "\(.number) \(.title)"'
 
 ```bash
 gh api repos/$R/issues \
-  -f title="feat(smoothing): savitzky–golay filter" \
+  -f title="feat(interp): Keys cubic convolution" \
   -F body=@body.md \
-  -f "labels[]=type:feature" -f "labels[]=area:code" -f "labels[]=layer:0-primitives" \
+  -f "labels[]=type:feature" -f "labels[]=area:interp" \
   -f "labels[]=wave:1" -f "labels[]=priority:p1" \
   -F milestone=<milestone number> \
   --jq '"\(.number) \(.id) \(.html_url)"'
