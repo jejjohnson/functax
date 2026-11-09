@@ -23,6 +23,7 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, ArrayLike, Bool, Float
 
+from functax._src._checks import check_values, require_floating
 from functax._src.geometry._transform import as_transform
 from functax.exceptions import GeometryError
 
@@ -55,24 +56,13 @@ _REGULAR_RTOL = 1e-12
 
 
 def _check_values(array: jax.Array, bad: jax.Array, message: str) -> jax.Array:
-    """Raise if ``bad`` holds; under tracing, defer the check to run time.
-
-    On concrete arrays the error is a `GeometryError` whose message ends with
-    the offending array. Inside ``jit`` the values are unknown, so the same
-    message goes to ``eqx.error_if``, which raises when the compiled code runs.
-    """
-    if isinstance(array, jax.core.Tracer) or isinstance(bad, jax.core.Tracer):
-        return eqx.error_if(array, bad, message)
-    if bool(bad):
-        raise GeometryError(f"{message}, got {np.asarray(array)!r}")
-    return array
+    """`check_values` raising `GeometryError`."""
+    return check_values(array, bad, message, error=GeometryError)
 
 
 def _require_floating(array: jax.Array, name: str) -> None:
-    """Raise unless ``array`` has a floating dtype; integers are not cast."""
-    if not jnp.issubdtype(array.dtype, jnp.floating):
-        msg = f"'{name}' must have a floating dtype, got {array.dtype}"
-        raise GeometryError(msg)
+    """`require_floating` raising `GeometryError`."""
+    require_floating(array, name, error=GeometryError)
 
 
 def _as_epoch(epoch: Any) -> str:
