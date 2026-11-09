@@ -14,9 +14,11 @@ from functax._src._backend import require_jax
 require_jax(__name__)
 
 import math
+from typing import Any
 
 import equinox as eqx
 
+from functax._src.interp._config import build_from_config, config_of
 from functax.exceptions import PolicyError
 
 
@@ -123,3 +125,48 @@ class Policies(eqx.Module):
         ):
             msg = f"'fill_value' must be a number, got {self.fill_value!r}"
             raise PolicyError(msg)
+
+    def get_config(self) -> dict[str, Any]:
+        """The policies as strict JSON, with a NaN or infinite fill value tagged.
+
+        Strict JSON has no NaN, so a non-finite ``fill_value`` is written as
+        ``{"float": "nan"}``, ``{"float": "inf"}`` or ``{"float": "-inf"}``;
+        `from_config` reads it back as the float.
+
+        Returns:
+            ``{"class": "Policies", "outside": …, …, "fill_value": …}``.
+
+        Examples:
+            >>> from functax.interp import Policies
+            >>> Policies().get_config()["fill_value"]
+            {'float': 'nan'}
+            >>> config = Policies(outside="clamp", fill_value=-9.0).get_config()
+            >>> config["class"], config["outside"], config["fill_value"]
+            ('Policies', 'clamp', -9.0)
+        """
+        return config_of(self)
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> Policies:
+        """The policies a `get_config` config describes.
+
+        Args:
+            config: A config, typically ``json.loads`` of a stored one.
+
+        Returns:
+            The `Policies`, equal to the one the config came from.
+
+        Raises:
+            ValidationError: If the config does not name ``Policies`` or has
+                an unknown key.
+            PolicyError: If a field names an option that does not exist.
+
+        Examples:
+            >>> import json
+            >>> from functax.interp import Policies
+            >>> policies = Policies(missing="renormalise")
+            >>> text = json.dumps(policies.get_config(), allow_nan=False)
+            >>> Policies.from_config(json.loads(text)) == policies
+            True
+        """
+        return build_from_config(config, root=Policies, expected=cls)
