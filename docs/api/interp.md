@@ -32,6 +32,17 @@ A scheme is configuration only; `scheme.plan(source, target, policies=…)` free
 
 A plan applies $\hat{\vect{f}} = \mat{H} \mathcal{S}(\vect{y})$ over any leading batch dims and writes `fill_value` at invalid rows; `adjoint` applies $\mathcal{S}^\top \mat{H}^\top$, ignoring residuals at invalid rows; `operator()` is the same linear map as a lineax operator, with zero rows where the plan is invalid. The [interpolation guide](../interpolation/) walks through reading a grid at points and sending residuals back.
 
+## Schemes
+
+| Scheme | Taps per axis | Fit | Reproduces | Oracle |
+|---|---|---|---|---|
+| `Nearest()` | 1 | identity | constants | `RegularGridInterpolator(method="nearest")` |
+| `Linear()` | 2 | identity | affine functions | `RegularGridInterpolator`, `map_coordinates(order=1)` |
+| `Cubic(a=-0.5)` | 4 (Keys) | identity | quadratics | gaussx `cubic_interpolation_weights` |
+| `BSpline(order=k)`, $k \le 5$ | $k + 1$ | the `BandedPrefilter` from $k = 2$ | degree-$k$ polynomials away from the ends | `map_coordinates(order=k, mode="mirror")` |
+
+A B-spline of order $k \ge 2$ does not pass through its samples, so its plan first solves $\vect{y} = \mat{B} \vect{c}$ with the banded matrix $\mat{B}$ of B-spline values at the knots. `BandedPrefilter` does this per axis by recursive filtering, a causal and an anticausal pass for each pole $z_p$ after the gain $\lambda = \prod_p (1 - z_p)(1 - z_p^{-1})$, with the mirror boundary (or the wrap on a periodic axis), as `scipy.ndimage.spline_filter` does. The plan's adjoint applies $\mathcal{S}^\top$ after $\mat{H}^\top$.
+
 ## Reference
 
 ::: functax.interp
