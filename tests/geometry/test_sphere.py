@@ -86,6 +86,7 @@ class TestLift:
         lonlat = unit_to_lonlat(jnp.array([[0.0, 5.0, 5.0]]), unit="degrees")
         assert_matches_oracle(lonlat, np.array([[90.0, 45.0]]), rtol=1e-15)
 
+    @pytest.mark.slow
     def test_gradient_finite_at_the_poles(self) -> None:
         poles = jnp.array([[0.3, jnp.pi / 2], [-1.0, -jnp.pi / 2]])
         jacobian = jax.jacrev(lonlat_to_unit)(poles)
@@ -123,6 +124,7 @@ class TestLift:
 
 
 class TestDistances:
+    @pytest.mark.slow
     @settings(max_examples=20, deadline=None)
     @given(seed=st.integers(0, 2**31 - 1), radius=st.floats(1e-3, 1e4))
     def test_chord_is_twice_the_sine_of_half_the_angle(
@@ -140,6 +142,7 @@ class TestDistances:
         expected = 2.0 * radius * jnp.sin(geodesic / (2.0 * radius))
         assert_matches_oracle(chord, expected, rtol=1e-12, atol=1e-14 * radius)
 
+    @pytest.mark.slow
     def test_antipodes(self) -> None:
         u = _random_units(50, seed=2)
         geodesic = jnp.diagonal(geodesic_distance(u, -u, radius=6371.0))
@@ -147,6 +150,7 @@ class TestDistances:
         assert_matches_oracle(geodesic, jnp.full(50, jnp.pi * 6371.0), rtol=1e-12)
         assert_matches_oracle(chord, jnp.full(50, 2.0 * 6371.0), rtol=1e-12)
 
+    @pytest.mark.slow
     def test_zero_on_the_diagonal_and_symmetric(self) -> None:
         u = _random_units(30, seed=3)
         for distance in (chord_distance, geodesic_distance):
@@ -156,6 +160,7 @@ class TestDistances:
             )
             assert_matches_oracle(matrix, matrix.T, rtol=1e-12, atol=1e-15)
 
+    @pytest.mark.slow
     def test_a_traced_radius_is_differentiable(self) -> None:
         u = _random_units(3, seed=7)
         v = _random_units(2, seed=8)
@@ -172,12 +177,14 @@ class TestDistances:
         v = jnp.array([[jnp.cos(angle), jnp.sin(angle), 0.0]])
         assert_matches_oracle(geodesic_distance(u, v), jnp.array([[angle]]), rtol=1e-12)
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("distance", [chord_distance, geodesic_distance])
     def test_gradient_finite_at_zero_distance(self, distance) -> None:  # type: ignore[no-untyped-def]
         u = _random_units(4, seed=4)
         gradient = jax.grad(lambda points: jnp.sum(distance(points, u)))(u)
         assert bool(jnp.all(jnp.isfinite(gradient)))
 
+    @pytest.mark.slow
     def test_geodesic_gradient_through_the_lift_at_the_poles(self) -> None:
         poles = jnp.array([[0.0, jnp.pi / 2], [2.0, -jnp.pi / 2], [1.0, 0.3]])
 
@@ -187,12 +194,14 @@ class TestDistances:
 
         assert bool(jnp.all(jnp.isfinite(jax.grad(total)(poles))))
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("distance", [chord_distance, geodesic_distance])
     def test_gradient_matches_finite_differences(self, distance) -> None:  # type: ignore[no-untyped-def]
         u = _random_units(3, seed=5)
         v = _random_units(4, seed=6)
         assert_grad_matches_fd(lambda points: distance(points, v, radius=2.0), u)
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("distance", [chord_distance, geodesic_distance])
     def test_traces(self, distance) -> None:  # type: ignore[no-untyped-def]
         u = jnp.stack([_random_units(3, seed=s) for s in range(4)])
@@ -279,6 +288,7 @@ class TestPairwiseDistance:
         )
         assert_matches_oracle(distances, expected, rtol=1e-15)
 
+    @pytest.mark.slow
     def test_traces_and_differentiates(self) -> None:
         targets = Points(jnp.asarray([[0.0, 10.0], [50.0, -20.0]]), metric="geodesic")
 

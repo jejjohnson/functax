@@ -13,7 +13,6 @@ from functax._src._backend import require_jax
 
 require_jax(__name__)
 
-import functools
 import math
 from typing import Any
 
@@ -115,13 +114,8 @@ def lonlat_to_unit(
     lonlat = jnp.asarray(lonlat)
     _check_last_axis(lonlat, 2, "lonlat")
     _check_unit(unit)
-    return _lift_kernel(lonlat, unit == "degrees")
-
-
-@functools.partial(jax.jit, static_argnums=1)
-def _lift_kernel(lonlat: jax.Array, degrees: bool) -> jax.Array:
     # λ, φ in radians: x · π/180 for degrees, as geonnax's deg2rad does
-    angles = lonlat * (jnp.pi / 180.0) if degrees else lonlat
+    angles = lonlat * (jnp.pi / 180.0) if unit == "degrees" else lonlat
     longitude = angles[..., 0]
     latitude = angles[..., 1]
     cos_latitude = jnp.cos(latitude)
@@ -220,13 +214,6 @@ def chord_distance(
     _check_points(u, "u")
     _check_points(v, "v")
     _check_radius(radius)
-    return _chord_kernel(u, v, radius)
-
-
-# Compiled as one graph per input shape: eagerly, every einx call would compile
-# on its own (about 0.5 s for the geodesic's seven).
-@jax.jit
-def _chord_kernel(u: jax.Array, v: jax.Array, radius: Any) -> jax.Array:
     # u − v for every pair
     difference = einx.subtract("source c, target c -> source target c", u, v)
     # ‖u − v‖²
@@ -277,11 +264,6 @@ def geodesic_distance(
     _check_points(u, "u")
     _check_points(v, "v")
     _check_radius(radius)
-    return _geodesic_kernel(u, v, radius)
-
-
-@jax.jit
-def _geodesic_kernel(u: jax.Array, v: jax.Array, radius: Any) -> jax.Array:
     u_x, u_y, u_z = u[:, 0], u[:, 1], u[:, 2]
     v_x, v_y, v_z = v[:, 0], v[:, 1], v[:, 2]
     # u × v for every pair, one component at a time
