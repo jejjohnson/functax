@@ -37,8 +37,10 @@ from functax.exceptions import GeometryError
 
 
 __all__ = [
+    "coordinates_to_positions",
     "source_layout",
     "stencil_from_positions",
+    "target_coordinates",
     "target_positions",
     "tensor_stencil",
 ]
@@ -85,19 +87,20 @@ def _target_coordinates(source: Any, target: Any) -> jax.Array:
     raise GeometryError(msg)
 
 
-def target_positions(source: Any, target: Any) -> Float[Array, "target dim"]:
-    """The (M, D) index positions u of the targets on each source axis.
+def coordinates_to_positions(
+    source: Any, coordinates: Float[Array, "target dim"]
+) -> Float[Array, "target dim"]:
+    """The (M, D) index positions u of target coordinates on each source axis.
 
     `index_positions` per axis for an `Axis` or a `RectilinearGrid` source,
-    and `to_pixel` (row, col) for an `AffineGrid`, whose targets are map
-    coordinates (x, y).
+    and `to_pixel` (row, col) for an `AffineGrid`, whose coordinates are map
+    coordinates (x, y). Differentiable in ``coordinates``.
 
     Raises:
-        GeometryError: If the source or target kind is unsupported, or the
-            target has the wrong number of coordinates.
+        GeometryError: If the number of coordinates differs from the number of
+            source axes.
     """
     shape, _ = source_layout(source)
-    coordinates = _target_coordinates(source, target)
     if coordinates.shape[1] != len(shape):
         msg = (
             f"'target' has {coordinates.shape[1]} coordinates per point, but the "
@@ -109,6 +112,26 @@ def target_positions(source: Any, target: Any) -> Float[Array, "target dim"]:
     axes = (source,) if isinstance(source, Axis) else source.axes
     columns = [index_positions(axis, coordinates[:, d]) for d, axis in enumerate(axes)]
     return jnp.column_stack(columns)
+
+
+def target_coordinates(source: Any, target: Any) -> Float[Array, "target dim"]:
+    """The (M, D) coordinates of the targets in the source's frame.
+
+    Raises:
+        GeometryError: If the source or target kind is unsupported.
+    """
+    source_layout(source)
+    return _target_coordinates(source, target)
+
+
+def target_positions(source: Any, target: Any) -> Float[Array, "target dim"]:
+    """The (M, D) index positions u of the targets on each source axis.
+
+    Raises:
+        GeometryError: If the source or target kind is unsupported, or the
+            target has the wrong number of coordinates.
+    """
+    return coordinates_to_positions(source, target_coordinates(source, target))
 
 
 def _axis_stencil(
