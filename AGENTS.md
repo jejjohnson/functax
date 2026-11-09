@@ -47,7 +47,7 @@ Each foundation brings a rule. Breaking one runs fine on your example and fails 
 | **Equinox** | geometry types, stencils, plans and bases as `eqx.Module`s | Arrays are always leaves; configuration is `eqx.field(static=True)`. Field checks in `__check_init__`, checks on traced values with `eqx.error_if`. |
 | **lineax** | the lineax view of a plan (`operator()`), and every solve | Solve, never invert; never `jnp.linalg.solve` or `inv`. |
 | **einx** | reductions, contractions, broadcasts and rearranges | No `axis=`, `.T`, `reshape` or `[:, None]`. |
-| **jaxtyping** | array annotations | Named dims from the shared vocabulary ("House style"); checked at runtime in tests through the import hook in `tests/conftest.py`. |
+| **jaxtyping** | array annotations | Named dims from the shared vocabulary ("House style"); checked at runtime in tests through the import hook in `conftest.py`. |
 | **SciPy** (test group) | the oracle every scheme is tested against | A test oracle, not a runtime dependency. |
 | **pytest + `--doctest-modules`** | the suite and every docstring `Examples:` block | An example's expected output is what the code prints; a stale example is a failing test. |
 
@@ -65,6 +65,8 @@ Before writing a helper, a validator, a sampler, a basis or a rule, find out whe
 | `try: import jax` with a hand-written message | `require_jax(__name__)` (`functax._src._backend`), which raises `MissingExtraError` naming `functax[jax]` |
 | A new exception for bad input or a missing extra | `ValidationError`, `MissingExtraError` |
 | `tuple[int, ...]` for a grid shape | `Shape` (`functax._typing`) |
+| Reading an `Affine`, six numbers or a 3 × 3 matrix into (a, b, c, d, e, f) | `as_transform` (`functax._src.geometry._transform`, NumPy only) |
+| A malformed axis, grid or point set | `GeometryError` (a `ValidationError`) |
 | `jnp.linalg.solve`, `jnp.linalg.inv`, a hand-rolled CG | lineax (`lx.linear_solve` with the right solver) |
 | The transpose of a linear map | the plan's hand-written adjoint, checked against `jax.linear_transpose` by the dot-product test |
 | A SciPy comparison, a dot-product test, a `jit`/`vmap` agreement check or a finite-difference gradient check in a test | `assert_matches_oracle`, `assert_adjoint`, `assert_transpose_matches`, `assert_traces`, `assert_grad_matches_fd` (`tests/_harness.py`; "Testing a scheme" in `docs/contributing.md`) |
@@ -181,7 +183,7 @@ CI ("Tests", `ci.yml`) runs every tier with coverage on Python 3.12 and 3.13 (`u
 
 ### Tests that assert on random draws
 
-functax's tests draw random fields, targets and the vectors of the dot-product test; JAX's 64-bit mode is on for the whole suite (`tests/conftest.py`).
+functax's tests draw random fields, targets and the vectors of the dot-product test; JAX's 64-bit mode is on for the whole suite (`conftest.py`).
 
 - **Incidental randomness** (any draw would do): seed it (`random.Random(0)`, `numpy.random.default_rng(0)`, a fixed key) so a failure reproduces.
 - **Sampling behaviour under test** (a Monte Carlo estimate, a statistical property): bound the statistic by its own sampling distribution (a number of standard errors, a test's p-value floor), not by a tolerance tuned on one draw, and say in a comment where the bound comes from.
@@ -228,12 +230,12 @@ functax uses JAX, so the JAX/Equinox rules of `python-style` apply in full:
 
 - **Layout.** Logic lives only under `functax/_src/`; a public module only re-exports (`from functax._src.geometry.grids import RegularGrid`). One concept per file: a protocol and its implementations share a file, and a file splits when a second concept appears, not at a line count.
 - **Imports.** Modules under fixed aliases, never bare function imports: `import einx`, `import equinox as eqx`, `import jax`, `import jax.numpy as jnp`, `import lineax as lx`. jaxtyping names (`from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray`) are the one exception.
-- **Types and shapes.** Every array argument and return is annotated with jaxtyping and named dims (`Float[Array, "obs channel"]`); shapes live in types, never in comments. Dims come from the shared vocabulary of `python-style` (`sample`, `test`, `member`, `batch`, `time`, `cell`, `obs`, `channel`, `var`, `level`, `inducing`, `state`, `latent`, `param`); a functax-specific dim is added to this list with the first module that needs it. Types are checked at runtime in tests only, through the jaxtyping import hook in `tests/conftest.py`.
+- **Types and shapes.** Every array argument and return is annotated with jaxtyping and named dims (`Float[Array, "obs channel"]`); shapes live in types, never in comments. Dims come from the shared vocabulary of `python-style` (`sample`, `test`, `member`, `batch`, `time`, `cell`, `obs`, `channel`, `var`, `level`, `inducing`, `state`, `latent`, `param`); functax adds `node` (the nodes of an `Axis`) and `dim` (the D coordinates of a point), and a new functax-specific dim is added here with the first module that needs it. Types are checked at runtime in tests only, through the jaxtyping import hook in `conftest.py`.
 - **Array operations.** einx for reductions, contractions, broadcasts and rearranges, never `axis=`, `.T`, `reshape` or `[:, None]`. einx is for dense arrays: a linear operator keeps its own methods (`.mv`, `.T`, the solve primitives) and is never materialised to use einx. Two axes of the same dim are named by role (`row col`, `next prev`), never `i j`. lineax for linear solves: solve, never invert.
 - **Modules and functions.** Arrays live in `eqx.Module`s and are always leaves, never static fields; host-side records that are never traced are frozen dataclasses. Modules carry state, functions carry transforms. Fixed parameters (a scheme's order, a basis's θ) are fields; data goes into `__call__`. One parameterisation per module. Inputs that travel together form their own small module. Protocols are abstract modules with `eqx.AbstractVar`. Few positionals, the rest keyword-only after `*`. Updates go through public `with_*` methods: config fields with `dataclasses.replace` (so `__check_init__` re-runs), array leaves with `eqx.tree_at`. `vmap` sits outside `jacrev`.
 - **PRNG keys** are keyword-only, named `key`, and last; split once at the top into one named key per stochastic stage.
-- **Validation.** Static checks on fields in `__check_init__`; value checks on traced arrays with `eqx.error_if`.
-- **Precision.** The caller decides: preserve the input dtype, never cast silently, and create constants in the input's dtype or as Python scalars. Tests that need float64 get it from `tests/conftest.py`.
+- **Validation.** Static checks on fields in `__check_init__`; value checks on traced arrays with `eqx.error_if` (`_check_values` in `functax._src.geometry._types` raises `GeometryError` on concrete arrays and defers to `eqx.error_if` under `jit`). Annotate a public input with what the code accepts (`ArrayLike | Sequence[float]`, `str` for an option checked against a fixed set), not the narrower type it is coerced to: the jaxtyping hook in `conftest.py` rejects anything outside the annotation before the module's own check, so a too-narrow annotation hides that check from the tests.
+- **Precision.** The caller decides: preserve the input dtype, never cast silently, and create constants in the input's dtype or as Python scalars. Tests that need float64 get it from `conftest.py`.
 - **Configuration.** Objects round-trip through `get_config()` / `from_config()`, with arrays excluded (strict JSON for schemes, #33).
 - **Tests.** Every public forward function gets four: a closed-form or SciPy oracle at a stated tolerance (`rtol=1e-12` in float64), hypothesis properties, a gradient check (`jacrev` against central differences), and transform invariance (eager, `jit` and `vmap` agree with a Python loop). A linear read-out adds the dot-product test.
 

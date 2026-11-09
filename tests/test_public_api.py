@@ -74,3 +74,13 @@ def test_package_is_typed() -> None:
     """PEP 561 marker must ship so downstream type checkers see annotations."""
     marker = Path(functax.__path__[0]) / "py.typed"
     assert marker.is_file(), f"missing PEP 561 marker at {marker}"
+
+
+def test_geometry_reexports_lazily() -> None:
+    import functax.geometry as geometry
+    from functax._src.geometry import _types
+
+    assert geometry.Axis is _types.Axis
+    assert set(geometry.__all__) <= set(dir(geometry))
+    with pytest.raises(AttributeError, match="no attribute 'Grid'"):
+        _ = geometry.Grid

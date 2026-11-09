@@ -8,19 +8,27 @@ from __future__ import annotations
 
 import pytest
 
-from functax import FunctaxError, MissingExtraError, ValidationError
+from functax import FunctaxError, GeometryError, MissingExtraError, ValidationError
 
 
-@pytest.mark.parametrize("error", [ValidationError, MissingExtraError])
+@pytest.mark.parametrize("error", [ValidationError, GeometryError, MissingExtraError])
 def test_every_error_derives_from_the_base(error: type[Exception]) -> None:
     assert issubclass(error, FunctaxError)
 
 
 @pytest.mark.parametrize(
     ("error", "stdlib_base"),
-    [(ValidationError, ValueError), (MissingExtraError, ImportError)],
+    [
+        (ValidationError, ValueError),
+        (GeometryError, ValueError),
+        (MissingExtraError, ImportError),
+    ],
 )
 def test_errors_alias_the_closest_stdlib_exception(
     error: type[Exception], stdlib_base: type[Exception]
 ) -> None:
     assert issubclass(error, stdlib_base)
+
+
+def test_geometry_error_specialises_validation_error() -> None:
+    assert issubclass(GeometryError, ValidationError)
