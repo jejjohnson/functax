@@ -123,6 +123,7 @@ class TestTraces:
         )
         assert_traces(from_pixel, transforms, rowcol)
 
+    @pytest.mark.slow
     def test_grad_in_the_points_and_the_transform(self) -> None:
         # rotated and sheared, with det A = −3.15, so central differences
         # with ε = 1e-6 are accurate to about 1e-10
@@ -130,6 +131,11 @@ class TestTraces:
         xy = jnp.asarray([[12.0, -7.0], [3.0, 4.0]])
         assert_grad_matches_fd(lambda p: to_pixel(transform, p), xy)
         assert_grad_matches_fd(lambda t: to_pixel(t, xy), transform)
+
+    def test_a_concrete_transform_closed_over_under_jit(self) -> None:
+        transform = jnp.asarray(NORTH_UP)
+        rowcol = jax.jit(lambda p: to_pixel(transform, p))(jnp.zeros((1, 2)))
+        assert rowcol.shape == (1, 2)
 
     def test_grad_matches_the_inverse_matrix(self) -> None:
         transform = jnp.asarray(NORTH_UP)

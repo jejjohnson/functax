@@ -18,6 +18,8 @@ import math
 from collections.abc import Sequence
 from typing import Any
 
+import numpy as np
+
 from functax._src._backend import is_tracer, namespace
 from functax.exceptions import GeometryError
 
@@ -34,7 +36,9 @@ def _require_invertible(transform: Any) -> None:
     """Raise when a concrete transform is singular; traced ones are not checked."""
     if is_tracer(transform):
         return
-    a, b, _, d, e, _ = (float(transform[k]) for k in range(6))
+    # np.asarray before indexing: under jit, indexing a concrete JAX array
+    # stages a traced slice, which float() cannot read
+    a, b, _, d, e, _ = np.asarray(transform, dtype=np.float64).tolist()
     if a * e - b * d == 0.0:
         msg = f"'transform' must be invertible (a·e − b·d ≠ 0), got {transform!r}"
         raise GeometryError(msg)
@@ -213,7 +217,7 @@ def window(
         )
         raise GeometryError(msg)
     x_min, y_min, x_max, y_max = values
-    a, b, c, d, e, f = (float(grid.transform[k]) for k in range(6))
+    a, b, c, d, e, f = np.asarray(grid.transform, dtype=np.float64).tolist()
     # det A = a·e − b·d
     determinant = a * e - b * d
     if determinant == 0.0:

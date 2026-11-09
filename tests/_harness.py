@@ -99,9 +99,11 @@ def assert_matches_oracle(
         rtol, atol = 0.0, 0.0
 
     # e = |a − b|; a NaN on one side only counts as an infinite error
-    error = np.abs(actual_values - expected_values)
+    with np.errstate(invalid="ignore"):
+        error = np.abs(actual_values - expected_values)
     both_nan = np.isnan(actual_values) & np.isnan(expected_values)
-    error = np.where(both_nan, 0.0, error)
+    # equal values (infinities included) have no error, and no inf − inf
+    error = np.where(both_nan | (actual_values == expected_values), 0.0, error)
     error = np.where(np.isnan(error), np.inf, error)
     # τ = atol + rtol·|b|; a NaN reference contributes no tolerance
     reference_scale = np.where(np.isnan(expected_values), 0.0, expected_values)
@@ -332,7 +334,8 @@ def assert_grad_matches_fd(
         output, _ = ravel_pytree(fn(unravel(flat_input)))
         return output
 
-    jacobian = jax.jacrev(flat_fn)(flat_x)
+    # compiled once each: eager dispatch of every small op dominates otherwise
+    jacobian = jax.jit(jax.jacrev(flat_fn))(flat_x)
 
     def central_difference(step: jax.Array) -> jax.Array:
         # (f(x + ε eₖ) − f(x − ε eₖ)) / 2ε
@@ -340,6 +343,6 @@ def assert_grad_matches_fd(
 
     steps = eps * jnp.eye(flat_x.shape[0], dtype=flat_x.dtype)
     # one column per input entry: (input, output) → (output, input)
-    finite_difference = jax.vmap(central_difference, out_axes=1)(steps)
+    finite_difference = jax.jit(jax.vmap(central_difference, out_axes=1))(steps)
     scale = float(jnp.max(jnp.abs(finite_difference))) if jacobian.size else 0.0
     assert_matches_oracle(jacobian, finite_difference, rtol=0.0, atol=rtol * scale)
