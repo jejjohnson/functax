@@ -113,6 +113,7 @@ def derivative_stencil(
         derivative_weights,
         n_source=stencil.n_source,
         valid=stencil.valid,
+        check=False,
     )
 
 
