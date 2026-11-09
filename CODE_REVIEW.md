@@ -1,8 +1,6 @@
 # Code Review Agent Instructions
 
-Standing instructions for **all** agents performing code reviews on this repository. Read "Reuse before you write", "The contracts" and "What enforces them" in [`AGENTS.md`](AGENTS.md) first; this file is the checklist and the report format. Most defects worth finding are a contract broken in a way the tests cannot see (an input mutated on one path, a validator skipped, an unfitted transform that quietly does nothing, a docstring that promises what the code does not do) or a re-implementation of something the package already has, not style.
-
-<!-- template-example: this file's sections 2 and "Package-Specific Checks" describe the example package. -->
+Standing instructions for **all** agents performing code reviews on this repository. Read "Reuse before you write", "The contracts" and "What enforces them" in [`AGENTS.md`](AGENTS.md) first; this file is the checklist and the report format. Most defects worth finding are a contract broken in a way the tests cannot see (a gather that silently clamps targets outside the grid, a `where` whose untaken branch poisons the gradient, a silent dtype cast, an adjoint that is not the transpose, a docstring that promises what the code does not do) or a re-implementation of something the package already has, not style.
 
 ---
 
@@ -38,31 +36,32 @@ Skip anything ruff, ty or the tests already enforce (formatting, import order, `
 
 ### 1. Reuse and boundaries
 
-- Every function, class or module the diff **adds** has been checked against [`docs/api/capabilities.md`](docs/api/capabilities.md) and the private helpers in "Reuse before you write" in `AGENTS.md`. A re-implemented validator, statistic, filter, padding rule, buffer or transform is a **High** finding, with the existing name to use.
+- Every function, class or module the diff **adds** has been checked against [`docs/api/capabilities.md`](docs/api/capabilities.md) and the private helpers in "Reuse before you write" in `AGENTS.md`. A re-implemented sampler, locate, basis, quadrature rule, adjoint or backend check is a **High** finding, with the existing name to use.
 - No new runtime dependency without discussion; an optional one sits behind an extra and an in-function import that names the extra. `uv.lock` is updated with any dependency change.
-- Imports keep pointing one way (the module table in `AGENTS.md`); the library never imports the CLI.
+- Imports keep pointing one way (the module table in `AGENTS.md`). functax is Core tier 0: an import of pipekit, kernellib, gaussx, finitevolX, geoarray, interpax, orthax or any other stack library is a **Critical** finding.
+- The NumPy-only base (`functax`, `functax.geometry`, `functax.geometry.affine`, `functax._src._backend`) imports nothing from the `jax` extra at module level; every other module calls `require_jax(__name__)` before its first JAX import.
 - A rename or removal of a public name keeps the old name working with a `DeprecationWarning` for at least one release.
 
 ### 2. The contracts
 
-<!-- template-example: the example package's contracts; replace with your package's. -->
-
-- **Public functions** validate once, at the boundary, with `as_floats` / `require_non_empty` / `require_positive`; raise `ValidationError` / `EmptySeriesError` whose message names the argument; return a **new** list and never mutate the input; use `math.fsum` for sums; turn degenerate input into an error, not a `nan`.
-- **Transforms** satisfy `Transform` structurally (no base class); stateless ones are frozen dataclasses whose `fit` returns `self`; fitted ones keep learned state in `init=False` trailing-underscore fields, return `self` from `fit`, and raise `NotFittedError` from `apply` before `fit`; every transform has `fit_apply`; constructor arguments are validated in `__post_init__`; the transform joins `TestProtocols` in `tests/test_transforms.py`.
-- **CLI** subcommands are a subparser plus a `_run_<name>` handler in `main`'s `handlers`; they write only to the injected `out`, read through `_read_values`, validate options with an `argparse` `type=`, and never `print` or `sys.exit`.
-- **Exceptions** derive from `MypackageError` and the closest stdlib exception; errors are chained (`raise … from err`).
+- **Public functions and modules** validate once, at the boundary (`__check_init__` for fields, `eqx.error_if` for traced values), raise `ValidationError` whose message names the argument, never mutate their input, preserve the input dtype, and trace under `jit`, `vmap` and `grad` with static shapes.
+- **Gathers** mask targets outside the source explicitly: JAX clamps an out-of-bounds index to the edge, so an unmasked target off the grid reads the edge value.
+- **`jnp.where`** guards the untaken branch too, or its `nan` reaches the gradient.
+- **Linear read-outs** (from Wave 2) pass the dot-product test ⟨Hx, r⟩ = ⟨x, Hᵀr⟩ and equal their SciPy oracle, both to 1e-12 relative in float64, and `jit`, `vmap` and `grad` agree with an eager loop.
+- **Solves** go through lineax; `jnp.linalg.inv` and `jnp.linalg.solve` are findings.
+- **Exceptions** derive from `FunctaxError` and the closest stdlib exception; errors are chained (`raise … from err`).
 
 ### 3. Public API and documentation
 
-- New names: in the module's `__all__` and the top-level `__all__`; a new module in `SUBMODULES` (`tests/test_public_api.py`), with its `docs/api/<module>.md` page, a `nav` entry in `mkdocs.yml` and a row in `docs/api/index.md`; `docs/api/capabilities.md` regenerated (`uv run poe capabilities`).
-- Docstrings in the `python-style` layout: summary, the defining equation in Unicode (`eman-style-math`; `$…$` in a docstring is a finding), `Algorithm:` for a method, `Args:` with meaning and symbol, `Returns:` and `Raises:` matching the code, and two or three executable `Examples:` (typical, edge, composition) whose output is what the code prints (rounded values, not 17-digit floats).
+- New names: logic in `functax._src.<area>`, re-exported from the area module's `__all__`; a new module in `SUBMODULES` or a new package in `SUBPACKAGES` (`tests/test_public_api.py`), with its `docs/api/<module>.md` page, a `nav` entry in `mkdocs.yml` and a row in `docs/api/index.md`; `docs/api/capabilities.md` regenerated (`uv run poe capabilities`).
+- Docstrings in the `python-style` layout: summary, the defining equation in Unicode (`eman-style-math`; `$…$` in a docstring is a finding), `Algorithm:` for a method, `Args:` with meaning and symbol, `Returns:` and `Raises:` matching the code, and two or three executable `Examples:` (typical, edge, composition) whose output is what the code prints (shapes, `allclose` booleans or reprs, never raw floats).
 - Maths in MyST and MkDocs pages uses the `eman-style-math` macros, defines every symbol with its shape, keeps each expression on one line and has no spacing macros (`\,`, `\quad`, …).
-- Prose pages: MyST directives, not MkDocs-Material syntax; API links by the top-level name (`xref:api#mypackage.<Name>`); a new page or notebook in the `docs/myst.yml` toc with a basename unique across `docs/`.
+- Prose pages: MyST directives, not MkDocs-Material syntax; API links by the top-level name (`xref:api#functax.<Name>`); a new page or notebook in the `docs/myst.yml` toc with a basename unique across `docs/`.
 - Notebooks committed executed, with no error outputs, and every number quoted in the prose matching the printed output.
 
 ### 4. Tests
 
-- Each behaviour is checked against a closed form, a hand computation or a published value; edge cases (empty input, a single value, a constant series, invalid arguments, overflow) have their own tests.
+- Each behaviour is checked against a closed form, a hand computation or a published value; edge cases (targets on the boundary and outside it, a single cell, a descending axis, float32 inputs, invalid arguments) have their own tests. A public forward function has the four `python-style` tests: oracle, hypothesis properties, gradient check, transform invariance.
 - New code is covered (the 90 % gate is global, so a well-covered package can hide an untested module: look at the diff, not the total).
 - Randomness, if any, is seeded; a statistical assertion is bounded by the statistic's own sampling distribution, with the bound's source in a comment.
 - Tier markers right: unmarked under ~1 s, `slow` above, `integration` for end-to-end workflows and optional dependencies.
@@ -70,10 +69,10 @@ Skip anything ruff, ty or the tests already enforce (formatting, import order, `
 ### 5. Modern Python and dependencies
 
 - `from __future__ import annotations`; type hints on every public function; `X | None`, built-in generics, PEP 695 `type` aliases.
-- `dataclasses` with `slots=True` for data containers (`frozen=True` when immutable); `Enum` / `StrEnum` for fixed sets of options; `pathlib`; f-strings; context managers for resources.
+- `eqx.Module` for anything holding arrays (arrays as leaves, configuration as static fields); frozen dataclasses for host-side records that are never traced; `Enum` / `StrEnum` for fixed sets of options; `pathlib`; f-strings; context managers for resources.
 - Specific exceptions, chained with `raise … from …`; guard clauses over deep nesting.
-- `python-style` comments and naming: comments above the line, never beside it; a Unicode equation above each mathematical line; descriptive names, with the symbol only in the comment; one operation per line. In a JAX package, its JAX rules too (jaxtyping dims, einx, lineax, `eqx.error_if`, the four tests per public forward).
-- New CLIs and scripts use `cyclopts` and `loguru`, not argparse, click, typer, `print` progress or stdlib `logging` (the example CLI's `argparse` is a documented exception).
+- `python-style` comments and naming: comments above the line, never beside it; a Unicode equation above each mathematical line; descriptive names, with the symbol only in the comment; one operation per line. Its JAX rules too ("JAX and Equinox" in `AGENTS.md`): jaxtyping dims, einx, lineax, `eqx.error_if`, `key` keyword-only and last.
+- New CLIs and scripts use `cyclopts` and `loguru`, not argparse, click, typer, `print` progress or stdlib `logging`.
 - A dependency, when one is justified, follows the preferences in `.github/instructions/python-coding.instructions.md`.
 
 ### 6. Security
@@ -85,124 +84,128 @@ Skip anything ruff, ty or the tests already enforce (formatting, import order, `
 
 ## Package-Specific Checks
 
-<!-- template-example: these patterns are the example package's; replace them with the defects your package is prone to. Every example here runs. -->
+Every example here runs, with `jax_enable_x64` on as in the test suite, except the last, whose module lands with #15.
 
-### Validate once, at the boundary
+### Mask targets outside the source
 
 ```python
-# ❌ No validation: window=0 or an empty series fails deep inside max() with
-#    "max() iterable argument is empty", and a string slips through as text
-def rolling_max(series, window):
-    return [max(series[i : i + window]) for i in range(len(series) - window + 1)]
+import jax.numpy as jnp
+
+field = jnp.array([10.0, 20.0, 30.0])
+index = jnp.array([1, 5])
+
+# ❌ JAX clamps the out-of-bounds index: the target at 5 reads the edge, 30.0
+field[index]
 
 
-# ✅ The package's validators, and the package's error messages
-from mypackage import Series, require_non_empty, require_positive
-
-
-def rolling_max(series: Series, window: int) -> list[float]:
-    values = require_non_empty(series)
-    window = require_positive(window, name="window")
-    return [max(values[i : i + window]) for i in range(len(values) - window + 1)]
+# ✅ An explicit `inside` mask, and a safe index for the gather
+def read_nearest(field, index):
+    inside = (index >= 0) & (index < field.shape[0])
+    safe_index = jnp.where(inside, index, 0)
+    value = field[safe_index]
+    return jnp.where(inside, value, jnp.nan)
 ```
 
-### Never mutate the input
+### Guard both branches of `where`
 
 ```python
-# ❌ Sorts the caller's list in place
-def upper_quartile(series: list[float]) -> float:
-    series.sort()
-    return series[(3 * len(series)) // 4]
+import jax
+import jax.numpy as jnp
 
 
-# ✅ Work on a fresh, validated copy, or reuse the existing statistic
-from mypackage import Series, quantile
+# ❌ The untaken branch still runs: jax.grad(...)(0.0) is nan, not 0.0
+def inverse_distance(d):
+    return jnp.where(d > 0, 1.0 / d, 0.0)
 
 
-def upper_quartile(series: Series) -> float:
-    return quantile(series, 0.75)
+# ✅ Feed the untaken branch a safe value: jax.grad(...)(0.0) is 0.0
+def inverse_distance(d):
+    positive = d > 0
+    safe_d = jnp.where(positive, d, 1.0)
+    return jnp.where(positive, 1.0 / safe_d, 0.0)
 ```
 
-### A fitted transform fails loudly before `fit`
+### Preserve the input dtype
 
 ```python
-from dataclasses import dataclass, field
-from typing import Self
-
-from mypackage import NotFittedError, Series, as_floats, require_non_empty
+import jax.numpy as jnp
 
 
-# ❌ Unfitted, `apply` silently behaves as the identity
-@dataclass(slots=True)
-class CenterSilently:
-    mean_: float | None = field(default=None, init=False)
-
-    def apply(self, series: Series) -> list[float]:
-        return [value - (self.mean_ or 0.0) for value in as_floats(series)]
+# ❌ A float32 field comes back as float64
+def lerp(a, b, t):
+    return a + jnp.asarray(t, dtype=jnp.float64) * (b - a)
 
 
-# ✅ The package's fit / apply lifecycle
-@dataclass(slots=True)
-class Center:
-    mean_: float | None = field(default=None, init=False)
-
-    def fit(self, series: Series) -> Self:
-        values = require_non_empty(series)
-        self.mean_ = sum(values) / len(values)
-        return self
-
-    def apply(self, series: Series) -> list[float]:
-        if self.mean_ is None:
-            msg = "Center is not fitted; call .fit(series) first"
-            raise NotFittedError(msg)
-        return [value - self.mean_ for value in as_floats(series)]
-
-    def fit_apply(self, series: Series) -> list[float]:
-        return self.fit(series).apply(series)
+# ✅ Constants in the input's dtype
+def lerp(a, b, t):
+    t = jnp.asarray(t, dtype=a.dtype)
+    return a + t * (b - a)
 ```
 
-### Typed, chained errors that name the argument
+### The adjoint is the transpose
 
 ```python
-from mypackage import ValidationError
+import jax
+import jax.numpy as jnp
 
 
-# ❌ A bare except catches everything (KeyboardInterrupt included), and the
-#    error is a RuntimeError naming neither the argument nor the bad value
-def parse_alpha(text: str) -> float:
-    try:
-        return float(text)
-    except:  # noqa: E722
-        raise RuntimeError("bad input")
+def apply(x):
+    # H x: the mean of each pair of neighbours, (N,) → (N − 1,)
+    return 0.5 * (x[:-1] + x[1:])
 
 
-# ✅ The package's error (also a ValueError), the argument's name, the cause
-def parse_alpha(text: str) -> float:
-    try:
-        alpha = float(text)
-    except ValueError as err:
-        msg = f"'alpha' must be a number, got {text!r}"
-        raise ValidationError(msg) from err
-    if not 0.0 < alpha <= 1.0:
-        msg = f"'alpha' must lie in (0, 1], got {alpha!r}"
-        raise ValidationError(msg)
-    return alpha
+# ❌ Looks plausible and fails the dot-product test
+def adjoint(r):
+    return jnp.concatenate([0.5 * r, jnp.zeros(1)])
+
+
+# ✅ Each output spreads back to both inputs it read
+def adjoint(r):
+    padded_right = jnp.concatenate([r, jnp.zeros(1)])
+    padded_left = jnp.concatenate([jnp.zeros(1), r])
+    return 0.5 * (padded_right + padded_left)
+
+
+key_x, key_r = jax.random.split(jax.random.key(0))
+x = jax.random.normal(key_x, (6,))
+r = jax.random.normal(key_r, (5,))
+# ⟨Hx, r⟩ = ⟨x, Hᵀr⟩, and the hand-written adjoint equals jax.linear_transpose
+assert jnp.allclose(jnp.vdot(apply(x), r), jnp.vdot(x, adjoint(r)), rtol=1e-12)
+(transpose,) = jax.linear_transpose(apply, x)(r)
+assert jnp.allclose(transpose, adjoint(r))
 ```
 
-### Doctest output the code really prints
+### Solve, never invert
 
 ```python
-# ❌ Expected output copied from a calculator: the doctest fails on the
-#    17th digit, or passes only on one platform
-#     >>> zscores([1.0, 2.0, 4.0])
-#     [-0.87, -0.22, 1.09]
+import jax.numpy as jnp
+import lineax as lx
 
-# ✅ Round in the example, and paste what it prints
-#     >>> [round(z, 4) for z in zscores([1.0, 2.0, 4.0])]
-#     [-0.8729, -0.2182, 1.0911]
-from mypackage import zscores
+matrix = jnp.array([[4.0, 1.0], [1.0, 3.0]])
+rhs = jnp.array([1.0, 2.0])
 
-assert [round(z, 4) for z in zscores([1.0, 2.0, 4.0])] == [-0.8729, -0.2182, 1.0911]
+# ❌ Forms the inverse: slower, less accurate, and blind to structure
+solution = jnp.linalg.inv(matrix) @ rhs
+
+# ✅ A lineax solve, with the structure declared
+operator = lx.MatrixLinearOperator(matrix, lx.positive_semidefinite_tag)
+solution = lx.linear_solve(operator, rhs, solver=lx.Cholesky()).value
+```
+
+### Keep JAX out of the base install
+
+```python
+# ❌ In functax/geometry/__init__.py: every NumPy-only consumer now needs JAX
+from functax._src.geometry.grids import RegularGrid
+
+
+# ✅ Re-export the Equinox types lazily, so the package imports without JAX
+def __getattr__(name):
+    if name == "RegularGrid":
+        from functax._src.geometry.grids import RegularGrid
+
+        return RegularGrid
+    raise AttributeError(name)
 ```
 
 ---

@@ -11,7 +11,7 @@ Read "Documentation" in `AGENTS.md` first; `docs/README.md` explains the two-too
 
 - A guide to one part of the package: `docs/guide/<topic>.md`, listed under `Guide` in the `toc` of `docs/myst.yml`.
 - A project-level page (contributing, changelog, agents): `docs/<name>.md`, in the matching toc section.
-- An executable walkthrough is a notebook instead (`add-notebook`); an API page under `docs/api/` is MkDocs, not MyST (`add-function`).
+- An executable walkthrough is a notebook instead (`add-notebook`); an API page under `docs/api/` is MkDocs, not MyST (`add-scheme`).
 - The basename must be unique across `docs/`, `docs/guide/` and `docs/notebooks/`: the page is served at `/<basename>/` (`_` → `-`), and frontmatter `slug:` is ignored.
 
 ## 2. Write it in MyST
@@ -19,13 +19,13 @@ Read "Documentation" in `AGENTS.md` first; `docs/README.md` explains the two-too
 - Directives, not MkDocs-Material syntax: `:::{note}`, `:::{tip}`, `:::{dropdown} Title`, `::::{tab-set}` / `:::{tab-item}`, `::::{grid}` / `:::{grid-item-card}` (see `docs/index.md` and `docs/guide/*.md`).
 - Maths with `$…$` and `$$…$$` in the `eman-style-math` notation ("Maths notation" in `AGENTS.md`): the kind-named macros (`\vect{x}`, `\gmat{\Sigma}`) that `docs/myst.yml` loads, every symbol defined with its shape before its first use, each expression on one source line, no spacing macros (`\,`, `\quad`).
 - Prose in the maintainer's voice (`eman-prose-tech`, docs register), not hard-wrapped: one line per paragraph. Diagrams are Mermaid (a `{mermaid}` directive), never ASCII art.
-- Link the API with the `xref:` protocol and the **top-level** name: ``[`summarize`](xref:api#mypackage.summarize)``. Links to other prose pages are relative paths to their source files (`[CLI](guide/cli.md)`).
+- Link the API with the `xref:` protocol and the **top-level** name: ``[`FunctaxError`](xref:api#functax.FunctaxError)``. Links to other prose pages are relative paths to their source files (`[Quickstart](guide/quickstart.md)`).
 - Code blocks are illustrative (nothing executes them): run every snippet yourself and paste real output.
 
 ## 3. Wire it in
 
 - The `toc` entry in `docs/myst.yml`.
-- If an API page covers the same module, link the guide from it the way `docs/api/stats.md` does (`[statistics guide](../statistics/)`: the flat URL, written relative to the source file in `docs/api/`, because Zensical resolves links from the source file and adds one level for the page's directory URL, so it emits `../../statistics/` from `/reference/stats/`).
+- If an API page covers the same module, link the guide from it with its flat URL written relative to the source file in `docs/api/` (`[interpolation guide](../interpolation/)` from `docs/api/interp.md`), because Zensical resolves links from the source file and adds one level for the page's directory URL, so it emits `../../interpolation/` from `/reference/interp/`.
 
 ## 4. Verify
 

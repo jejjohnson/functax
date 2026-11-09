@@ -38,7 +38,7 @@ MkDocs plugins or hooks (unsupported ones are silently ignored), so check
 The theme re-renders the site nav from the config it embeds for hydration, and
 prepends `BASE_URL` to any nav URL starting with `/`. A nav entry that already
 carries the deployment prefix is therefore doubled —
-`/pypackage_template/pypackage_template/reference/` — and 404s.
+`/functax/functax/reference/` — and 404s.
 
 This bites only *after* hydration: the server-rendered HTML is correct, so
 `curl` and `verify_links` both see a healthy link. Keep `site.nav` URLs
@@ -76,8 +76,8 @@ In any MyST page, link to an API object with the `xref:` protocol and the
 name as exported from the top-level package:
 
 ```markdown
-[`summarize`](xref:api#mypackage.summarize)
-[`Pipeline`](xref:api#mypackage.Pipeline)
+[`summarize`](xref:api#functax.summarize)
+[`Pipeline`](xref:api#functax.Pipeline)
 ```
 
 A target that does not exist in the inventory fails `myst build --strict`, so
@@ -92,19 +92,19 @@ case-sensitive anchors:
 
 | Inventory entry | mystmd emits | Correct? |
 |---|---|---|
-| `mypackage.Summary` -> `stats/#mypackage.stats.Summary` | `#mypackage.stats.Summary` | yes |
-| `mypackage.stats.Summary` -> `stats/#$` | `#mypackage.stats.summary` | **no** |
+| `functax.Summary` -> `stats/#functax.stats.Summary` | `#functax.stats.Summary` | yes |
+| `functax.stats.Summary` -> `stats/#$` | `#functax.stats.summary` | **no** |
 
 The failure is silent: the link resolves, the page loads, and the browser
 simply cannot find the anchor.
 
-**In practice this does not bite**, because `mypackage/__init__.py` re-exports
+**In practice this does not bite**, because `functax/__init__.py` re-exports
 the whole public API and mkdocstrings gives every one of those top-level names
 an *explicit* anchor. So the natural way to write a link is also the safe one:
 
 ```markdown
-[`Summary`](xref:api#mypackage.Summary)          <!-- safe: explicit anchor -->
-[`Summary`](xref:api#mypackage.stats.Summary)    <!-- risky: uses `$`       -->
+[`Summary`](xref:api#functax.Summary)          <!-- safe: explicit anchor -->
+[`Summary`](xref:api#functax.stats.Summary)    <!-- risky: uses `$`       -->
 ```
 
 Prefer the top-level name. Two safety nets back that up in

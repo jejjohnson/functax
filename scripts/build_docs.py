@@ -48,7 +48,7 @@ PUBLIC = REPO / "public"
 API_SUBDIR = "reference"
 # Plain files served at the site root, next to the prose pages. mystmd publishes
 # only pages it renders, so these are copied in by `assemble`.
-ROOT_FILES = ("llms.txt",)
+ROOT_FILES: tuple[str, ...] = ()
 
 # Must match `references.api` in docs/myst.yml. mystmd only loads intersphinx
 # inventories over http(s), so the freshly built Zensical output is served here
@@ -346,7 +346,7 @@ def assemble(base_url: str) -> list[str]:
     """Combine both builds into ``public/`` and repair cross-references.
 
     Args:
-        base_url: Deployment path prefix, e.g. ``/pypackage_template``.
+        base_url: Deployment path prefix, e.g. ``/functax``.
 
     Returns:
         The list of link problems found in the assembled site.

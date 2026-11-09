@@ -36,3 +36,31 @@ jobs:
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+
+  # The NumPy-only base install (decision 17, functax#48): a fresh `pip install .`
+  # must not bring in JAX, and the modules of the base must import there.
+  base-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - name: Install the base distribution only
+        run: |
+          uv venv .venv-base
+          uv pip install --python .venv-base .
+      - name: JAX is absent and the base modules import
+        run: |
+          .venv-base/bin/python - <<'PY'
+          import importlib.util
+
+          extra = ("jax", "equinox", "lineax", "einx", "jaxtyping")
+          present = [name for name in extra if importlib.util.find_spec(name)]
+          assert not present, f"the base install pulled in {present}"
+
+          import functax
+          import functax.geometry
+
+          print("functax", functax.__version__, "imports without JAX")
+          PY

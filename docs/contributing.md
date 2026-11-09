@@ -6,14 +6,13 @@ This page documents the label taxonomy, epic model, and issue conventions used i
 
 ## Label Taxonomy
 
-Every issue carries exactly one `type:*`, one or more `area:*`, at most one `layer:*`, one `wave:*`, and one `priority:*`.
+Every issue carries exactly one `type:*`, one or more `area:*`, one `wave:*`, and one `priority:*`.
 
 | Scope | Labels |
 |---|---|
 | **Type** | `type:epic-wave`, `type:epic-theme`, `type:feature`, `type:design`, `type:chore`, `type:docs`, `type:bug`, `type:research` |
-| **Area** | `area:engineering`, `area:testing`, `area:docs`, `area:code` — extend per project (e.g. `area:algorithmic`, `area:integration`) |
-| **Layer** | `layer:0-primitives`, `layer:1-components`, `layer:2-models` — only if the project has a formal layer stack |
-| **Wave** | `wave:0`, `wave:1`, `wave:2`, … — release-scoped phases (add `wave:N-<slug>` variants for descriptive labels) |
+| **Area** | one per public module: `area:geometry`, `area:basis`, `area:diffops`, `area:interp`, `area:quad`, `area:transform`, `area:project`; and `area:engineering`, `area:testing`, `area:docs` |
+| **Wave** | `wave:0` … `wave:5`, one per wave epic (#8 to #13), each with a milestone of the same name |
 | **Priority** | `priority:p0` (blocker), `priority:p1` (high), `priority:p2` (normal) |
 
 Bootstrap the standard set on a fresh repo:
@@ -22,7 +21,7 @@ Bootstrap the standard set on a fresh repo:
 uv run poe gh-labels
 ```
 
-The script lives at `.github/scripts/create-labels.sh`. Edit the hard-coded `create …` entries in the script to customise `area:*`, `layer:*`, and `wave:*` for the project, then re-run — the script is idempotent.
+The script lives at `.github/scripts/create-labels.sh`. Edit the hard-coded `create …` entries in the script to change `area:*` or `wave:*`, then re-run — the script is idempotent.
 
 ---
 
@@ -83,10 +82,10 @@ For drafted content, write the body to a file (minus the template's YAML frontma
 
 ```bash
 gh issue create \
-  --title "feat(primitives): diagonal BLR update step" \
+  --title "feat(interp): Keys cubic convolution" \
   --body-file /tmp/issue-body.md \
-  --label "type:feature,area:algorithmic,layer:0-primitives,wave:1,priority:p1" \
-  --milestone "v0.1-diagonal"
+  --label "type:feature,area:interp,wave:2,priority:p1" \
+  --milestone "Wave 2: local interpolation"
 ```
 
 To open the UI in a browser with a template pre-selected:
@@ -105,7 +104,7 @@ The `create-gh-issue` skill (at `.claude/skills/create-gh-issue/SKILL.md`) guide
 
 - **Picking the right template** (decision tree covering feature / design / bug / research / epic-wave / epic-theme)
 - **Drafting the body** with required sections + rename guidance for optional sections (`Design Snapshot` → `Demo To Implement`, etc.)
-- **Applying the correct label set** (which `type:*` + `area:*` + `layer:*` + `wave:*` + `priority:*` combos are valid for each work type)
+- **Applying the correct label set** (which `type:*` + `area:*` + `wave:*` + `priority:*` combos are valid for each work type)
 - **Setting the milestone** (which `vX.Y-<slug>` corresponds to the wave)
 - **Applying relationships** (chains to `link-gh-issues` skill for native sub-issue + blocked-by links)
 - **Style conventions** — unicode math, `text` code fences, code-first-prose-last
@@ -122,7 +121,7 @@ Example prompts:
 
 ## Drafting a wave backlog
 
-For large planning exercises (new wave, new release, large refactor), draft the whole backlog as one markdown file **before** opening GitHub issues. A template lives at [`docs/templates/wave-backlog.md`](https://github.com/jejjohnson/pypackage_template/blob/main/docs/templates/wave-backlog.md).
+For large planning exercises (new wave, new release, large refactor), draft the whole backlog as one markdown file **before** opening GitHub issues. A template lives at [`docs/templates/wave-backlog.md`](https://github.com/jejjohnson/functax/blob/main/docs/templates/wave-backlog.md).
 
 Why:
 

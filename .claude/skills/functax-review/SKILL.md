@@ -1,0 +1,16 @@
+---
+name: functax-review
+description: Review a change or pull request in this repository against its own rules — CODE_REVIEW.md, the contracts in AGENTS.md, reuse of what the package already provides, and numerics (dtype preservation, guarded branches, inside masks, static shapes, adjoints, the NumPy-only base). Use when asked to review a diff, branch or PR in this repo.
+---
+
+# Review a change
+
+1. **Get the diff** as `CODE_REVIEW.md` describes, or from the PR. Note which modules, tests and docs it touches.
+2. **Reuse** — run the `reuse-reviewer` subagent on the diff: a re-written sampler, locate, adjoint, basis, rule or backend check is the main way a package drifts from itself.
+3. **Numerics** — run the `numerics-reviewer` subagent in parallel with step 2: dtype preservation, guarded `where` branches, explicit `inside` masks, static shapes under `jit`, the NumPy-only base, adjoints, oracle tolerances, error types and messages, doctest accuracy.
+4. **Contracts** — for each module touched, the rules under "The contracts" in `AGENTS.md`: `ValidationError` with `'name' must …` messages at the boundary, no mutated inputs, the input dtype preserved, traceable applies, the two installs (`require_jax` in every JAX module, nothing from the extra in the base), the dot-product test and the SciPy oracle for every linear read-out, exceptions deriving from `FunctaxError` and their stdlib base.
+5. **Checklist** — the rest of `CODE_REVIEW.md` (public API, API page and `docs/api/index.md` row, capability index, MyST prose, tests and tiers), skipping what ruff, ty or the tests already enforce.
+6. **House style** — the `python-style` review checklist if the skill is installed, otherwise "House style" in `AGENTS.md`: docstring layout with a Unicode equation, comments above the line with the equation above each mathematical line, descriptive names, maths in the `eman-style-math` notation, `cyclopts` and `loguru` in new CLIs and scripts.
+7. **Verify claims** — for anything you flag as a bug, run it (`uv run python -c "..."`) and report what it printed.
+
+Report in the format `CODE_REVIEW.md` gives (overview, suggestions with priority, file, lines and a concrete change, summary).

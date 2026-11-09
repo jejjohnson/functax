@@ -1,10 +1,8 @@
-# Protocols and type aliases
+# Type aliases
 
-Structural protocols and [PEP 695](https://peps.python.org/pep-0695/) type
-aliases. Because the protocols are
-structural, your own transforms satisfy them without inheriting from anything.
+[PEP 695](https://peps.python.org/pep-0695/) type aliases shared across the package. Array annotations use jaxtyping and live with the modules that need the `functax[jax]` extra.
 
-::: mypackage._typing
+::: functax._typing
     options:
       show_root_heading: true
       show_root_full_path: false

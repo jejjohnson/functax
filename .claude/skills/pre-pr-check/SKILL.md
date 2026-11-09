@@ -12,7 +12,7 @@ Run from the repo root and fix what fails before committing. Report results hone
 ```bash
 uv run --group lint ruff check .          # entire repo: tests/, scripts/, notebook cells
 uv run --group lint ruff format --check .
-uv run poe typecheck                            # ty on src/mypackage and scripts (what CI runs)
+uv run poe typecheck                            # ty on src/functax and scripts (what CI runs)
 uv run poe test-cov                             # every test + doctests, with the 90 % coverage gate (what CI runs)
 ```
 
@@ -25,11 +25,11 @@ uv run poe capabilities
 uv run pytest --no-cov tests/test_capabilities.py tests/test_public_api.py
 ```
 
-…plus the API page (`docs/api/<module>.md`, a `nav` entry in `mkdocs.yml` for a new module) and the row in `docs/api/index.md`. `__all__` stays sorted; a new module joins `SUBMODULES` in `tests/test_public_api.py`.
+…plus the API page (`docs/api/<module>.md`, a `nav` entry in `mkdocs.yml` for a new module) and the row in `docs/api/index.md`. `__all__` stays sorted; a new module joins `SUBMODULES` (a package, `SUBPACKAGES`) in `tests/test_public_api.py`.
 
 ## When dependencies changed
 
-`uv lock` and commit `uv.lock`. A runtime dependency needs discussion (`AGENTS.md`, "Boundaries"); an optional one sits behind an extra and an in-function import that names it.
+`uv lock` and commit `uv.lock`. A runtime dependency needs discussion (`AGENTS.md`, "Boundaries"): the base install is NumPy alone, and everything else goes in the `jax` extra. Reproduce the `base-install` job of `ci.yml` (a fresh venv, `uv pip install .`, then its Python check) whenever `dependencies`, the extra or a base module changes.
 
 ## When docs or docstrings changed
 
