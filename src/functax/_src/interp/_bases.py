@@ -97,7 +97,8 @@ class LinearBasis(Basis):
     """Linear: taps i and i + 1, with weights 1 − t and t.
 
     Linear interpolation is the posterior mean under a Brownian-motion prior
-    (its variance is #31). Gradients reach the target through t.
+    (``Linear(prior_variance_rate=σ²)`` adds its variance). Gradients reach
+    the target through t.
 
     Examples:
         >>> import jax.numpy as jnp
