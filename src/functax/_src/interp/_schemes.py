@@ -17,6 +17,7 @@ import abc
 from typing import Any
 
 import equinox as eqx
+from jaxtyping import Array, Float
 
 from functax._src.geometry._types import AffineGrid, RectilinearGrid
 from functax._src.interp._bases import (
@@ -28,6 +29,7 @@ from functax._src.interp._bases import (
 )
 from functax._src.interp._derivative import LocalGeometry
 from functax._src.interp._fit import Identity
+from functax._src.interp._interpolant import Interpolant, fit_interpolant
 from functax._src.interp._plan import Plan
 from functax._src.interp._policies import Policies
 from functax._src.interp._prefilter import prefilter_for
@@ -105,6 +107,34 @@ class LocalScheme(Scheme):
         grid_target = isinstance(target, RectilinearGrid | AffineGrid)
         target_shape = target.shape if grid_target else None
         return Plan(fit, stencil, policies, local, target_shape)
+
+    def fit(
+        self,
+        source: Any,
+        data: Float[Array, "*batch source"],
+        *,
+        policies: Policies | None = None,
+    ) -> Interpolant:
+        """c = 𝒮(y) on ``source``, as an `Interpolant` read at targets chosen later.
+
+        The interpolant equals ``self.plan(source, targets)(data)`` at any
+        targets, and is read inside ``jit``, ``vmap`` and ``lax.scan`` without
+        a rebuild.
+
+        Args:
+            source: An `Axis`, a `RectilinearGrid` or an `AffineGrid`.
+            data: y, with the flat source last and any leading batch dims.
+            policies: The outside, missing and boundary rules.
+
+        Returns:
+            The `Interpolant`.
+
+        Raises:
+            ValidationError: If the last axis of ``data`` is not the source size.
+            PolicyError: Under ``missing="renormalise"`` with a prefilter.
+        """
+        policies = Policies() if policies is None else policies
+        return fit_interpolant(self, source, data, policies)
 
 
 class Nearest(LocalScheme):

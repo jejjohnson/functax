@@ -21,6 +21,7 @@ from functax._src.interp._bases import (
 from functax._src.interp._compose import compose
 from functax._src.interp._derivative import LocalGeometry
 from functax._src.interp._fit import Fit, Identity
+from functax._src.interp._interpolant import Interpolant
 from functax._src.interp._locate import (
     check_outside,
     index_positions,
@@ -54,6 +55,7 @@ __all__ = [
     "DerivativePlan",
     "Fit",
     "Identity",
+    "Interpolant",
     "Linear",
     "LinearBasis",
     "LocalGeometry",

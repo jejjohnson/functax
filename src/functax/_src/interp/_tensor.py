@@ -206,7 +206,10 @@ def stencil_from_positions(
     check_outside(inside_all, policies)
     zero = jnp.zeros((), weights.dtype)
     weights = einx.where("target, target tap, -> target tap", row_ok, weights, zero)
-    return Stencil(indices, weights, n_source=math.prod(shape), valid=row_ok)
+    # every index went through remap_taps, so it is in range already
+    return Stencil(
+        indices, weights, n_source=math.prod(shape), valid=row_ok, check=False
+    )
 
 
 def tensor_stencil(

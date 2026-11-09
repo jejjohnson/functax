@@ -80,6 +80,10 @@ class Stencil(Readout):
         weights: wₖₛ, the weight of each tap, the same shape as ``indices``.
         n_source: N, the length of the flat source.
         valid: Whether each row is a real read-out; all true when ``None``.
+        check: Whether to check that every index is in range. functax's own
+            builders pass ``False``, since their indices are in range by
+            construction and the check would compile to a host callback under
+            ``jit``.
 
     Raises:
         ValidationError: If the shapes disagree, ``indices`` is not integer or
@@ -113,6 +117,7 @@ class Stencil(Readout):
         *,
         n_source: int,
         valid: ArrayLike | None = None,
+        check: bool = True,
     ) -> None:
         indices = jnp.asarray(indices)
         weights = jnp.asarray(weights)
@@ -145,10 +150,11 @@ class Stencil(Readout):
                 f"{valid.dtype} {valid.shape}"
             )
             raise ValidationError(msg)
-        out_of_range = jnp.any((indices < 0) | (indices >= n_source))
-        indices = check_values(
-            indices, out_of_range, f"'indices' must lie in [0, {int(n_source)})"
-        )
+        if check:
+            out_of_range = jnp.any((indices < 0) | (indices >= n_source))
+            indices = check_values(
+                indices, out_of_range, f"'indices' must lie in [0, {int(n_source)})"
+            )
         self.indices = indices
         self.weights = weights
         self.valid = valid

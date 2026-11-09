@@ -71,3 +71,35 @@ plan = Tensor((Nearest(), Linear(), Linear())).plan(
 )
 plan.read.n_taps  # 4: one frame, then 2 × 2 in space
 ```
+
+## Moving targets: Interpolant vs Plan
+
+A plan freezes its targets when it is built, which suits fixed observations: pay the locate and the weights once, then apply the plan to every field and send residuals back with its adjoint. Particles that move at every step need the opposite, a fitted field read at targets chosen inside the trace. `scheme.fit(source, data)` returns an `Interpolant`: it keeps the coefficients (the prefiltered ones for a B-spline) and locates, weighs and gathers at every call, so it runs inside `jit`, `vmap`, `grad` and `lax.scan` without a rebuild.
+
+```python
+import einx
+import jax
+from functax.geometry import Axis, RectilinearGrid
+from functax.interp import BSpline, Policies
+
+grid = RectilinearGrid(
+    (Axis(jnp.linspace(0.0, 10.0, 21)), Axis(jnp.linspace(0.0, 10.0, 21)))
+)
+# a steady wind (u, v) on the grid, flattened row-major
+u = jnp.ones(441)
+v = 0.5 * jnp.ones(441)
+wind = BSpline(3).fit(grid, jnp.stack([u, v]), policies=Policies(outside="clamp"))
+
+
+def step(positions, _):
+    # (2, M): the two wind components at the particles
+    velocity = wind(positions)
+    return positions + 0.01 * einx.id("c m -> m c", velocity), None
+
+
+particles = jnp.array([[2.0, 3.0], [4.5, 1.25]])
+final, _ = jax.lax.scan(step, particles, None, length=100)
+final.tolist()  # [[3.0, 3.5], [5.5, 1.75]]
+```
+
+At any targets the interpolant equals `scheme.plan(source, targets)(data)`, since both build the stencil the same way, and `wind.plan(targets)` returns that plan when you want to freeze the current positions, for example to keep the adjoint. `wind.derivative(axis=0)` reads $\partial \hat{f} / \partial x_0$ the same way.
