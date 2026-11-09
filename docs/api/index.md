@@ -16,7 +16,7 @@ The [capability index](capabilities.md) lists every public name on one page, wit
 | Module | Contents |
 |---|---|
 | [Geometry](geometry.md) | CRS-free axes, grids, point sets, the sphere and affine raster maths (Wave 0) |
-| [Interpolation](interp.md) | `Readout`, `Stencil` (Wave 2) |
+| [Interpolation](interp.md) | `Stencil`, `locate`, `Policies`, `Nearest`, `Linear`, `Tensor`, `Plan` (Wave 2) |
 | [Type aliases](typing.md) | `Shape` |
 | [Exceptions](exceptions.md) | `FunctaxError`, `ValidationError`, `MissingExtraError` |
 

@@ -26,6 +26,12 @@ $$
 | vardax `InterpObs`: clamp without flagging | `Policies(outside="clamp")` |
 | the hand-written "raise if outside" checks | `Policies(outside="raise")` |
 
+## Schemes and plans
+
+A scheme is configuration only; `scheme.plan(source, target, policies=…)` freezes it for one source and one target geometry into a `Plan`. Sources are an `Axis`, a `RectilinearGrid` or an `AffineGrid` (whose targets are map coordinates, read through `to_pixel`), with data flattened row-major; targets are `Points` or a grid read at its nodes. `Nearest` reads one tap per axis (a tie goes to the lower node, as in SciPy's `RegularGridInterpolator`), `Linear` two, and `Tensor` takes one scheme per axis, so $S = \prod_d S_d$ taps per target at flat index $\sum_d j_d \prod_{d' > d} n_{d'}$.
+
+A plan applies $\hat{\vect{f}} = \mat{H} \mathcal{S}(\vect{y})$ over any leading batch dims and writes `fill_value` at invalid rows; `adjoint` applies $\mathcal{S}^\top \mat{H}^\top$, ignoring residuals at invalid rows; `operator()` is the same linear map as a lineax operator, with zero rows where the plan is invalid. The [interpolation guide](../interpolation/) walks through reading a grid at points and sending residuals back.
+
 ## Reference
 
 ::: functax.interp
