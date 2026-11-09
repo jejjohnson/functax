@@ -39,7 +39,7 @@ Skip anything ruff, ty or the tests already enforce (formatting, import order, `
 - Every function, class or module the diff **adds** has been checked against [`docs/api/capabilities.md`](docs/api/capabilities.md) and the private helpers in "Reuse before you write" in `AGENTS.md`. A re-implemented sampler, locate, basis, quadrature rule, adjoint or backend check is a **High** finding, with the existing name to use.
 - No new runtime dependency without discussion; an optional one sits behind an extra and an in-function import that names the extra. `uv.lock` is updated with any dependency change.
 - Imports keep pointing one way (the module table in `AGENTS.md`). functax is Core tier 0: an import of pipekit, kernellib, gaussx, finitevolX, geoarray, interpax, orthax or any other stack library is a **Critical** finding.
-- The NumPy-only base (`functax`, `functax.geometry`, `functax.geometry.affine`, `functax._src._backend`) imports nothing from the `jax` extra at module level; every other module calls `require_jax(__name__)` before its first JAX import.
+- The NumPy-only base (`functax`, `functax.geometry`, `functax.geometry.affine`, `functax._src._backend`, `functax._src.geometry._affine`, `functax._src.geometry._transform`) imports nothing from the `jax` extra at module level; every other module calls `require_jax(__name__)` before its first JAX import.
 - A rename or removal of a public name keeps the old name working with a `DeprecationWarning` for at least one release.
 
 ### 2. The contracts

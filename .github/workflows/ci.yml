@@ -59,8 +59,15 @@ jobs:
           present = [name for name in extra if importlib.util.find_spec(name)]
           assert not present, f"the base install pulled in {present}"
 
+          import numpy as np
+
           import functax
           import functax.geometry
+          import functax.geometry.affine
 
-          print("functax", functax.__version__, "imports without JAX")
+          north_up = np.array([1.0, 0.0, 0.0, 0.0, -1.0, 0.0])
+          rowcol = functax.geometry.to_pixel(north_up, np.zeros((1, 2)))
+          assert rowcol.tolist() == [[-0.5, -0.5]], rowcol
+
+          print("functax", functax.__version__, "imports and runs without JAX")
           PY

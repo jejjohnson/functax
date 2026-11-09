@@ -11,6 +11,16 @@ from functax import MissingExtraError
 from functax._src._backend import JAX_EXTRA, require_jax
 
 
+# The modules of the NumPy-only base install (decision 17).
+BASE_MODULES = [
+    "functax",
+    "functax.geometry",
+    "functax.geometry.affine",
+    "functax._src.geometry._affine",
+    "functax._src.geometry._transform",
+]
+
+
 def _run(code: str) -> subprocess.CompletedProcess[str]:
     """Run ``code`` in a fresh interpreter, so no module is imported yet."""
     return subprocess.run(
@@ -34,7 +44,7 @@ def test_require_jax_names_the_extra_when_a_distribution_is_missing(
     assert repr(name) in str(excinfo.value)
 
 
-@pytest.mark.parametrize("module", ["functax", "functax.geometry"])
+@pytest.mark.parametrize("module", BASE_MODULES)
 def test_base_modules_never_import_jax(module: str) -> None:
     result = _run(
         f"import sys, {module}; "
@@ -45,7 +55,7 @@ def test_base_modules_never_import_jax(module: str) -> None:
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("module", ["functax", "functax.geometry"])
+@pytest.mark.parametrize("module", BASE_MODULES)
 def test_base_modules_import_with_jax_blocked(module: str) -> None:
     result = _run(f"import sys; sys.modules['jax'] = None; import {module}")
     assert result.returncode == 0, result.stderr
@@ -63,3 +73,15 @@ def test_geometry_types_name_the_extra_when_jax_is_blocked() -> None:
         "    raise AssertionError('Axis imported without JAX')\n"
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_array_checks_never_import_jax(monkeypatch: pytest.MonkeyPatch) -> None:
+    from functax._src._backend import is_jax_array, is_tracer, namespace
+
+    # With jax absent from sys.modules no JAX array can exist, so the checks
+    # answer False without importing it.
+    monkeypatch.delitem(sys.modules, "jax")
+    assert not is_jax_array(object())
+    assert not is_tracer(object())
+    assert namespace([1.0, 2.0]).__name__ == "numpy"
+    assert "jax" not in sys.modules

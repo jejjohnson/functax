@@ -86,9 +86,9 @@ Everything composes because it keeps these contracts; the tests in "What enforce
 
 ### 2. The two installs
 
-- A module in the NumPy-only base (`functax`, `functax.geometry`, `functax.geometry.affine`, `functax._src._backend`) imports nothing from the `jax` extra at module level. A JAX type it needs to re-export is reached lazily, through a module `__getattr__`.
+- A module in the NumPy-only base (`functax`, `functax.geometry`, `functax.geometry.affine`, `functax._src._backend`, `functax._src.geometry._affine`, `functax._src.geometry._transform`) imports nothing from the `jax` extra at module level. A JAX type it needs to re-export is reached lazily, through a module `__getattr__`.
 - Every other module calls `require_jax(__name__)` before its first JAX import.
-- A module that joins the base adds itself to the parametrised lists in `tests/test_backend.py` and to the import in the `base-install` job of `ci.yml`.
+- A module that joins the base adds itself to `BASE_MODULES` in `tests/test_backend.py` and to the imports in the `base-install` job of `ci.yml`.
 
 ### 3. Linear read-outs (from Wave 2)
 
