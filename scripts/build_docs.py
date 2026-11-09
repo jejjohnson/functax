@@ -346,7 +346,7 @@ def assemble(base_url: str) -> list[str]:
     """Combine both builds into ``public/`` and repair cross-references.
 
     Args:
-        base_url: Deployment path prefix, e.g. ``/pypackage_template``.
+        base_url: Deployment path prefix, e.g. ``/functax``.
 
     Returns:
         The list of link problems found in the assembled site.

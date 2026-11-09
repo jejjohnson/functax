@@ -1,4 +1,4 @@
-"""Tests for ``mypackage.smoothing``."""
+"""Tests for ``functax.smoothing``."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from mypackage import (
+from functax import (
     EmptySeriesError,
     Padding,
     ValidationError,
@@ -15,7 +15,7 @@ from mypackage import (
     moving_average,
     summarize,
 )
-from mypackage.smoothing import _reflect_index
+from functax.smoothing import _reflect_index
 
 
 SMOOTHERS = [

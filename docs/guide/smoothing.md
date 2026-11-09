@@ -4,9 +4,9 @@ Three filters, one decision: **what do you want to preserve?**
 
 | Filter | Kind | Support | Preserves | Destroys |
 |---|---|---|---|---|
-| [`moving_average`](xref:api#mypackage.moving_average) | linear | finite, symmetric | slow trends | edges, spikes |
-| [`exponential_moving_average`](xref:api#mypackage.exponential_moving_average) | linear | infinite, causal | streaming latency | phase |
-| [`median_filter`](xref:api#mypackage.median_filter) | non-linear | finite, symmetric | **edges** | fine texture |
+| [`moving_average`](xref:api#functax.moving_average) | linear | finite, symmetric | slow trends | edges, spikes |
+| [`exponential_moving_average`](xref:api#functax.exponential_moving_average) | linear | infinite, causal | streaming latency | phase |
+| [`median_filter`](xref:api#functax.median_filter) | non-linear | finite, symmetric | **edges** | fine texture |
 
 ## Moving average
 
@@ -21,7 +21,7 @@ right default: cheap, unbiased on a locally linear trend, and easy to reason
 about.
 
 ```python
-import mypackage as mp
+import functax as mp
 
 mp.moving_average([1.0, 2.0, 3.0, 4.0, 5.0], window=3)
 # [1.333..., 2.0, 3.0, 4.0, 4.666...]
@@ -91,7 +91,7 @@ scaling and addition, and it erases genuine fine texture along with the noise.
 ## Boundary handling
 
 Any finite-support filter needs values past the ends of the series.
-[`Padding`](xref:api#mypackage.Padding) makes that choice explicit instead of hiding it.
+[`Padding`](xref:api#functax.Padding) makes that choice explicit instead of hiding it.
 
 | Strategy | Extension | Output length | Use when |
 |---|---|---|---|
@@ -101,7 +101,7 @@ Any finite-support filter needs values past the ends of the series.
 | `Padding.NONE` | no extension | `len(series) - window + 1` | you'd rather have fewer, honest samples |
 
 ```python
-from mypackage import Padding
+from functax import Padding
 
 mp.moving_average([0.0, 0.0, 9.0], window=3, padding=Padding.ZERO)
 # [0.0, 3.0, 3.0]
@@ -145,4 +145,4 @@ walks through this with plots and a quantitative error sweep.
 
 ## API
 
-Full signatures live in the [smoothing API reference](xref:api#mypackage.smoothing).
+Full signatures live in the [smoothing API reference](xref:api#functax.smoothing).

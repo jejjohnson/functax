@@ -1,4 +1,4 @@
-"""Tests for ``mypackage.transforms``."""
+"""Tests for ``functax.transforms``."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from mypackage import (
+from functax import (
     Clip,
     EmptySeriesError,
     Fittable,
@@ -128,7 +128,7 @@ class TestClip:
 
 class TestMovingAverageTransform:
     def test_matches_the_function(self, simple_series: list[float]) -> None:
-        from mypackage import moving_average
+        from functax import moving_average
 
         assert MovingAverage(window=3).apply(simple_series) == moving_average(
             simple_series, 3

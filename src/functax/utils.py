@@ -2,14 +2,14 @@
 
 Three things live here:
 
-- **Validators** ([`as_floats`][mypackage.as_floats],
-  [`require_non_empty`][mypackage.require_non_empty],
-  [`require_positive`][mypackage.require_positive]) that coerce and check
+- **Validators** ([`as_floats`][functax.as_floats],
+  [`require_non_empty`][functax.require_non_empty],
+  [`require_positive`][functax.require_positive]) that coerce and check
   inputs once, at the public API boundary, and raise
-  [`ValidationError`][mypackage.ValidationError] with a uniform message.
-- [`Window`][mypackage.Window], a generic fixed-capacity sliding window used
-  by the streaming filters in [`mypackage.smoothing`][].
-- [`timer`][mypackage.timer], a context manager for wall-clock measurements
+  [`ValidationError`][functax.ValidationError] with a uniform message.
+- [`Window`][functax.Window], a generic fixed-capacity sliding window used
+  by the streaming filters in [`functax.smoothing`][].
+- [`timer`][functax.timer], a context manager for wall-clock measurements
   in examples and benchmarks.
 """
 
@@ -21,8 +21,8 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from mypackage._typing import Series
-from mypackage.exceptions import EmptySeriesError, ValidationError
+from functax._typing import Series
+from functax.exceptions import EmptySeriesError, ValidationError
 
 
 __all__ = [
@@ -39,7 +39,7 @@ def as_floats(series: Series | Sequence[str], *, name: str = "series") -> list[f
     """Coerce a sequence of numbers to a fresh `list[float]`.
 
     Strings that parse as numbers are accepted too, which is what lets
-    [`mypackage.cli`][] hand raw tokens straight to this function instead of
+    [`functax.cli`][] hand raw tokens straight to this function instead of
     duplicating the validation logic.
 
     Args:
@@ -208,7 +208,7 @@ class Window[T]:
 
 @dataclass(slots=True)
 class Elapsed:
-    """Wall-clock duration recorded by [`timer`][mypackage.timer].
+    """Wall-clock duration recorded by [`timer`][functax.timer].
 
     Attributes:
         seconds: Elapsed wall-clock time. Zero until the ``with`` block exits.
@@ -226,7 +226,7 @@ class Elapsed:
 def timer() -> Iterator[Elapsed]:
     """Measure the wall-clock time spent inside a ``with`` block.
 
-    The yielded [`Elapsed`][mypackage.Elapsed] is populated when the block
+    The yielded [`Elapsed`][functax.Elapsed] is populated when the block
     exits — including when it exits via an exception.
 
     Yields:

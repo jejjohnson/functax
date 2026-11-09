@@ -50,14 +50,14 @@ Skip anything ruff, ty or the tests already enforce (formatting, import order, `
 - **Public functions** validate once, at the boundary, with `as_floats` / `require_non_empty` / `require_positive`; raise `ValidationError` / `EmptySeriesError` whose message names the argument; return a **new** list and never mutate the input; use `math.fsum` for sums; turn degenerate input into an error, not a `nan`.
 - **Transforms** satisfy `Transform` structurally (no base class); stateless ones are frozen dataclasses whose `fit` returns `self`; fitted ones keep learned state in `init=False` trailing-underscore fields, return `self` from `fit`, and raise `NotFittedError` from `apply` before `fit`; every transform has `fit_apply`; constructor arguments are validated in `__post_init__`; the transform joins `TestProtocols` in `tests/test_transforms.py`.
 - **CLI** subcommands are a subparser plus a `_run_<name>` handler in `main`'s `handlers`; they write only to the injected `out`, read through `_read_values`, validate options with an `argparse` `type=`, and never `print` or `sys.exit`.
-- **Exceptions** derive from `MypackageError` and the closest stdlib exception; errors are chained (`raise … from err`).
+- **Exceptions** derive from `FunctaxError` and the closest stdlib exception; errors are chained (`raise … from err`).
 
 ### 3. Public API and documentation
 
 - New names: in the module's `__all__` and the top-level `__all__`; a new module in `SUBMODULES` (`tests/test_public_api.py`), with its `docs/api/<module>.md` page, a `nav` entry in `mkdocs.yml` and a row in `docs/api/index.md`; `docs/api/capabilities.md` regenerated (`uv run poe capabilities`).
 - Docstrings in the `python-style` layout: summary, the defining equation in Unicode (`eman-style-math`; `$…$` in a docstring is a finding), `Algorithm:` for a method, `Args:` with meaning and symbol, `Returns:` and `Raises:` matching the code, and two or three executable `Examples:` (typical, edge, composition) whose output is what the code prints (rounded values, not 17-digit floats).
 - Maths in MyST and MkDocs pages uses the `eman-style-math` macros, defines every symbol with its shape, keeps each expression on one line and has no spacing macros (`\,`, `\quad`, …).
-- Prose pages: MyST directives, not MkDocs-Material syntax; API links by the top-level name (`xref:api#mypackage.<Name>`); a new page or notebook in the `docs/myst.yml` toc with a basename unique across `docs/`.
+- Prose pages: MyST directives, not MkDocs-Material syntax; API links by the top-level name (`xref:api#functax.<Name>`); a new page or notebook in the `docs/myst.yml` toc with a basename unique across `docs/`.
 - Notebooks committed executed, with no error outputs, and every number quoted in the prose matching the printed output.
 
 ### 4. Tests
@@ -97,7 +97,7 @@ def rolling_max(series, window):
 
 
 # ✅ The package's validators, and the package's error messages
-from mypackage import Series, require_non_empty, require_positive
+from functax import Series, require_non_empty, require_positive
 
 
 def rolling_max(series: Series, window: int) -> list[float]:
@@ -116,7 +116,7 @@ def upper_quartile(series: list[float]) -> float:
 
 
 # ✅ Work on a fresh, validated copy, or reuse the existing statistic
-from mypackage import Series, quantile
+from functax import Series, quantile
 
 
 def upper_quartile(series: Series) -> float:
@@ -129,7 +129,7 @@ def upper_quartile(series: Series) -> float:
 from dataclasses import dataclass, field
 from typing import Self
 
-from mypackage import NotFittedError, Series, as_floats, require_non_empty
+from functax import NotFittedError, Series, as_floats, require_non_empty
 
 
 # ❌ Unfitted, `apply` silently behaves as the identity
@@ -164,7 +164,7 @@ class Center:
 ### Typed, chained errors that name the argument
 
 ```python
-from mypackage import ValidationError
+from functax import ValidationError
 
 
 # ❌ A bare except catches everything (KeyboardInterrupt included), and the
@@ -200,7 +200,7 @@ def parse_alpha(text: str) -> float:
 # ✅ Round in the example, and paste what it prints
 #     >>> [round(z, 4) for z in zscores([1.0, 2.0, 4.0])]
 #     [-0.8729, -0.2182, 1.0911]
-from mypackage import zscores
+from functax import zscores
 
 assert [round(z, 4) for z in zscores([1.0, 2.0, 4.0])] == [-0.8729, -0.2182, 1.0911]
 ```

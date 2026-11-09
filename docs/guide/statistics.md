@@ -4,7 +4,7 @@ Two complementary APIs cover the same ground:
 
 | | Batch | Streaming |
 |---|---|---|
-| Entry point | [`summarize`](xref:api#mypackage.summarize) | [`RunningStats`](xref:api#mypackage.RunningStats) |
+| Entry point | [`summarize`](xref:api#functax.summarize) | [`RunningStats`](xref:api#functax.RunningStats) |
 | Input | the whole series | one value at a time |
 | Memory | $O(N)$ | $O(1)$ |
 | Gives you | mean, variance, extrema, **median** | mean, variance, extrema |
@@ -35,14 +35,14 @@ pandas, because "I have a sample" is the more common situation.
 
 ## Quantiles
 
-[`quantile`](xref:api#mypackage.quantile) uses linear interpolation between order
+[`quantile`](xref:api#functax.quantile) uses linear interpolation between order
 statistics — the same as NumPy's default `method="linear"`. With
 $h = q (N-1)$ and $j = \lfloor h \rfloor$:
 
 $$Q(q) = x_{(j+1)} + (h - j) (x_{(j+2)} - x_{(j+1)})$$
 
 ```python
-import mypackage as mp
+import functax as mp
 
 data = [1.0, 2.0, 3.0, 4.0]
 mp.quantile(data, 0.0)    # 1.0
@@ -56,8 +56,8 @@ list is never touched.
 
 ## Standardising
 
-[`zscores`](xref:api#mypackage.zscores) is the functional form; the stateful
-[`Standardize`](xref:api#mypackage.Standardize) transform is the one you want when the
+[`zscores`](xref:api#functax.zscores) is the functional form; the stateful
+[`Standardize`](xref:api#functax.Standardize) transform is the one you want when the
 statistics must be *learned once and reused* — see
 [Transforms](transforms.md#leakage).
 
@@ -68,13 +68,13 @@ mp.zscores([1.0, 2.0, 3.0])    # [-1.0, 0.0, 1.0]
 :::{warning} Constant series
 A constant series has $s = 0$, so standardising it is undefined. Both
 `zscores` and `Standardize.fit` raise
-[`ValidationError`](xref:api#mypackage.ValidationError) rather than silently
+[`ValidationError`](xref:api#functax.ValidationError) rather than silently
 returning zeros or `nan`.
 :::
 
 ## Streaming with Welford's algorithm
 
-[`RunningStats`](xref:api#mypackage.RunningStats) folds each observation into a running
+[`RunningStats`](xref:api#functax.RunningStats) folds each observation into a running
 mean and a running sum of squared deviations:
 
 $$\bar{x}_n = \bar{x}_{n-1} + \frac{x_n - \bar{x}_{n-1}}{n},
@@ -128,10 +128,10 @@ and is always correct.
 
 ## API
 
-- [`summarize`](xref:api#mypackage.summarize)
-- [`Summary`](xref:api#mypackage.Summary)
-- [`quantile`](xref:api#mypackage.quantile)
-- [`zscores`](xref:api#mypackage.zscores)
-- [`RunningStats`](xref:api#mypackage.RunningStats)
+- [`summarize`](xref:api#functax.summarize)
+- [`Summary`](xref:api#functax.Summary)
+- [`quantile`](xref:api#functax.quantile)
+- [`zscores`](xref:api#functax.zscores)
+- [`RunningStats`](xref:api#functax.RunningStats)
 
-Full signatures live in the [statistics API reference](xref:api#mypackage.stats).
+Full signatures live in the [statistics API reference](xref:api#functax.stats).

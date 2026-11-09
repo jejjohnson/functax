@@ -7,18 +7,18 @@ executable version with plots, jump to the
 ## Install
 
 ```bash
-uv add mypackage      # or: pip install mypackage
+uv add functax      # or: pip install functax
 ```
 
 There are no runtime dependencies, so this pulls in nothing else.
 
 ## Describe a series
 
-[`summarize`](xref:api#mypackage.summarize) returns a frozen
-[`Summary`](xref:api#mypackage.Summary) — immutable, hashable, comparable.
+[`summarize`](xref:api#functax.summarize) returns a frozen
+[`Summary`](xref:api#functax.Summary) — immutable, hashable, comparable.
 
 ```python
-import mypackage as mp
+import functax as mp
 
 series = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]
 summary = mp.summarize(series)
@@ -47,7 +47,7 @@ $10^9$ returns a *negative* variance. See
 
 ## Stream it instead
 
-When the data doesn't fit in memory, [`RunningStats`](xref:api#mypackage.RunningStats)
+When the data doesn't fit in memory, [`RunningStats`](xref:api#functax.RunningStats)
 consumes it one value at a time in constant space:
 
 ```python
@@ -77,7 +77,7 @@ mp.median_filter(spike, 3)    # [1.0,   1.0,   1.0,   1.0, 1.0] — removed
 
 ## Compose transforms
 
-[`Pipeline`](xref:api#mypackage.Pipeline) fits each step on the output of the previous
+[`Pipeline`](xref:api#functax.Pipeline) fits each step on the output of the previous
 one, then applies them in order:
 
 ```python
@@ -100,7 +100,7 @@ len(pipeline), len(extended)   # (3, 4)
 
 ## Handle failures
 
-Every error derives from [`MypackageError`](xref:api#mypackage.MypackageError):
+Every error derives from [`FunctaxError`](xref:api#functax.FunctaxError):
 
 ```python
 try:
@@ -122,4 +122,4 @@ isinstance(mp.NotFittedError(), RuntimeError)   # True
 - [Statistics](statistics.md) — the estimators and their numerics
 - [Smoothing](smoothing.md) — filter maths and boundary handling
 - [Transforms](transforms.md) — writing your own transform
-- [CLI](cli.md) — the `mypackage` console script
+- [CLI](cli.md) — the `functax` console script

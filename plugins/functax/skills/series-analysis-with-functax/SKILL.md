@@ -1,23 +1,23 @@
 ---
-name: series-analysis-with-mypackage
-description: Analyse one-dimensional numeric series with mypackage — descriptive statistics (summarize, quantile, z-scores) and streaming accumulators, moving-average, median and exponential smoothing with explicit boundary padding, and fit / apply transforms (standardise, min-max scale, clip, smooth) composed into pipelines, plus its command-line interface. Use whenever a task summarises, smooths, rescales or cleans a numeric series in a project that uses (or could use) mypackage.
+name: series-analysis-with-functax
+description: Analyse one-dimensional numeric series with functax — descriptive statistics (summarize, quantile, z-scores) and streaming accumulators, moving-average, median and exponential smoothing with explicit boundary padding, and fit / apply transforms (standardise, min-max scale, clip, smooth) composed into pipelines, plus its command-line interface. Use whenever a task summarises, smooths, rescales or cleans a numeric series in a project that uses (or could use) functax.
 ---
 
 <!-- template-example: this whole plugin describes the bundled example package; on adoption, rewrite it for your package (rename the skill to <verb>-with-<yourpackage>, keep the structure: find it, what lives where, the rules, a worked example that runs, a "don't write it" table, a self-check). -->
 
-# Series analysis on mypackage
+# Series analysis on functax
 
-mypackage turns the usual loops over a list of numbers — a mean and variance, a rolling median, a z-score scaler fitted on one split and applied to another — into small, validated, pure functions and composable transforms, with no runtime dependencies. Before writing a statistic, a smoothing loop, a validator or a scaler, look it up:
+functax turns the usual loops over a list of numbers — a mean and variance, a rolling median, a z-score scaler fitted on one split and applied to another — into small, validated, pure functions and composable transforms, with no runtime dependencies. Before writing a statistic, a smoothing loop, a validator or a scaler, look it up:
 
 1. **The capability index** lists every public name with a one-line summary:
-   <https://jejjohnson.github.io/pypackage_template/reference/capabilities/>.
+   <https://jejjohnson.github.io/functax/reference/capabilities/>.
    Or list the installed version:
 
    ```python
    import importlib
    import inspect
 
-   for name in ("mypackage", "mypackage.cli"):
+   for name in ("functax", "functax.cli"):
        module = importlib.import_module(name)
        for attr in getattr(module, "__all__", []):
            if attr.startswith("_"):
@@ -26,7 +26,7 @@ mypackage turns the usual loops over a list of numbers — a mean and variance, 
            print(f"{name}.{attr}: {doc}")
    ```
 
-2. Compose what exists. Install it from GitHub: `uv add "mypackage @ git+https://github.com/jejjohnson/pypackage_template.git"`.
+2. Compose what exists. Install it from GitHub: `uv add "functax @ git+https://github.com/jejjohnson/functax.git"`.
 
 ## What lives where
 
@@ -42,14 +42,14 @@ mypackage turns the usual loops over a list of numbers — a mean and variance, 
 | Several steps in order, fitted step by step | `mp.chain(a, b, ...)` or `mp.Pipeline([...])`; append a step with the pipe operator |
 | Validate input in your own code | `mp.as_floats`, `mp.require_non_empty`, `mp.require_positive` |
 | A fixed-size sliding buffer, a wall-clock timer | `mp.Window`, `mp.timer` |
-| The same from the shell | `mypackage summarize data.txt --json`, `mypackage smooth data.txt --method median --window 5` |
+| The same from the shell | `functax summarize data.txt --json`, `functax smooth data.txt --method median --window 5` |
 
 ## The rules your code must keep
 
 - **Inputs are never mutated.** No function or method changes the series it is given, and any sequence of numbers (`list`, `tuple`, `range`) is accepted. The series-to-series functions and every `apply` return a new list; `summarize` returns a `Summary`, `quantile` a float, and `fit` the transform itself.
 - **Fit, then apply.** `Standardize` and `MinMaxScale` learn from `fit` and raise `mp.NotFittedError` if applied before it; `fit` returns the transform, so `scaler = mp.Standardize().fit(train)` keeps it fitted. Fit on training data only, and reuse the fitted object on new data.
 - **Transforms are structural.** Anything with an `apply(series) -> list[float]` method is a `mp.Transform` and composes in a pipeline: no base class to inherit.
-- **Errors are typed.** Bad input raises `mp.ValidationError` (a `ValueError`), empty input `mp.EmptySeriesError`; catch `mp.MypackageError` for all of them.
+- **Errors are typed.** Bad input raises `mp.ValidationError` (a `ValueError`), empty input `mp.EmptySeriesError`; catch `mp.FunctaxError` for all of them.
 - **Degenerate data is an error, not a `nan`**: a constant series cannot be standardised, `ddof` must be smaller than the count, `window` no longer than the series.
 
 ## Worked example
@@ -57,7 +57,7 @@ mypackage turns the usual loops over a list of numbers — a mean and variance, 
 ```python
 from dataclasses import dataclass
 
-import mypackage as mp
+import functax as mp
 
 
 # Hourly temperatures (°C) with one sensor glitch at index 10
@@ -102,7 +102,7 @@ except mp.NotFittedError as err:
 
 The glitch drags the raw mean to 25.27 °C and the standard deviation to 16.4, while the median stays at 21.7. The median filter removes it outright (the cleaned maximum is 22.9, the standard deviation 0.90), where the moving average smears it over three samples near 46. The last six hours sit 1.8 to 2.5 training standard deviations above the training mean, so the ±3 clip leaves them alone, and `RunningStats` agrees with `summarize` on the cleaned series.
 
-## Don't write it — use mypackage
+## Don't write it — use functax
 
 | Don't write… | Use |
 |---|---|
@@ -116,10 +116,10 @@ The glitch drags the raw mean to 25.27 °C and the standard deviation to 16.4, w
 
 ## Self-check before you finish
 
-- No hand-written mean, variance, quantile or rolling loop remains where a mypackage function does the job.
+- No hand-written mean, variance, quantile or rolling loop remains where a functax function does the job.
 - Every scaler is fitted on training data only, and the fitted object (not a new one) is applied to new data.
 - The caller's lists are unchanged after your code runs.
-- Errors you catch are `mp.MypackageError` subclasses, not a bare `except`.
+- Errors you catch are `mp.FunctaxError` subclasses, not a bare `except`.
 
-If mypackage lacks what you need, keep your addition small and shaped like it (a pure function that validates with `mp.require_non_empty`, or a class with `apply`) and consider proposing it upstream at
-<https://github.com/jejjohnson/pypackage_template/issues>.
+If functax lacks what you need, keep your addition small and shaped like it (a pure function that validates with `mp.require_non_empty`, or a class with `apply`) and consider proposing it upstream at
+<https://github.com/jejjohnson/functax/issues>.

@@ -1,16 +1,16 @@
-"""Command-line interface for ``mypackage``.
+"""Command-line interface for ``functax``.
 
-Installed as the ``mypackage`` console script via the ``[project.scripts]``
+Installed as the ``functax`` console script via the ``[project.scripts]``
 entry point in ``pyproject.toml``:
 
 ```bash
-mypackage summarize data.txt
-mypackage smooth data.txt --method median --window 5
-echo "1 2 3 4 5" | mypackage summarize - --json
+functax summarize data.txt
+functax smooth data.txt --method median --window 5
+echo "1 2 3 4 5" | functax summarize - --json
 ```
 
 The whole CLI is built on `argparse` from the standard library, so the package
-still declares zero runtime dependencies. [`main`][mypackage.cli.main] returns
+still declares zero runtime dependencies. [`main`][functax.cli.main] returns
 an exit status rather than calling `sys.exit`, which makes it directly
 testable.
 """
@@ -25,16 +25,16 @@ import sys
 from collections.abc import Sequence
 from typing import TextIO
 
-from mypackage import __version__
-from mypackage.exceptions import MypackageError, ValidationError
-from mypackage.smoothing import (
+from functax import __version__
+from functax.exceptions import FunctaxError, ValidationError
+from functax.smoothing import (
     Padding,
     exponential_moving_average,
     median_filter,
     moving_average,
 )
-from mypackage.stats import summarize
-from mypackage.utils import as_floats
+from functax.stats import summarize
+from functax.utils import as_floats
 
 
 __all__ = ["build_parser", "main"]
@@ -95,7 +95,7 @@ def _non_negative_int(text: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level argument parser.
 
-    Exposed separately from [`main`][mypackage.cli.main] so documentation
+    Exposed separately from [`main`][functax.cli.main] so documentation
     tooling and tests can introspect the CLI without running it.
 
     Returns:
@@ -108,13 +108,13 @@ def build_parser() -> argparse.ArgumentParser:
         ('summarize', 'data.txt', False)
     """
     parser = argparse.ArgumentParser(
-        prog="mypackage",
+        prog="functax",
         description="Descriptive statistics and smoothing for numeric series.",
     )
     parser.add_argument(
         "--version",
         action="version",
-        version=f"mypackage {__version__}",
+        version=f"functax {__version__}",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -268,7 +268,7 @@ def main(
     handlers = {"summarize": _run_summarize, "smooth": _run_smooth}
     try:
         return handlers[args.command](args, out, stdin)
-    except MypackageError as exc:
+    except FunctaxError as exc:
         err.write(f"error: {exc}\n")
         return EXIT_ERROR
     except OSError as exc:

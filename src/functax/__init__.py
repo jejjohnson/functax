@@ -1,6 +1,6 @@
 """Descriptive statistics, smoothing filters, and composable transforms.
 
-``mypackage`` is the worked example that ships with this project template. It
+``functax`` is the worked example that ships with this project template. It
 is deliberately **dependency-free** — everything here is built on the standard
 library — so the template stays domain-neutral while still giving every piece
 of tooling something real to work on: `mkdocstrings` renders these docstrings,
@@ -11,14 +11,14 @@ doctests below are verified on every test run.
 
 | Layer | Module | What it gives you |
 |---|---|---|
-| Statistics | `mypackage.stats` | `summarize`, `quantile`, `RunningStats` |
-| Smoothing | `mypackage.smoothing` | `moving_average`, `median_filter` |
-| Transforms | `mypackage.transforms` | `Standardize`, `Clip`, `Pipeline` |
+| Statistics | `functax.stats` | `summarize`, `quantile`, `RunningStats` |
+| Smoothing | `functax.smoothing` | `moving_average`, `median_filter` |
+| Transforms | `functax.transforms` | `Standardize`, `Clip`, `Pipeline` |
 
 ## Quickstart
 
 ```python
-import mypackage as mp
+import functax as mp
 
 series = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]
 
@@ -36,21 +36,21 @@ into, but never have to.
 
 from __future__ import annotations
 
-from mypackage._typing import Fittable, Series, Transform
-from mypackage.exceptions import (
+from functax._typing import Fittable, Series, Transform
+from functax.exceptions import (
     EmptySeriesError,
-    MypackageError,
+    FunctaxError,
     NotFittedError,
     ValidationError,
 )
-from mypackage.smoothing import (
+from functax.smoothing import (
     Padding,
     exponential_moving_average,
     median_filter,
     moving_average,
 )
-from mypackage.stats import RunningStats, Summary, quantile, summarize, zscores
-from mypackage.transforms import (
+from functax.stats import RunningStats, Summary, quantile, summarize, zscores
+from functax.transforms import (
     Clip,
     MinMaxScale,
     MovingAverage,
@@ -58,7 +58,7 @@ from mypackage.transforms import (
     Standardize,
     chain,
 )
-from mypackage.utils import (
+from functax.utils import (
     Elapsed,
     Window,
     as_floats,
@@ -75,9 +75,9 @@ __all__ = [
     "Elapsed",
     "EmptySeriesError",
     "Fittable",
+    "FunctaxError",
     "MinMaxScale",
     "MovingAverage",
-    "MypackageError",
     "NotFittedError",
     "Padding",
     "Pipeline",

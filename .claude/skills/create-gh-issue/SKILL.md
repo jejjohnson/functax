@@ -83,8 +83,8 @@ Content rules (from `report`):
 - **Point first.** Each section opens with its point in one sentence.
 - **Prose.** Not hard-wrapped; one sentence per line, sentences under 25 words, no "robust", "seamless" or "leverage". Numbers carry units.
 - **Maths** follows `eman-style-math`: define every symbol, with its shape, before its first use; inline maths in Unicode (σ², Σ⁻¹, ∑) or `$…$`; display maths in a `math` fence, never `$$` mid-line; no custom macros on GitHub.
-- **Code.** Lead the Design Snapshot and Proposed API with the exact snippet the implementer will reproduce. Sketches follow `code-sketch` (a shapes header, the equation above each line, a status marker on every call: `today (mypackage)`, `proposed (#N)`, `user`); code that will ship follows `python-style`.
-- **Concrete steps.** Each implementation step names the file and the function: "Add `savitzky_golay` in `src/mypackage/smoothing.py`".
+- **Code.** Lead the Design Snapshot and Proposed API with the exact snippet the implementer will reproduce. Sketches follow `code-sketch` (a shapes header, the equation above each line, a status marker on every call: `today (functax)`, `proposed (#N)`, `user`); code that will ship follows `python-style`.
+- **Concrete steps.** Each implementation step names the file and the function: "Add `savitzky_golay` in `src/functax/smoothing.py`".
 - **Recommend, then offer the alternative.** "Recommended: …" and "Alternative: …", one line each.
 - **Evidence is marked, not blocked.** A claim checked in the code cites the name and file at a commit; a reproduction starts with `# verified: <date>` or `# not run`; a number says where it came from (a test, a notebook, a paper with DOI or arXiv id, or `(estimate)`); anything else unchecked ends with `(unverified)`. Never invent a reference, a name or a number to fill a section; leave `(unverified)` or `TODO`.
 - **Relationships.** End with the `## Relationships` block (`Parent`, `Blocked by`, `Blocks`, `Related`), even when native links are applied too.

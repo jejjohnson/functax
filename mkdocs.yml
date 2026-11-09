@@ -6,11 +6,11 @@
 # mkdocstrings publishes a Sphinx-compatible `objects.inv` into `site/`, and
 # that inventory is what lets the MyST prose cross-reference into these pages.
 # ---------------------------------------------------------------------------
-site_name: mypackage API reference
-site_description: API reference for mypackage — generated from Google-style docstrings.
+site_name: functax API reference
+site_description: API reference for functax — generated from Google-style docstrings.
 site_author: J. Emmanuel Johnson
-repo_url: https://github.com/jejjohnson/pypackage_template
-repo_name: jejjohnson/pypackage_template
+repo_url: https://github.com/jejjohnson/functax
+repo_name: jejjohnson/functax
 
 docs_dir: docs/api
 site_dir: site

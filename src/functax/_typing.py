@@ -4,7 +4,7 @@ The aliases are written with [PEP 695](https://peps.python.org/pep-0695/)
 ``type`` statements (Python 3.12+), and
 the protocols are *structural*: any object with the right methods satisfies
 them, no inheritance or registration required. That is what lets
-[`Pipeline`][mypackage.Pipeline] accept a user-defined transform it has never
+[`Pipeline`][functax.Pipeline] accept a user-defined transform it has never
 heard of.
 """
 
@@ -38,7 +38,7 @@ class Transform(Protocol):
     `list[float]`.
 
     Examples:
-        >>> from mypackage import Clip, Transform
+        >>> from functax import Clip, Transform
         >>> isinstance(Clip(lower=0.0), Transform)
         True
         >>> isinstance("not a transform", Transform)
@@ -55,7 +55,7 @@ class Fittable(Protocol):
     """Structural protocol for transforms that learn state from data.
 
     Examples:
-        >>> from mypackage import Fittable, Standardize
+        >>> from functax import Fittable, Standardize
         >>> isinstance(Standardize(), Fittable)
         True
     """

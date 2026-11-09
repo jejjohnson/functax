@@ -1,4 +1,4 @@
-"""Tests for ``mypackage.cli``.
+"""Tests for ``functax.cli``.
 
 `main` takes explicit streams, so the whole CLI is testable without
 monkeypatching `sys.stdout` or spawning a subprocess.
@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-import mypackage
-from mypackage.cli import EXIT_ERROR, EXIT_OK, build_parser, main
+import functax
+from functax.cli import EXIT_ERROR, EXIT_OK, build_parser, main
 
 
 def run(*argv: str, stdin: str | None = None) -> tuple[int, str, str]:
@@ -196,13 +196,13 @@ class TestMeta:
     def test_version_is_written_to_the_injected_stream(self) -> None:
         status, out, err = run("--version")
         assert status == EXIT_OK
-        assert out.strip() == f"mypackage {mypackage.__version__}"
+        assert out.strip() == f"functax {functax.__version__}"
         assert err == ""
 
     def test_help_is_written_to_the_injected_stream(self) -> None:
         status, out, err = run("--help")
         assert status == EXIT_OK
-        assert out.startswith("usage: mypackage")
+        assert out.startswith("usage: functax")
         assert err == ""
 
     def test_usage_errors_are_written_to_the_injected_stream(
@@ -217,10 +217,8 @@ class TestMeta:
         assert (leaked.out, leaked.err) == ("", "")
 
     def test_entry_point_is_declared(self) -> None:
-        """`mypackage = "mypackage.cli:main"` must stay wired in pyproject."""
-        pyproject = Path(mypackage.__path__[0]).parents[1] / "pyproject.toml"
+        """`functax = "functax.cli:main"` must stay wired in pyproject."""
+        pyproject = Path(functax.__path__[0]).parents[1] / "pyproject.toml"
         if not pyproject.is_file():  # installed without the source tree
             pytest.skip("source checkout not available")
-        assert 'mypackage = "mypackage.cli:main"' in pyproject.read_text(
-            encoding="utf-8"
-        )
+        assert 'functax = "functax.cli:main"' in pyproject.read_text(encoding="utf-8")

@@ -1,19 +1,19 @@
 """Composable series transforms with a fit / apply lifecycle.
 
-Every transform here satisfies the [`Transform`][mypackage.Transform]
+Every transform here satisfies the [`Transform`][functax.Transform]
 protocol — a single `apply` method. Transforms that learn state from data
 (`Standardize`, `MinMaxScale`) additionally satisfy
-[`Fittable`][mypackage.Fittable] and raise
-[`NotFittedError`][mypackage.NotFittedError] if used before `fit`.
+[`Fittable`][functax.Fittable] and raise
+[`NotFittedError`][functax.NotFittedError] if used before `fit`.
 
-Because the protocols are structural, [`Pipeline`][mypackage.Pipeline] happily
+Because the protocols are structural, [`Pipeline`][functax.Pipeline] happily
 composes your own transforms alongside the built-in ones — no base class to
 inherit from, no registry to join:
 
 ```python
 from dataclasses import dataclass
 
-from mypackage import Series, chain, Standardize
+from functax import Series, chain, Standardize
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,11 +32,11 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Self
 
-from mypackage._typing import Series, Transform
-from mypackage.exceptions import NotFittedError, ValidationError
-from mypackage.smoothing import Padding, moving_average
-from mypackage.stats import summarize
-from mypackage.utils import as_floats, require_non_empty, require_positive
+from functax._typing import Series, Transform
+from functax.exceptions import NotFittedError, ValidationError
+from functax.smoothing import Padding, moving_average
+from functax.stats import summarize
+from functax.utils import as_floats, require_non_empty, require_positive
 
 
 __all__ = [
@@ -226,7 +226,7 @@ class Clip:
     """Clamp every value into ``[lower, upper]``.
 
     Stateless: `fit` is a no-op that returns ``self``, so `Clip` drops into a
-    [`Pipeline`][mypackage.Pipeline] next to fitted transforms without special
+    [`Pipeline`][functax.Pipeline] next to fitted transforms without special
     casing.
 
     Attributes:
@@ -279,14 +279,14 @@ class Clip:
 
 @dataclass(frozen=True, slots=True)
 class MovingAverage:
-    """Transform adapter around [`moving_average`][mypackage.moving_average].
+    """Transform adapter around [`moving_average`][functax.moving_average].
 
     Stateless, so it composes freely inside a
-    [`Pipeline`][mypackage.Pipeline].
+    [`Pipeline`][functax.Pipeline].
 
     Attributes:
         window: Number of samples averaged per output point.
-        padding: Boundary strategy, see [`Padding`][mypackage.Padding].
+        padding: Boundary strategy, see [`Padding`][functax.Padding].
 
     Examples:
         >>> MovingAverage(window=3).apply([1.0, 2.0, 3.0, 4.0, 5.0])[1:4]
@@ -416,7 +416,7 @@ class Pipeline:
 
 
 def chain(*transforms: Transform) -> Pipeline:
-    """Build a [`Pipeline`][mypackage.Pipeline] from positional transforms.
+    """Build a [`Pipeline`][functax.Pipeline] from positional transforms.
 
     A small convenience over ``Pipeline([...])`` that reads better inline.
 

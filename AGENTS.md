@@ -4,27 +4,27 @@ Standing instructions for **every** coding agent working in this repository (Cla
 
 The house style (Python, maths notation, prose, pseudocode, reports) comes from the maintainer's personal skills in [jejagents](https://github.com/jejjohnson/jejagents); "House style" and "Personal skills" below say which skill covers what and carry the essentials, so an agent without those skills installed can still follow them.
 
-> **This repository is a template.** Passages that describe the bundled example package, `mypackage`, start with a `<!-- template-example: … -->` comment (`# template-example: …` in code and config). Each marker covers the section it opens, down to the next heading of the same level, unless it names a smaller scope. Marked passages are true of the example and must be rewritten from your own code when you adopt the template (the `adopt-template` skill walks through it; `grep -rn "template-example" .` lists them). Everything unmarked is a permanent rule.
+> **This repository is a template.** Passages that describe the bundled example package, `functax`, start with a `<!-- template-example: … -->` comment (`# template-example: …` in code and config). Each marker covers the section it opens, down to the next heading of the same level, unless it names a smaller scope. Marked passages are true of the example and must be rewritten from your own code when you adopt the template (the `adopt-template` skill walks through it; `grep -rn "template-example" .` lists them). Everything unmarked is a permanent rule.
 
 ## What this repo is
 
 <!-- template-example: describe your package and its module map. -->
 
-An opinionated Python package template (Python 3.12+, uv, ruff, ty, pytest, mystmd and MkDocs, release-please) that ships a real worked example, `mypackage`: a **dependency-free** library of descriptive statistics, smoothing filters and composable transforms over one-dimensional numeric series, with an `argparse` console script. It exists so every tool here has real code to operate on: mkdocstrings renders its docstrings, ty checks its annotations, the coverage gate measures its branches, and every docstring example runs as a doctest.
+An opinionated Python package template (Python 3.12+, uv, ruff, ty, pytest, mystmd and MkDocs, release-please) that ships a real worked example, `functax`: a **dependency-free** library of descriptive statistics, smoothing filters and composable transforms over one-dimensional numeric series, with an `argparse` console script. It exists so every tool here has real code to operate on: mkdocstrings renders its docstrings, ty checks its annotations, the coverage gate measures its branches, and every docstring example runs as a doctest.
 
 People build on a package like this, so **the package is a library of primitives**: new code composes what is here, and anything genuinely new lands where the next person will find and reuse it.
 
-It is one package, `src/mypackage/`. The public API is `mypackage.__all__`, re-exported from `src/mypackage/__init__.py`, plus the `mypackage.cli` module (`main`, `build_parser`). Imports only point down this table:
+It is one package, `src/functax/`. The public API is `functax.__all__`, re-exported from `src/functax/__init__.py`, plus the `functax.cli` module (`main`, `build_parser`). Imports only point down this table:
 
 | Module | Owns |
 |---|---|
 | `_typing.py` | PEP 695 `type Series = Sequence[float]`; the runtime-checkable `Transform` and `Fittable` protocols |
-| `exceptions.py` | `MypackageError` and its subclasses `ValidationError` (also a `ValueError`), `EmptySeriesError`, `NotFittedError` (also a `RuntimeError`) |
+| `exceptions.py` | `FunctaxError` and its subclasses `ValidationError` (also a `ValueError`), `EmptySeriesError`, `NotFittedError` (also a `RuntimeError`) |
 | `utils.py` | The boundary validators `as_floats`, `require_non_empty`, `require_positive`; the generic `Window[T]` ring buffer; `timer` / `Elapsed` |
 | `stats.py` | `summarize` → frozen `Summary`, `quantile`, `zscores`, streaming `RunningStats` (Welford) |
 | `smoothing.py` | `moving_average`, `exponential_moving_average`, `median_filter`, the `Padding` boundary strategies |
 | `transforms.py` | `Standardize`, `MinMaxScale` (fitted), `Clip`, `MovingAverage` (stateless), `Pipeline`, `chain` |
-| `cli.py` | The `mypackage` console script (`summarize`, `smooth` subcommands), wired through `[project.scripts]` |
+| `cli.py` | The `functax` console script (`summarize`, `smooth` subcommands), wired through `[project.scripts]` |
 
 ### Boundaries
 
@@ -46,7 +46,7 @@ Each foundation brings a rule. Breaking one runs fine on your example and fails 
 | **Python ≥ 3.12 standard library** | PEP 695 `type` aliases and generics (`class Window[T]`), `typing.Self`, `enum.StrEnum`, `math.fsum`, `statistics.median` | No runtime dependency for what the standard library already does. |
 | **`dataclasses`** | `Summary`, every transform, `RunningStats`, `Elapsed` | `slots=True` always; `frozen=True` for values and stateless objects; a fitted transform keeps what it learned in `init=False` fields with a trailing underscore (`mean_`) defaulting to `None`; validation in `__post_init__`. |
 | **`typing.Protocol`** (`runtime_checkable`) | `Transform`, `Fittable` | Structural, not nominal: no base class, no registry. `isinstance` only checks that the attribute exists, so code that relies on a protocol also checks the attribute is callable (as `Pipeline.__post_init__` does). |
-| **`argparse`** | `mypackage.cli` | Output goes to the injected streams, `main` returns an exit status instead of calling `sys.exit`. |
+| **`argparse`** | `functax.cli` | Output goes to the injected streams, `main` returns an exit status instead of calling `sys.exit`. |
 | **pytest + `--doctest-modules`** | The suite and every docstring `Examples:` block | An example's expected output is what the code prints; a stale example is a failing test. |
 
 ## Reuse before you write
@@ -62,7 +62,7 @@ Before writing a helper, a validator, a statistic, a filter or a transform, find
 
 | You are about to write… | Use instead |
 |---|---|
-| `[float(v) for v in series]`, an emptiness check, an `if window <= 0` guard | `as_floats`, `require_non_empty`, `require_positive` (`mypackage.utils`); they raise `ValidationError` / `EmptySeriesError` with the uniform `'name' must …` message |
+| `[float(v) for v in series]`, an emptiness check, an `if window <= 0` guard | `as_floats`, `require_non_empty`, `require_positive` (`functax.utils`); they raise `ValidationError` / `EmptySeriesError` with the uniform `'name' must …` message |
 | A mean, variance, min / max or median loop | `summarize` (→ `Summary`, with `std`, `spread`, `to_dict()`); `quantile`; `zscores`; one value at a time, `RunningStats` |
 | `math.fsum(values) / len(values)` that must survive overflow | `stats._mean` (rescales by a power of two when the sum overflows) |
 | A rolling mean, rolling median or exponential smoother | `moving_average`, `median_filter`, `exponential_moving_average` |
@@ -99,18 +99,18 @@ Everything composes because it keeps these contracts; the tests in "What enforce
 
 - A subcommand is a subparser in `build_parser()` plus a `_run_<name>(args, out, stdin) -> int` handler registered in the `handlers` dict in `main`.
 - Write only to the injected `out` stream; read numbers through `_read_values`; validate options with an `argparse` `type=` (as `_non_negative_int` does), so a bad option is a usage error (exit 2).
-- Library errors propagate as `MypackageError`, which `main` reports as `error: …` on `err` with exit status 1 (`EXIT_ERROR`); `OSError` likewise. Never call `sys.exit` or `print` in a handler.
+- Library errors propagate as `FunctaxError`, which `main` reports as `error: …` on `err` with exit status 1 (`EXIT_ERROR`); `OSError` likewise. Never call `sys.exit` or `print` in a handler.
 
 ### 4. Exceptions
 
-- Every error derives from `MypackageError` **and** the closest standard-library exception, so `except ValueError` keeps working. A new error goes into `exceptions.py`, is exported, and joins the parametrised lists in `tests/test_exceptions.py`.
+- Every error derives from `FunctaxError` **and** the closest standard-library exception, so `except ValueError` keeps working. A new error goes into `exceptions.py`, is exported, and joins the parametrised lists in `tests/test_exceptions.py`.
 
 ### The public API
 
-- Export a public name from its module's `__all__` and from `src/mypackage/__init__.py` (import and `__all__`); both stay sorted (ruff's `RUF022` and `test_all_is_sorted_and_unique` agree on the order).
-- A new module declares a sorted `__all__`, joins `SUBMODULES` in `tests/test_public_api.py`, and gets its own page in `docs/api/` (a `::: mypackage.<module>` block), a `nav` entry in `mkdocs.yml` and a row in `docs/api/index.md`; a name on an existing module's page is picked up by its `:::` block.
+- Export a public name from its module's `__all__` and from `src/functax/__init__.py` (import and `__all__`); both stay sorted (ruff's `RUF022` and `test_all_is_sorted_and_unique` agree on the order).
+- A new module declares a sorted `__all__`, joins `SUBMODULES` in `tests/test_public_api.py`, and gets its own page in `docs/api/` (a `::: functax.<module>` block), a `nav` entry in `mkdocs.yml` and a row in `docs/api/index.md`; a name on an existing module's page is picked up by its `:::` block.
 - Run `uv run poe capabilities` after any public API change.
-- Link prose to the API by the **top-level** name (``[`summarize`](xref:api#mypackage.summarize)``), see "Documentation".
+- Link prose to the API by the **top-level** name (``[`summarize`](xref:api#functax.summarize)``), see "Documentation".
 
 ## What enforces them
 
@@ -122,22 +122,22 @@ Most rules here are tests, so CI tells you when one breaks. Read a test's docstr
 |---|---|
 | `tests/test_public_api.py` | `__all__` sorted, unique and importable; `SUBMODULES` is exactly the set of modules; every submodule declares a sorted `__all__`; the `py.typed` marker ships; `__version__` is dotted |
 | `tests/test_capabilities.py` | `docs/api/capabilities.md` is current; no name is bound to two different objects |
-| `--doctest-modules` on `src/mypackage` (`addopts`) | Every docstring `Examples:` block runs and prints what it says |
+| `--doctest-modules` on `src/functax` (`addopts`) | Every docstring `Examples:` block runs and prints what it says |
 | `tests/test_smoothing.py` (`SMOOTHERS`) | Smoothers never mutate their input, return a new list, leave constants unchanged |
 | `tests/test_transforms.py` (`TestProtocols`, `TestPipeline`) | Every transform satisfies `Transform` (fitted ones `Fittable`); `NotFittedError` before `fit`; sequential fitting; no mutation |
-| `tests/test_exceptions.py` | The hierarchy: every error is a `MypackageError` and its stdlib base |
+| `tests/test_exceptions.py` | The hierarchy: every error is a `FunctaxError` and its stdlib base |
 | `tests/test_cli.py` | Injected streams, exit codes 0 / 1 / 2, finite-only input, the `[project.scripts]` entry point |
 | `tests/test_build_docs.py` | The two-tool docs pipeline: inventory parsing, anchor repair, link checking, the inventory port and the absolute nav URL in `docs/myst.yml`, the files copied to the site root (`ROOT_FILES`) |
 | `tests/test_plugin_skill.py` | The downstream plugin's worked example runs and its quoted numbers hold; every name the plugin skill and reviewer mention exists |
-| `[tool.coverage.report] fail_under = 90` | Coverage of `src/mypackage` in every coverage-enabled run (CI, `uv run poe test-cov`) |
+| `[tool.coverage.report] fail_under = 90` | Coverage of `src/functax` in every coverage-enabled run (CI, `uv run poe test-cov`) |
 | `strict_markers = true` | Only the registered tier markers (`slow`, `integration`) exist |
-| ruff (`select = E, F, I, UP, B, SIM, RUF`), ty | Lint (the whole repo, notebook code cells included), format, types on `src/mypackage` and `scripts` |
+| ruff (`select = E, F, I, UP, B, SIM, RUF`), ty | Lint (the whole repo, notebook code cells included), format, types on `src/functax` and `scripts` |
 
 ## Recipes
 
 Step-by-step recipes for the common jobs live as plain Markdown in `.claude/skills/<name>/SKILL.md` (Claude Code loads them automatically; any agent can read and follow them), and two read-only review checklists in `.claude/agents/`:
 
-<!-- template-example: this table only; `add-function`, `add-transform`, `add-cli-command` and `mypackage-review` are the example package's, replace them with your extension points. -->
+<!-- template-example: this table only; `add-function`, `add-transform`, `add-cli-command` and `functax-review` are the example package's, replace them with your extension points. -->
 
 | Job | Recipe |
 |---|---|
@@ -148,13 +148,13 @@ Step-by-step recipes for the common jobs live as plain Markdown in `.claude/skil
 | Add or update a guide page (MyST prose) | `add-guide-page` |
 | Add or update an example notebook | `add-notebook` |
 | Verify before a PR | `pre-pr-check` |
-| Review a change | `mypackage-review` (+ the read-only `.claude/agents/reuse-reviewer.md` and `correctness-reviewer.md`) |
+| Review a change | `functax-review` (+ the read-only `.claude/agents/reuse-reviewer.md` and `correctness-reviewer.md`) |
 | Write a squash commit message | `squash-commit` |
 | Open or link GitHub issues | `create-gh-issue`, `link-gh-issues` (templates in `.github/ISSUE_TEMPLATE/`; `uv run poe gh-labels`, `gh-sub`, `gh-block`, `gh-show`) |
 
 <!-- template-example: this paragraph only; the plugin describes the example package. -->
 
-Downstream users get the package's guidance through the Claude Code plugin in `plugins/mypackage/` (published by `.claude-plugin/marketplace.json`) and `docs/llms.txt` (copied to the site root by `ROOT_FILES` in `scripts/build_docs.py`); see `docs/agents.md`. When the public API or the headline usage changes, update `plugins/mypackage/skills/series-analysis-with-mypackage/` too: `tests/test_plugin_skill.py` runs its worked example, checks the numbers its prose quotes, and checks that every `mp.X` / `mypackage.X` it and the plugin reviewer name still exists.
+Downstream users get the package's guidance through the Claude Code plugin in `plugins/functax/` (published by `.claude-plugin/marketplace.json`) and `docs/llms.txt` (copied to the site root by `ROOT_FILES` in `scripts/build_docs.py`); see `docs/agents.md`. When the public API or the headline usage changes, update `plugins/functax/skills/series-analysis-with-functax/` too: `tests/test_plugin_skill.py` runs its worked example, checks the numbers its prose quotes, and checks that every `mp.X` / `functax.X` it and the plugin reviewer name still exists.
 
 ## Working in the repo
 
@@ -167,7 +167,7 @@ uv run poe test             # every test + doctests, no coverage (fast)
 uv run poe test-cov         # the same with coverage and the 90 % gate (what CI runs)
 uv run poe lint             # ruff check .   (entire repo)
 uv run poe format           # ruff format . && ruff check --fix .
-uv run poe typecheck        # ty check src/mypackage scripts (what CI runs)
+uv run poe typecheck        # ty check src/functax scripts (what CI runs)
 uv run poe check            # lint + format-check + typecheck + test-cov (everything CI checks)
 uv run poe capabilities     # regenerate docs/api/capabilities.md
 uv run poe docs             # build both docs halves into public/ and check every link
@@ -200,7 +200,7 @@ CI ("Tests", `ci.yml`) runs every tier with coverage on Python 3.12 and 3.13 (`u
 
 <!-- template-example: this paragraph only. The example draws no random numbers; its tests use fixed fixtures in tests/conftest.py. -->
 
-`mypackage` draws no random numbers; its tests use the fixed series in `tests/conftest.py`.
+`functax` draws no random numbers; its tests use the fixed series in `tests/conftest.py`.
 
 - **Incidental randomness** (any draw would do): seed it (`random.Random(0)`, `numpy.random.default_rng(0)`, a fixed key) so a failure reproduces.
 - **Sampling behaviour under test** (a Monte Carlo estimate, a statistical property): bound the statistic by its own sampling distribution (a number of standard errors, a test's p-value floor), not by a tolerance tuned on one draw, and say in a comment where the bound comes from.
@@ -210,9 +210,9 @@ CI ("Tests", `ci.yml`) runs every tier with coverage on Python 3.12 and 3.13 (`u
 All of these must pass, from the repo root:
 
 1. `uv run poe test`: zero failures (doctests included).
-2. `uv run --group lint ruff check .`: the **entire** repo, which includes `tests/`, `scripts/` and the code cells of `docs/notebooks/*.ipynb`. Never lint a subdirectory: `ruff check src/mypackage/` misses errors CI catches.
+2. `uv run --group lint ruff check .`: the **entire** repo, which includes `tests/`, `scripts/` and the code cells of `docs/notebooks/*.ipynb`. Never lint a subdirectory: `ruff check src/functax/` misses errors CI catches.
 3. `uv run --group lint ruff format --check .`
-4. `uv run poe typecheck` (`ty check src/mypackage scripts`, as CI runs it).
+4. `uv run poe typecheck` (`ty check src/functax scripts`, as CI runs it).
 5. After changing a public API: `uv run poe capabilities`, and the `docs/api` page.
 6. After changing docs, docstrings, `mkdocs.yml` or `docs/myst.yml`: `uv run poe docs` (or at least `uv run poe docs-api` when only docstrings changed).
 7. After changing a dependency: `uv lock`, and commit `uv.lock`.
@@ -247,7 +247,7 @@ Its JAX/Equinox rules apply when the package uses JAX: logic under `pkg/_src/` w
 
 The bundled example is pure standard library, so it keeps `dataclasses` (`slots=True`) where `python-style` uses `eqx.Module`, makes every error inherit the closest standard-library exception as well as the package base (an open question in `python-style`, settled here), and lets doctests print exact floats such as `2.5`.
 
-**CLIs and scripts** use `cyclopts` for arguments and `loguru` for output; never argparse, click, typer, progress `print`s or stdlib `logging`. For a repo script they are in the `dev` group already; for a package CLI they are runtime dependencies and need the usual discussion. Two exceptions remain: the example's `mypackage` CLI uses `argparse` to keep the package dependency-free (`template-example`), and `scripts/capabilities.py` still uses `argparse` and `print`; move it over when you next change it (`scripts/build_docs.py` shows the pattern: a `cyclopts.App` with `@app.default`, and `loguru` for every message).
+**CLIs and scripts** use `cyclopts` for arguments and `loguru` for output; never argparse, click, typer, progress `print`s or stdlib `logging`. For a repo script they are in the `dev` group already; for a package CLI they are runtime dependencies and need the usual discussion. Two exceptions remain: the example's `functax` CLI uses `argparse` to keep the package dependency-free (`template-example`), and `scripts/capabilities.py` still uses `argparse` and `print`; move it over when you next change it (`scripts/build_docs.py` shows the pattern: a `cyclopts.App` with `@app.default`, and `loguru` for every message).
 
 ### Maths notation
 
@@ -329,7 +329,7 @@ The docs are built by **two tools** and deployed as one site (`docs/README.md` h
 `uv run poe docs` runs `scripts/build_docs.py`: it builds the API with `zensical build --strict` (Zensical reads `mkdocs.yml`), serves `site/` on port 8910 so mystmd can read its `objects.inv` (mystmd loads inventories only over http), runs `myst build --html --strict`, rewrites the localhost API URLs to `/reference/`, repairs anchors lowercased by mystmd's `$`-expansion bug, and fails if any internal link in the assembled `public/` site does not resolve. mystmd is a Node CLI (`npm install -g mystmd`), not a uv dependency; if its theme download is blocked, `docs/README.md` says how to build against a local clone of the theme.
 
 - **Prose is MyST Markdown**, not MkDocs-Material syntax: `:::{note}`, `:::{tab-set}`, `:::{dropdown}` directives, not `!!!` / `===` / `???`.
-- **Link to the API** with the `xref:` protocol and the **top-level** exported name: ``[`summarize`](xref:api#mypackage.summarize)``, not `mypackage.stats.summarize` (mystmd lowercases `$`-abbreviated anchors; see `docs/README.md`). A missing target fails `myst build --strict`.
+- **Link to the API** with the `xref:` protocol and the **top-level** exported name: ``[`summarize`](xref:api#functax.summarize)``, not `functax.stats.summarize` (mystmd lowercases `$`-abbreviated anchors; see `docs/README.md`). A missing target fails `myst build --strict`.
 - **URLs are flat**: a page's URL is its basename, with `_` turned into `-` (`guide/quickstart.md` → `/quickstart/`, `notebooks/smoothing_deep_dive.ipynb` → `/smoothing-deep-dive/`), so keep basenames unique across `docs/`, `docs/guide/` and `docs/notebooks/`; frontmatter `slug:` is ignored.
 - **Site-nav URLs stay absolute** (`site.nav` in `docs/myst.yml`): the theme prefixes root-relative ones with `BASE_URL` a second time (`tests/test_build_docs.py` checks it).
 - **API pages** (`docs/api/*.md`) are MkDocs-format pages, built by Zensical (which runs only the plugins it supports and ignores the rest silently; check its plugin list before adding one): prose plus `:::` blocks, `!!!` admonitions, listed in the `nav` of `mkdocs.yml`; docstrings are Google style (`docstring_style: google`) with Unicode maths; maths in the API pages themselves goes through MathJax (`pymdownx.arithmatex`), with the `eman-style-math` macros loaded by `docs/api/javascripts/mathjax.js`.

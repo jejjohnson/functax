@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from mypackage import (
+from functax import (
     EmptySeriesError,
-    MypackageError,
+    FunctaxError,
     NotFittedError,
     Standardize,
     ValidationError,
@@ -23,7 +23,7 @@ from mypackage import (
     [ValidationError, EmptySeriesError, NotFittedError],
 )
 def test_every_error_derives_from_the_base(error: type[Exception]) -> None:
-    assert issubclass(error, MypackageError)
+    assert issubclass(error, FunctaxError)
 
 
 @pytest.mark.parametrize(
@@ -45,11 +45,11 @@ def test_empty_series_error_specialises_validation_error() -> None:
 
 
 def test_a_single_except_clause_catches_the_package() -> None:
-    caught: list[MypackageError] = []
+    caught: list[FunctaxError] = []
     for call in (lambda: summarize([]), lambda: Standardize().apply([1.0])):
         try:
             call()
-        except MypackageError as err:
+        except FunctaxError as err:
             caught.append(err)
     assert len(caught) == 2
     assert isinstance(caught[0], EmptySeriesError)

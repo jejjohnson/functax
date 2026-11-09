@@ -12,7 +12,7 @@ Run from the repo root and fix what fails before committing. Report results hone
 ```bash
 uv run --group lint ruff check .          # entire repo: tests/, scripts/, notebook cells
 uv run --group lint ruff format --check .
-uv run poe typecheck                            # ty on src/mypackage and scripts (what CI runs)
+uv run poe typecheck                            # ty on src/functax and scripts (what CI runs)
 uv run poe test-cov                             # every test + doctests, with the 90 % coverage gate (what CI runs)
 ```
 

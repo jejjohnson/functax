@@ -1,12 +1,12 @@
 # Exceptions
 
 Every error raised by the package derives from
-[`MypackageError`][mypackage.MypackageError] *and* from the closest
+[`FunctaxError`][functax.FunctaxError] *and* from the closest
 standard-library exception.
 
 ```mermaid
 graph TD
-    E[Exception] --> M[MypackageError]
+    E[Exception] --> M[FunctaxError]
     V[ValueError] --> VE[ValidationError]
     M --> VE
     VE --> ES[EmptySeriesError]
@@ -14,4 +14,4 @@ graph TD
     M --> NF
 ```
 
-::: mypackage.exceptions
+::: functax.exceptions

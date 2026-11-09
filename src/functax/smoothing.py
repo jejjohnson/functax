@@ -10,7 +10,7 @@ input:
 | `median_filter` | non-linear, finite | isolated spikes | smooth gradients |
 
 Finite-support filters need values beyond the ends of the series. The
-[`Padding`][mypackage.Padding] strategy decides what those values are.
+[`Padding`][functax.Padding] strategy decides what those values are.
 """
 
 from __future__ import annotations
@@ -19,9 +19,9 @@ import math
 import statistics
 from enum import StrEnum
 
-from mypackage._typing import Series
-from mypackage.exceptions import ValidationError
-from mypackage.utils import Window, require_non_empty, require_positive
+from functax._typing import Series
+from functax.exceptions import ValidationError
+from functax.utils import Window, require_non_empty, require_positive
 
 
 __all__ = [
@@ -116,7 +116,7 @@ def moving_average(
         series: The observations to smooth.
         window: Number of samples averaged per output point. Must be positive
             and no larger than the series.
-        padding: Boundary strategy, see [`Padding`][mypackage.Padding]. With
+        padding: Boundary strategy, see [`Padding`][functax.Padding]. With
             `Padding.NONE` the output is ``window - 1`` samples shorter.
 
     Returns:
@@ -207,13 +207,13 @@ def median_filter(
     arbitrarily corrupted without moving the output. That is what makes it the
     right tool for isolated spikes, which a mean filter merely smears.
 
-    Uses a [`Window`][mypackage.Window] internally so the streaming and batch
+    Uses a [`Window`][functax.Window] internally so the streaming and batch
     code paths share one buffer implementation.
 
     Args:
         series: The observations to smooth.
         window: Number of samples per running median.
-        padding: Boundary strategy, see [`Padding`][mypackage.Padding].
+        padding: Boundary strategy, see [`Padding`][functax.Padding].
 
     Returns:
         A new list of filtered values.
@@ -251,7 +251,7 @@ def median_filter(
 
 
 def _as_padding(padding: Padding | str) -> Padding:
-    """Coerce ``padding`` to a [`Padding`][mypackage.Padding] member."""
+    """Coerce ``padding`` to a [`Padding`][functax.Padding] member."""
     if isinstance(padding, Padding):
         return padding
     try:

@@ -2,10 +2,10 @@
 
 Two complementary styles live side by side:
 
-- **Batch, pure functions** — [`summarize`][mypackage.summarize],
-  [`quantile`][mypackage.quantile], [`zscores`][mypackage.zscores] take a whole
+- **Batch, pure functions** — [`summarize`][functax.summarize],
+  [`quantile`][functax.quantile], [`zscores`][functax.zscores] take a whole
   series and return a value. No hidden state, no mutation.
-- **Streaming, stateful** — [`RunningStats`][mypackage.RunningStats] consumes
+- **Streaming, stateful** — [`RunningStats`][functax.RunningStats] consumes
   observations one at a time in constant memory using Welford's algorithm.
 
 For a series x₁, …, x_N the sample mean x̄ and variance s² are
@@ -23,9 +23,9 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass, field
 
-from mypackage._typing import Series
-from mypackage.exceptions import ValidationError
-from mypackage.utils import require_non_empty
+from functax._typing import Series
+from functax.exceptions import ValidationError
+from functax.utils import require_non_empty
 
 
 __all__ = [
@@ -126,7 +126,7 @@ def summarize(series: Series, *, ddof: int = 1) -> Summary:
             variance.
 
     Returns:
-        A frozen [`Summary`][mypackage.Summary].
+        A frozen [`Summary`][functax.Summary].
 
     Raises:
         EmptySeriesError: If ``series`` is empty.

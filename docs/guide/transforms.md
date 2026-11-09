@@ -4,7 +4,7 @@ A *transform* is anything with an `apply` method that maps a series to a new
 series. That is the entire contract:
 
 ```python
-from mypackage import Series
+from functax import Series
 
 class Square:
     def apply(self, series: Series) -> list[float]:
@@ -13,16 +13,16 @@ class Square:
 
 `Square` inherits from nothing and registers with nothing, yet it composes
 with the built-ins, satisfies `isinstance` checks, and works inside a
-[`Pipeline`](xref:api#mypackage.Pipeline):
+[`Pipeline`](xref:api#functax.Pipeline):
 
 ```python
-import mypackage as mp
+import functax as mp
 
 isinstance(Square(), mp.Transform)                 # True
 mp.chain(mp.Standardize(), Square()).fit_apply(data)
 ```
 
-This works because [`Transform`](xref:api#mypackage.Transform) is a
+This works because [`Transform`](xref:api#functax.Transform) is a
 `runtime_checkable` `Protocol` — *structural* typing. The static checker
 verifies the shape; `isinstance` verifies the method exists at runtime.
 
@@ -30,7 +30,7 @@ verifies the shape; `isinstance` verifies the method exists at runtime.
 A `runtime_checkable` protocol only checks that the attribute *exists* —
 not its signature. Static type checking (`uv run poe typecheck`) is what catches
 an `apply` with the wrong parameters. The runtime check exists to give a
-clear [`ValidationError`](xref:api#mypackage.ValidationError) when someone drops a
+clear [`ValidationError`](xref:api#functax.ValidationError) when someone drops a
 string into a pipeline, not to replace the type checker.
 :::
 
@@ -38,15 +38,15 @@ string into a pipeline, not to replace the type checker.
 
 | Transform | Learns from data? | Protocol |
 |---|---|---|
-| [`Clip`](xref:api#mypackage.Clip) | no | `Transform` |
-| [`MovingAverage`](xref:api#mypackage.MovingAverage) | no | `Transform` |
-| [`Standardize`](xref:api#mypackage.Standardize) | yes — mean, std | `Transform`, `Fittable` |
-| [`MinMaxScale`](xref:api#mypackage.MinMaxScale) | yes — min, max | `Transform`, `Fittable` |
+| [`Clip`](xref:api#functax.Clip) | no | `Transform` |
+| [`MovingAverage`](xref:api#functax.MovingAverage) | no | `Transform` |
+| [`Standardize`](xref:api#functax.Standardize) | yes — mean, std | `Transform`, `Fittable` |
+| [`MinMaxScale`](xref:api#functax.MinMaxScale) | yes — min, max | `Transform`, `Fittable` |
 
 Stateless transforms implement `fit` as a no-op returning `self`, so they drop
 into a pipeline next to fitted ones without any special casing.
 
-Fitted transforms raise [`NotFittedError`](xref:api#mypackage.NotFittedError) when used
+Fitted transforms raise [`NotFittedError`](xref:api#functax.NotFittedError) when used
 before `fit` — never a silent identity, never a `None`-propagating `nan`:
 
 ```python
@@ -72,7 +72,7 @@ deviation from the test data, quietly leaking information about it into the
 transform. The shortcut exists — `fit_apply` — precisely so that the leaking
 version has to be *typed out*, rather than being what you get by default.
 
-[`Standardize`](xref:api#mypackage.Standardize) also provides `inverse`, which maps
+[`Standardize`](xref:api#functax.Standardize) also provides `inverse`, which maps
 standardised values back to the original scale:
 
 ```python
@@ -81,7 +81,7 @@ scaler.inverse(scaler.apply(train)) == train   # True (to floating point)
 
 ## Pipelines
 
-[`Pipeline`](xref:api#mypackage.Pipeline) applies steps left to right. Fitting is
+[`Pipeline`](xref:api#functax.Pipeline) applies steps left to right. Fitting is
 sequential: each step is fitted on the *output of the previous step*, exactly
 as it will see the data at apply time.
 
@@ -143,7 +143,7 @@ and keep `apply` pure:
 ```python
 from dataclasses import dataclass
 
-from mypackage import Series, ValidationError
+from functax import Series, ValidationError
 
 @dataclass(frozen=True, slots=True)
 class Detrend:
@@ -169,9 +169,9 @@ Checklist for a well-behaved transform:
 - [x] configuration is validated at construction, not at apply time
 - [x] `fit` returns `self` so it chains
 - [x] stateful transforms raise
-      [`NotFittedError`](xref:api#mypackage.NotFittedError) before `fit`
-- [x] errors derive from [`MypackageError`](xref:api#mypackage.MypackageError)
+      [`NotFittedError`](xref:api#functax.NotFittedError) before `fit`
+- [x] errors derive from [`FunctaxError`](xref:api#functax.FunctaxError)
 
 ## API
 
-Full signatures live in the [transforms API reference](xref:api#mypackage.transforms).
+Full signatures live in the [transforms API reference](xref:api#functax.transforms).
