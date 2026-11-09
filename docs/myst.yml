@@ -36,6 +36,7 @@ project:
     - title: Guide
       children:
         - file: guide/quickstart.md
+        - file: guide/interpolation.md
     - title: Project
       children:
         - file: contributing.md

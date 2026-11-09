@@ -59,6 +59,10 @@ class Readout(eqx.Module):
     ) -> Float[Array, "*batch source"]:
         """g = Hᵀ r, over any leading batch dims."""
 
+    @abc.abstractmethod
+    def operator(self) -> lx.AbstractLinearOperator:
+        """H as an (M, N) lineax operator."""
+
 
 class Stencil(Readout):
     """A sparse read-out H: row k reads S source values at flat indices.
