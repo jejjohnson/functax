@@ -49,3 +49,17 @@ def test_base_modules_never_import_jax(module: str) -> None:
 def test_base_modules_import_with_jax_blocked(module: str) -> None:
     result = _run(f"import sys; sys.modules['jax'] = None; import {module}")
     assert result.returncode == 0, result.stderr
+
+
+def test_geometry_types_name_the_extra_when_jax_is_blocked() -> None:
+    result = _run(
+        "import sys; sys.modules['jax'] = None\n"
+        "import functax.geometry\n"
+        "try:\n"
+        "    functax.geometry.Axis\n"
+        "except ImportError as err:\n"
+        "    assert 'functax[jax]' in str(err), err\n"
+        "else:\n"
+        "    raise AssertionError('Axis imported without JAX')\n"
+    )
+    assert result.returncode == 0, result.stderr

@@ -240,7 +240,7 @@ Vert)$ on random $x$ and $r$ |
 | `assert_traces(fn, *batched_args)` | `jit(fn)`, `vmap(fn)` and `jit(vmap(fn))` against an eager loop over a leading batch axis |
 | `assert_grad_matches_fd(fn, x, *, eps=1e-6, rtol=1e-6)` | `jax.jacrev(fn)` against central finite differences, relative to the largest Jacobian entry |
 
-The tolerance policy is 1e-12 relative in float64 for exact schemes, the default of every helper but the gradient check. A scheme with a solve, or an oracle that is itself approximate, states its own tolerance in the test with a comment saying where it comes from. The helpers refuse to run without `jax_enable_x64`, which `tests/conftest.py` turns on for the suite.
+The tolerance policy is 1e-12 relative in float64 for exact schemes, the default of every helper but the gradient check. A scheme with a solve, or an oracle that is itself approximate, states its own tolerance in the test with a comment saying where it comes from. The helpers refuse to run without `jax_enable_x64`, which `conftest.py` turns on for the suite.
 
 The reference libraries (SciPy for now) are in the `test` dependency group only, never in the runtime dependencies. An oracle sweep that takes over a second, such as a scheme checked across every boundary mode and order, is marked `@pytest.mark.slow`; for a parametrised sweep, mark only the expensive cases with `pytest.param(..., marks=pytest.mark.slow)`. CI runs every tier.
 

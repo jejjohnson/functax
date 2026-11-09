@@ -12,6 +12,7 @@ from __future__ import annotations
 
 __all__ = [
     "FunctaxError",
+    "GeometryError",
     "MissingExtraError",
     "ValidationError",
 ]
@@ -35,6 +36,21 @@ class ValidationError(FunctaxError, ValueError):
     Examples:
         >>> from functax import ValidationError
         >>> issubclass(ValidationError, ValueError)
+        True
+    """
+
+
+class GeometryError(ValidationError):
+    """Raised when an axis, grid or point set is malformed.
+
+    A `ValidationError`, so also a `ValueError`. The message names the field
+    and the value that failed.
+
+    Examples:
+        >>> from functax import GeometryError, ValidationError
+        >>> issubclass(GeometryError, ValidationError)
+        True
+        >>> issubclass(GeometryError, ValueError)
         True
     """
 

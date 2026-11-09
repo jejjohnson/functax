@@ -23,13 +23,19 @@ Examples:
 
 from __future__ import annotations
 
-from functax.exceptions import FunctaxError, MissingExtraError, ValidationError
+from functax.exceptions import (
+    FunctaxError,
+    GeometryError,
+    MissingExtraError,
+    ValidationError,
+)
 
 
 __version__ = "0.0.1"
 
 __all__ = [
     "FunctaxError",
+    "GeometryError",
     "MissingExtraError",
     "ValidationError",
     "__version__",

@@ -6,7 +6,7 @@ tolerances default to the policy in `docs/contributing.md` ("Testing a
 scheme"): 1e-12 relative in float64 for exact schemes; a scheme with a solve
 states its own.
 
-The helpers need JAX's 64-bit mode, which `tests/conftest.py` turns on for the
+The helpers need JAX's 64-bit mode, which `conftest.py` turns on for the
 whole suite, and they refuse to run without it rather than test in float32.
 """
 
@@ -35,7 +35,7 @@ def _require_x64() -> None:
     if not jax.config.read("jax_enable_x64"):
         raise AssertionError(
             "the oracle harness needs float64: enable jax_enable_x64 "
-            "(tests/conftest.py does this for the suite)"
+            "(conftest.py does this for the suite)"
         )
 
 
@@ -50,7 +50,8 @@ def assert_matches_oracle(
     """Assert ``|actual − expected| ≤ atol + rtol·|expected|`` wherever ``where`` holds.
 
     NaNs match only NaNs at the same index, so a scheme that marks outside
-    targets with NaN is compared on that too.
+    targets with NaN is compared on that too. Boolean and integer arrays (masks,
+    indices) must match exactly, whatever the tolerances.
 
     Args:
         actual: The values under test.
@@ -88,6 +89,14 @@ def assert_matches_oracle(
         mask = np.ones(actual_values.shape, dtype=bool)
     else:
         mask = np.broadcast_to(np.asarray(where, dtype=bool), actual_values.shape)
+    floating = np.issubdtype(actual_values.dtype, np.inexact) or np.issubdtype(
+        expected_values.dtype, np.inexact
+    )
+    if not floating:
+        # Booleans and integers (masks, indices) must match exactly.
+        actual_values = actual_values.astype(np.float64)
+        expected_values = expected_values.astype(np.float64)
+        rtol, atol = 0.0, 0.0
 
     # e = |a − b|; a NaN on one side only counts as an infinite error
     error = np.abs(actual_values - expected_values)

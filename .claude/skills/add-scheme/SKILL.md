@@ -46,7 +46,7 @@ One concept per file: a protocol and its implementations share a file. The first
 
 ## 5. Tests
 
-In `tests/<area>/test_<name>.py`, with x64 on (from `tests/conftest.py`), using the helpers in `tests/_harness.py` ("Testing a scheme" in `docs/contributing.md`):
+In `tests/<area>/test_<name>.py`, with x64 on (from `conftest.py`), using the helpers in `tests/_harness.py` ("Testing a scheme" in `docs/contributing.md`):
 
 - **Oracle** (`assert_matches_oracle`): equal to the SciPy reference the issue names (`scipy.ndimage.map_coordinates`, `scipy.interpolate.RegularGridInterpolator`, `scipy.integrate`, …) at the stated tolerance, 1e-12 relative in float64 unless the issue says otherwise, on interior targets.
 - **Properties** with hypothesis: reproduces constants (and linear fields, for linear and higher schemes), weights sum to one, a rule integrates its exact degree.

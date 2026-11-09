@@ -45,7 +45,7 @@ test = [
     # SciPy is the oracle every scheme is tested against.
     "scipy>=1.14",
     "hypothesis>=6.100",
-    # The runtime checker behind jaxtyping's import hook in tests/conftest.py.
+    # The runtime checker behind jaxtyping's import hook in conftest.py.
     "beartype>=0.19",
 ]
 lint = [
@@ -93,7 +93,8 @@ line-length = 88
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
-ignore = ["E402", "E721", "E731", "E741"]
+# F722: jaxtyping dimension strings ("obs dim") are not forward annotations.
+ignore = ["E402", "E721", "E731", "E741", "F722"]
 # Docstrings and comments carry Unicode maths (eman-style-math, "Maths
 # notation" in AGENTS.md), so the maths glyphs that look like ASCII are allowed.
 allowed-confusables = ["−", "×", "∗", "∣", "α", "γ", "ι", "ν", "ο", "ρ", "σ", "υ", "𝒩", "ℝ"]
@@ -119,6 +120,9 @@ python-version = "3.12"
 # ``Examples:`` blocks in every Google-style docstring. They are executable
 # documentation: if an example in the docs goes stale, CI fails.
 testpaths = ["tests", "src/functax"]
+# tests/ is importable from every test file, for the shared helpers in
+# tests/_harness.py ("Testing a scheme" in docs/contributing.md).
+pythonpath = ["tests"]
 # Test tiers (see "Test tiers" in AGENTS.md). CI runs every tier.
 strict_markers = true
 markers = [
