@@ -11,7 +11,7 @@ Usage::
     uv run poe capabilities                             # rewrite the index
     uv run python scripts/capabilities.py --check       # fail if stale
 
-``tests/test_capabilities.py`` runs the check, so a public API change that
+``tests/fast/test_capabilities.py`` runs the check, so a public API change that
 skips ``uv run poe capabilities`` fails the test suite.
 
 The script needs no editing when a module is added: the import package
@@ -281,7 +281,7 @@ def render() -> str:
         f"first sentence of its docstring{upstream}. Search this page before",
         "writing a helper: if what you need is here, compose it; if it is almost",
         "here, extend it where it lives. Regenerate with `uv run poe capabilities`",
-        "after changing a public API (`tests/test_capabilities.py` checks it is",
+        "after changing a public API (`tests/fast/test_capabilities.py` checks it is",
         "current).",
         "",
         *package_part,

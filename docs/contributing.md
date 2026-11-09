@@ -242,7 +242,7 @@ Vert)$ on random $x$ and $r$ |
 
 The tolerance policy is 1e-12 relative in float64 for exact schemes, the default of every helper but the gradient check. A scheme with a solve, or an oracle that is itself approximate, states its own tolerance in the test with a comment saying where it comes from. The helpers refuse to run without `jax_enable_x64`, which `conftest.py` turns on for the suite.
 
-The reference libraries (SciPy for now) are in the `test` dependency group only, never in the runtime dependencies. An oracle sweep that takes over a second, such as a scheme checked across every boundary mode and order, is marked `@pytest.mark.slow`; for a parametrised sweep, mark only the expensive cases with `pytest.param(..., marks=pytest.mark.slow)`. CI runs every tier.
+The reference libraries (SciPy for now) are in the `test` dependency group only, never in the runtime dependencies. A scheme's tests live in `tests/fast/<area>/test_<name>.py`, and any that take over a second, such as an oracle sweep across every boundary mode and order, in `tests/slow/<area>/test_<name>.py` ("Test tiers" in `AGENTS.md`). The tier comes from the directory, so no test carries a `slow` or `integration` marker by hand. CI runs the fast tier on every supported Python and every tier with coverage.
 
 ## Pre-commit checklist
 

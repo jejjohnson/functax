@@ -16,16 +16,16 @@ uv run poe typecheck                            # ty on src/functax and scripts 
 uv run poe test-cov                             # every test + doctests, with the 90 % coverage gate (what CI runs)
 ```
 
-`uv run poe test` is the same suite without coverage, for quick iterations. For a part of the suite, pass `--no-cov` (a subset never reaches the gate): `uv run pytest --no-cov tests/<file>.py`.
+`uv run poe test` is the same suite without coverage, and `uv run poe test-fast` the fast tier and the doctests alone, for quick iterations ("Test tiers" in `AGENTS.md`). For a part of the suite, pass `--no-cov` (a subset never reaches the gate): `uv run pytest --no-cov tests/fast/<file>.py`.
 
 ## When the public API changed
 
 ```bash
 uv run poe capabilities
-uv run pytest --no-cov tests/test_capabilities.py tests/test_public_api.py
+uv run pytest --no-cov tests/fast/test_capabilities.py tests/fast/test_public_api.py
 ```
 
-…plus the API page (`docs/api/<module>.md`, a `nav` entry in `mkdocs.yml` for a new module) and the row in `docs/api/index.md`. `__all__` stays sorted; a new module joins `SUBMODULES` (a package, `SUBPACKAGES`) in `tests/test_public_api.py`.
+…plus the API page (`docs/api/<module>.md`, a `nav` entry in `mkdocs.yml` for a new module) and the row in `docs/api/index.md`. `__all__` stays sorted; a new module joins `SUBMODULES` (a package, `SUBPACKAGES`) in `tests/fast/test_public_api.py`.
 
 ## When dependencies changed
 

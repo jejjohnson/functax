@@ -55,10 +55,10 @@ Each foundation brings a rule. Breaking one runs fine on your example and fails 
 
 Before writing a helper, a validator, a sampler, a basis or a rule, find out whether it exists:
 
-1. **Search the capability index.** [`docs/api/capabilities.md`](docs/api/capabilities.md) lists every public name once, at its public home, grouped by the module that defines it, with a one-line summary, and the top-level API of JAX, Equinox, lineax and einx. It is generated (`uv run poe capabilities`) and checked by `tests/test_capabilities.py`, so it is current.
+1. **Search the capability index.** [`docs/api/capabilities.md`](docs/api/capabilities.md) lists every public name once, at its public home, grouped by the module that defines it, with a one-line summary, and the top-level API of JAX, Equinox, lineax and einx. It is generated (`uv run poe capabilities`) and checked by `tests/fast/test_capabilities.py`, so it is current.
 2. **Search the private helpers** in the table below: several invariants live in exactly one place each.
 3. **If it is missing, add it to the area that owns the concept**, at the lowest layer every caller can reach, not inline in the one caller you have today; a helper two areas need goes into `functax._src`.
-4. **One object, one name.** A name means one thing across the package and its submodules (`tests/test_capabilities.py`); a deliberate exception is listed with its reason in `ALLOWED_SHARED_NAMES` in `scripts/capabilities.py`.
+4. **One object, one name.** A name means one thing across the package and its submodules (`tests/fast/test_capabilities.py`); a deliberate exception is listed with its reason in `ALLOWED_SHARED_NAMES` in `scripts/capabilities.py`.
 
 | You are about to write… | Use instead |
 |---|---|
@@ -93,7 +93,7 @@ Everything composes because it keeps these contracts; the tests in "What enforce
 
 - A module in the NumPy-only base (`functax`, `functax.geometry`, `functax.geometry.affine`, `functax._src._backend`, `functax._src.geometry._affine`, `functax._src.geometry._transform`) imports nothing from the `jax` extra at module level. A JAX type it needs to re-export is reached lazily, through a module `__getattr__`.
 - Every other module calls `require_jax(__name__)` before its first JAX import.
-- A module that joins the base adds itself to `BASE_MODULES` in `tests/test_backend.py` and to the imports in the `base-install` job of `ci.yml`.
+- A module that joins the base adds itself to `BASE_MODULES` in `tests/integration/test_install.py` and to the imports in the `base-install` job of `ci.yml`.
 
 ### 3. Linear read-outs (from Wave 2)
 
@@ -103,12 +103,12 @@ Everything composes because it keeps these contracts; the tests in "What enforce
 
 ### 4. Exceptions
 
-- Every error derives from `FunctaxError` **and** the closest standard-library exception, so `except ValueError` keeps working. A new error goes into `exceptions.py`, is exported, and joins the parametrised lists in `tests/test_exceptions.py`.
+- Every error derives from `FunctaxError` **and** the closest standard-library exception, so `except ValueError` keeps working. A new error goes into `exceptions.py`, is exported, and joins the parametrised lists in `tests/fast/test_exceptions.py`.
 
 ### The public API
 
 - Logic lives in `functax._src.<area>`; the public area module only re-exports, from its own sorted `__all__`. The top-level `functax.__all__` holds only the exceptions and `__version__`; both stay sorted (ruff's `RUF022` and `test_all_is_sorted_and_unique` agree on the order).
-- A new top-level module joins `SUBMODULES` (a subpackage joins `SUBPACKAGES`) in `tests/test_public_api.py`, and gets its own page in `docs/api/` (a `::: functax.<module>` block), a `nav` entry in `mkdocs.yml` and a row in `docs/api/index.md`; a name on an existing module's page is picked up by its `:::` block.
+- A new top-level module joins `SUBMODULES` (a subpackage joins `SUBPACKAGES`) in `tests/fast/test_public_api.py`, and gets its own page in `docs/api/` (a `::: functax.<module>` block), a `nav` entry in `mkdocs.yml` and a row in `docs/api/index.md`; a name on an existing module's page is picked up by its `:::` block.
 - Run `uv run poe capabilities` after any public API change.
 - Link prose to the API by the public name (``[`FunctaxError`](xref:api#functax.FunctaxError)``), see "Documentation".
 
@@ -118,16 +118,17 @@ Most rules here are tests, so CI tells you when one breaks. Read a test's docstr
 
 | Test | Enforces |
 |---|---|
-| `tests/test_public_api.py` | `__all__` sorted, unique and importable; `SUBMODULES` and `SUBPACKAGES` are exactly the modules and packages; every module declares a sorted `__all__`; the `py.typed` marker ships; `__version__` is dotted |
-| `tests/test_backend.py` | `require_jax` names `functax[jax]` when any distribution of the extra is missing; the base modules never import JAX and import with JAX blocked |
+| `tests/fast/test_public_api.py` | `__all__` sorted, unique and importable; `SUBMODULES` and `SUBPACKAGES` are exactly the modules and packages; every module declares a sorted `__all__`; the `py.typed` marker ships; `__version__` is dotted |
+| `tests/fast/test_backend.py` | `require_jax` names `functax[jax]` when any distribution of the extra is missing |
+| `tests/integration/test_install.py` | The base modules never import JAX and import with JAX blocked (in a subprocess); a module that needs the extra names it |
 | The `base-install` job in `ci.yml` | A fresh `pip install .` has no `jax`, and the base modules import there |
-| `tests/test_capabilities.py` | `docs/api/capabilities.md` is current; no name is bound to two different objects |
+| `tests/fast/test_capabilities.py` | `docs/api/capabilities.md` is current; no name is bound to two different objects |
 | `--doctest-modules` on `src/functax` (`addopts`) | Every docstring `Examples:` block runs and prints what it says |
-| `tests/test_exceptions.py` | The hierarchy: every error is a `FunctaxError` and its stdlib base |
-| `tests/test_harness.py` | Each helper in `tests/_harness.py` passes on a correct case and fails, naming the worst index, on one perturbed by 1e-6 |
-| `tests/test_build_docs.py` | The two-tool docs pipeline: inventory parsing, anchor repair, link checking, the inventory port and the absolute nav URL in `docs/myst.yml`, the files copied to the site root (`ROOT_FILES`) |
+| `tests/fast/test_exceptions.py` | The hierarchy: every error is a `FunctaxError` and its stdlib base |
+| `tests/fast/test_harness.py` | Each helper in `tests/_harness.py` passes on a correct case and fails, naming the worst index, on one perturbed by 1e-6 |
+| `tests/fast/test_build_docs.py` | The two-tool docs pipeline: inventory parsing, anchor repair, link checking, the inventory port and the absolute nav URL in `docs/myst.yml`, the files copied to the site root (`ROOT_FILES`); `tests/integration/test_docs_site.py` reads a built site |
 | `[tool.coverage.report] fail_under = 90` | Coverage of `src/functax` in every coverage-enabled run (CI, `uv run poe test-cov`) |
-| `strict_markers = true` | Only the registered tier markers (`slow`, `integration`) exist |
+| `strict_markers = true` and the tier hook in `conftest.py` | Only the registered tier markers (`slow`, `integration`) exist, and they come from the directory |
 | ruff (`select = E, F, I, UP, B, SIM, RUF`), ty | Lint (the whole repo, notebook code cells included), format, types on `src/functax` and `scripts` |
 
 ## Recipes
@@ -153,7 +154,8 @@ Always run Python tools through `uv run` (never the system Python); `git`, `ls` 
 ```bash
 uv run poe                  # list every task (they live in [tool.poe.tasks] in pyproject.toml)
 uv run poe install          # uv sync --all-groups + pre-commit hooks
-uv run poe test             # every test + doctests, no coverage (fast)
+uv run poe test             # every tier + doctests, no coverage
+uv run poe test-fast        # tests/fast + doctests, no coverage (the quick loop)
 uv run poe test-cov         # the same with coverage and the 90 % gate (what CI runs)
 uv run poe lint             # ruff check .   (entire repo)
 uv run poe format           # ruff format . && ruff check --fix .
@@ -168,23 +170,31 @@ uv run poe precommit        # every pre-commit hook on every file
 uv run poe build            # wheel + sdist into dist/
 ```
 
-Extra arguments after a task name are passed to its command (`uv run poe test tests/test_backend.py -k require_jax`).
+Extra arguments after a task name are passed to its command (`uv run poe test tests/fast/test_backend.py -k require_jax`).
 
 `addopts` turns coverage on, and a partial run never reaches the 90 % gate, so pass `--no-cov` when running part of the suite:
 
 ```bash
-uv run pytest --no-cov tests/test_backend.py::test_require_jax_is_silent_when_the_extra_is_installed -v
+uv run pytest --no-cov tests/fast/test_backend.py::test_require_jax_is_silent_when_the_extra_is_installed -v
 ```
 
 ### Test tiers
 
-The markers are registered in `pyproject.toml` (`strict_markers = true`):
+A test's tier is the directory it lives in, and each tier mirrors the package layout (`tests/fast/interp/test_plan.py` and `tests/slow/interp/test_plan.py` test the same module):
 
-- **Unmarked (fast):** unit tests and doctests, each well under a second.
-- **`@pytest.mark.slow`:** a test over ~1 s (a large sweep, a long fit). For a parametrised test, mark only the expensive cases (`pytest.param(..., marks=pytest.mark.slow)`).
-- **`@pytest.mark.integration`:** end-to-end workflows, optional dependencies, external tools.
+- **`tests/fast/`:** behaviour, validation, small closed-form checks and the repo-wide checks (public API, capability index, exceptions, harness, docs pipeline), each well under a second. The doctests in `src/functax` belong to this tier.
+- **`tests/slow/`:** oracle sweeps across orders and policies, dot-product tests across policies, gradient and trace checks, anything over about a second (mostly einx compiling each new shape in an eager call).
+- **`tests/integration/`:** what crosses a process or a package boundary: the install checks run in a subprocess (`test_install.py`), other libraries' pinned outputs (`contracts/`, with their `.npz` files in `contracts/data/`), end-to-end workflows (`workflows/`) and the built docs site (`test_docs_site.py`).
 
-CI ("Tests", `ci.yml`) runs every tier with coverage on Python 3.12 and 3.13 (`uv run pytest -v`). Select the fast tier with `uv run pytest -m "not slow and not integration"`; when the slow tiers grow, give them a CI job of their own rather than dropping them.
+`conftest.py` marks every test in `tests/slow` `slow` and every test in `tests/integration` `integration`, so `-m` still selects a tier; a test never carries a tier marker by hand, and one whose marker disagrees with its directory is a collection error. A new test goes to the fast tier unless it measures over a second (`--durations`), in which case it goes to the slow file of the same module. Modules are imported by path (`--import-mode=importlib`), so the tiers can share basenames; shared helpers live in `tests/` itself (`_harness.py`, `_paths.py`, `_geoarray_reference.py`).
+
+```bash
+uv run poe test-fast          # tests/fast and the doctests, about two minutes
+uv run poe test-slow          # tests/slow
+uv run poe test-integration   # tests/integration
+```
+
+CI ("Tests", `ci.yml`) runs the fast tier on Python 3.12 and 3.13, and every tier with coverage (the 90 % gate) on 3.12.
 
 ### Tests that assert on random draws
 
@@ -238,9 +248,9 @@ functax uses JAX, so the JAX/Equinox rules of `python-style` apply in full:
 - **Types and shapes.** Every array argument and return is annotated with jaxtyping and named dims (`Float[Array, "obs channel"]`); shapes live in types, never in comments. Dims come from the shared vocabulary of `python-style` (`sample`, `test`, `member`, `batch`, `time`, `cell`, `obs`, `channel`, `var`, `level`, `inducing`, `state`, `latent`, `param`); functax adds `node` (the nodes of an `Axis`) and `dim` (the D coordinates of a point), and a new functax-specific dim is added here with the first module that needs it. Types are checked at runtime in tests only, through the jaxtyping import hook in `conftest.py`.
 - **Array operations.** einx for reductions, contractions, broadcasts and rearranges, never `axis=`, `.T`, `reshape` or `[:, None]`. einx is for dense arrays: a linear operator keeps its own methods (`.mv`, `.T`, the solve primitives) and is never materialised to use einx. Two axes of the same dim are named by role (`row col`, `next prev`), never `i j`. lineax for linear solves: solve, never invert.
 - **Modules and functions.** Arrays live in `eqx.Module`s and are always leaves, never static fields; host-side records that are never traced are frozen dataclasses. Modules carry state, functions carry transforms. Fixed parameters (a scheme's order, a basis's θ) are fields; data goes into `__call__`. One parameterisation per module. Inputs that travel together form their own small module. Protocols are abstract modules with `eqx.AbstractVar`. Few positionals, the rest keyword-only after `*`. Updates go through public `with_*` methods: config fields with `dataclasses.replace` (so `__check_init__` re-runs), array leaves with `eqx.tree_at`. `vmap` sits outside `jacrev`.
-- **No `jax.jit` inside the library.** Functions and modules stay un-jitted, and the caller compiles once at the top (around a whole step, loss or solve). An internal jit is inlined under the caller's jit anyway; on its own it fixes which arguments must be static and hides compile time in an ordinary call. Tests and `tests/_harness.py` may jit, as callers do. Eager calls that are slow because einx compiles each new shape are a test-tier matter (`@pytest.mark.slow`), not a reason to jit.
+- **No `jax.jit` inside the library.** Functions and modules stay un-jitted, and the caller compiles once at the top (around a whole step, loss or solve). An internal jit is inlined under the caller's jit anyway; on its own it fixes which arguments must be static and hides compile time in an ordinary call. Tests and `tests/_harness.py` may jit, as callers do. Eager calls that are slow because einx compiles each new shape are a test-tier matter (`tests/slow`), not a reason to jit.
 - **PRNG keys** are keyword-only, named `key`, and last; split once at the top into one named key per stochastic stage.
-- **Validation.** Static checks on fields in `__check_init__`; value checks on traced arrays with `eqx.error_if` (`check_values` in `functax._src._checks` raises a `FunctaxError` on concrete arrays and defers to `eqx.error_if` under `jit`). The jaxtyping hook in `conftest.py` rejects anything outside an annotation before the module's own check runs, so: annotate a non-array input with what the code accepts (`ArrayLike | Sequence[float]` for a constructor that coerces, `str` for an option checked against a fixed set), not the narrower type it is coerced to; keep the jaxtyping shape annotation on an array argument, and test the module's own shape and dtype checks through `inspect.unwrap(fn)`, which skips the hook (as `tests/geometry/test_sphere.py` does).
+- **Validation.** Static checks on fields in `__check_init__`; value checks on traced arrays with `eqx.error_if` (`check_values` in `functax._src._checks` raises a `FunctaxError` on concrete arrays and defers to `eqx.error_if` under `jit`). The jaxtyping hook in `conftest.py` rejects anything outside an annotation before the module's own check runs, so: annotate a non-array input with what the code accepts (`ArrayLike | Sequence[float]` for a constructor that coerces, `str` for an option checked against a fixed set), not the narrower type it is coerced to; keep the jaxtyping shape annotation on an array argument, and test the module's own shape and dtype checks through `inspect.unwrap(fn)`, which skips the hook (as `tests/fast/geometry/test_sphere.py` does).
 - **Precision.** The caller decides: preserve the input dtype, never cast silently, and create constants in the input's dtype or as Python scalars. Tests that need float64 get it from `conftest.py`.
 - **Configuration.** Objects round-trip through `get_config()` / `from_config()`, with arrays excluded (strict JSON for schemes, #33).
 - **Tests.** Every public forward function gets four: a closed-form or SciPy oracle at a stated tolerance (`rtol=1e-12` in float64), hypothesis properties, a gradient check (`jacrev` against central differences), and transform invariance (eager, `jit` and `vmap` agree with a Python loop). A linear read-out adds the dot-product test.
@@ -331,7 +341,7 @@ The docs are built by **two tools** and deployed as one site (`docs/README.md` h
 - **Prose is MyST Markdown**, not MkDocs-Material syntax: `:::{note}`, `:::{tab-set}`, `:::{dropdown}` directives, not `!!!` / `===` / `???`.
 - **Link to the API** with the `xref:` protocol and the **top-level** exported name: ``[`FunctaxError`](xref:api#functax.FunctaxError)``, not `functax.exceptions.FunctaxError` (mystmd lowercases `$`-abbreviated anchors; see `docs/README.md`). A missing target fails `myst build --strict`.
 - **URLs are flat**: a page's URL is its basename, with `_` turned into `-` (`guide/quickstart.md` → `/quickstart/`, `notebooks/gap_fill.ipynb` → `/gap-fill/`), so keep basenames unique across `docs/`, `docs/guide/` and `docs/notebooks/`; frontmatter `slug:` is ignored.
-- **Site-nav URLs stay absolute** (`site.nav` in `docs/myst.yml`): the theme prefixes root-relative ones with `BASE_URL` a second time (`tests/test_build_docs.py` checks it).
+- **Site-nav URLs stay absolute** (`site.nav` in `docs/myst.yml`): the theme prefixes root-relative ones with `BASE_URL` a second time (`tests/fast/test_build_docs.py` checks it).
 - **API pages** (`docs/api/*.md`) are MkDocs-format pages, built by Zensical (which runs only the plugins it supports and ignores the rest silently; check its plugin list before adding one): prose plus `:::` blocks, `!!!` admonitions, listed in the `nav` of `mkdocs.yml`; docstrings are Google style (`docstring_style: google`) with Unicode maths; maths in the API pages themselves goes through MathJax (`pymdownx.arithmatex`), with the `eman-style-math` macros loaded by `docs/api/javascripts/mathjax.js`.
 - **Notebooks** in `docs/notebooks/` are committed as executed `.ipynb` files, authored as jupytext percent `.py` and deleted after conversion; mystmd renders the stored outputs without re-executing, so each must be listed in the `docs/myst.yml` toc. Figures render inline with `plt.show()`: no `savefig`, no committed PNGs. `notebooks/` at the root holds scratch notebooks, outside the docs. Full standards: `.github/instructions/docs-examples.instructions.md`.
 
