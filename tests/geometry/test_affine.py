@@ -131,6 +131,11 @@ class TestTraces:
         assert_grad_matches_fd(lambda p: to_pixel(transform, p), xy)
         assert_grad_matches_fd(lambda t: to_pixel(t, xy), transform)
 
+    def test_a_concrete_transform_closed_over_under_jit(self) -> None:
+        transform = jnp.asarray(NORTH_UP)
+        rowcol = jax.jit(lambda p: to_pixel(transform, p))(jnp.zeros((1, 2)))
+        assert rowcol.shape == (1, 2)
+
     def test_grad_matches_the_inverse_matrix(self) -> None:
         transform = jnp.asarray(NORTH_UP)
         # row = (−d·Δx + a·Δy) / det A and col = (e·Δx − b·Δy) / det A; for
