@@ -52,6 +52,11 @@ class TestAxis:
     def test_is_regular(self, values: jax.Array, regular: bool) -> None:
         assert Axis(values).is_regular is regular
 
+    def test_is_descending_on_a_concrete_axis_under_jit(self) -> None:
+        axis = Axis(jnp.array([3.0, 2.0, 1.0]))
+        flipped = jax.jit(lambda x: -x if axis.is_descending else x)(jnp.ones(2))
+        assert flipped.tolist() == [-1.0, -1.0]
+
     def test_descending_axes_are_allowed(self) -> None:
         axis = Axis(jnp.array([3.0, 2.0, 1.0]))
         assert axis.is_descending

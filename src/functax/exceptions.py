@@ -14,6 +14,8 @@ __all__ = [
     "FunctaxError",
     "GeometryError",
     "MissingExtraError",
+    "OutsideDomainError",
+    "PolicyError",
     "ValidationError",
 ]
 
@@ -51,6 +53,33 @@ class GeometryError(ValidationError):
         >>> issubclass(GeometryError, ValidationError)
         True
         >>> issubclass(GeometryError, ValueError)
+        True
+    """
+
+
+class PolicyError(ValidationError):
+    """Raised when an interpolation policy names an option that does not exist.
+
+    Also raised when a policy cannot act where it is asked to, such as
+    ``outside="raise"`` on traced targets. A `ValidationError`, so also a
+    `ValueError`.
+
+    Examples:
+        >>> from functax import PolicyError, ValidationError
+        >>> issubclass(PolicyError, ValidationError)
+        True
+    """
+
+
+class OutsideDomainError(ValidationError):
+    """Raised under ``outside="raise"`` when a target lies outside the domain.
+
+    A `ValidationError`, so also a `ValueError`. The message gives how many
+    targets are outside and the first one.
+
+    Examples:
+        >>> from functax import OutsideDomainError
+        >>> issubclass(OutsideDomainError, ValueError)
         True
     """
 

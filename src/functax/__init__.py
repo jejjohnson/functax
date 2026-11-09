@@ -27,6 +27,8 @@ from functax.exceptions import (
     FunctaxError,
     GeometryError,
     MissingExtraError,
+    OutsideDomainError,
+    PolicyError,
     ValidationError,
 )
 
@@ -37,6 +39,8 @@ __all__ = [
     "FunctaxError",
     "GeometryError",
     "MissingExtraError",
+    "OutsideDomainError",
+    "PolicyError",
     "ValidationError",
     "__version__",
 ]

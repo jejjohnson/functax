@@ -72,7 +72,8 @@ Before writing a helper, a validator, a sampler, a basis or a rule, find out whe
 | The transpose of a linear map | the plan's hand-written adjoint, checked against `jax.linear_transpose` by the dot-product test |
 | A SciPy comparison, a dot-product test, a `jit`/`vmap` agreement check or a finite-difference gradient check in a test | `assert_matches_oracle`, `assert_adjoint`, `assert_transpose_matches`, `assert_traces`, `assert_grad_matches_fd` (`tests/_harness.py`; "Testing a scheme" in `docs/contributing.md`) |
 | `x.T`, `x.reshape(...)`, `x[:, None]`, `jnp.sum(x, axis=…)` | `einx.rearrange`, `einx.sum` and friends |
-| Bilinear weights, a cell locate, a nearest-neighbour sampler | nothing yet: `Stencil`, `locate` and `Plan` land in Wave 2 (#24, #25, #26). Don't add a private copy in the meantime. |
+| A cell locate, a `searchsorted` on an axis, a boundary remap, an outside or missing-sample rule | `locate`, `index_positions`, `remap_taps`, `check_outside`, `Policies` (`functax.interp`) |
+| Bilinear weights, a nearest-neighbour sampler | nothing yet: `Plan` lands with #26. Don't add a private copy in the meantime. |
 
 ## The contracts
 

@@ -264,7 +264,9 @@ class Axis(eqx.Module):
     @property
     def is_descending(self) -> bool:
         """Whether the nodes decrease. Needs concrete values."""
-        return bool(self.values[0] > self.values[-1])
+        # np.asarray first, so it also works on a concrete axis inside jit
+        ends = np.asarray(self.values)[[0, -1]]
+        return bool(ends[0] > ends[1])
 
 
 class AffineGrid(eqx.Module):
