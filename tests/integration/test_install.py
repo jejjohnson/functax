@@ -90,16 +90,19 @@ class TestMissingExtra:
         )
         assert result.returncode == 0, result.stderr
 
-    def test_interp_names_the_extra_when_jax_is_blocked(self) -> None:
+    @pytest.mark.parametrize("module", ["functax.interp", "functax.basis"])
+    def test_a_jax_module_names_the_extra_when_jax_is_blocked(
+        self, module: str
+    ) -> None:
         # gate G-message of #48: a module that needs JAX says which extra to install
         result = _run(
             "import sys; sys.modules['jax'] = None\n"
             "try:\n"
-            "    import functax.interp\n"
+            f"    import {module}\n"
             "except ImportError as err:\n"
             "    assert 'functax[jax]' in str(err), err\n"
             "else:\n"
-            "    raise AssertionError('functax.interp imported without JAX')\n"
+            f"    raise AssertionError('{module} imported without JAX')\n"
         )
         assert result.returncode == 0, result.stderr
 
