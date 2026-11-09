@@ -18,12 +18,13 @@ import functax
 
 SUBMODULES = [
     "_typing",
-    "cli",
     "exceptions",
-    "smoothing",
-    "stats",
-    "transforms",
-    "utils",
+]
+
+# Packages: the public area modules that are packages, and the private tree.
+SUBPACKAGES = [
+    "_src",
+    "geometry",
 ]
 
 
@@ -43,7 +44,7 @@ def test_every_exported_name_is_importable(name: str) -> None:
     assert hasattr(functax, name), f"{name} is in __all__ but not defined"
 
 
-@pytest.mark.parametrize("module", SUBMODULES)
+@pytest.mark.parametrize("module", [*SUBMODULES, *SUBPACKAGES])
 def test_submodule_imports_cleanly(module: str) -> None:
     assert importlib.import_module(f"functax.{module}") is not None
 
@@ -56,7 +57,15 @@ def test_no_unexpected_submodules() -> None:
     assert found == set(SUBMODULES)
 
 
-@pytest.mark.parametrize("module", SUBMODULES)
+def test_no_unexpected_subpackages() -> None:
+    """A new subpackage must be added to SUBPACKAGES (and given an API doc page)."""
+    found = {
+        info.name for info in pkgutil.iter_modules(functax.__path__) if info.ispkg
+    }
+    assert found == set(SUBPACKAGES)
+
+
+@pytest.mark.parametrize("module", [*SUBMODULES, "geometry"])
 def test_submodules_declare_all(module: str) -> None:
     imported = importlib.import_module(f"functax.{module}")
     assert hasattr(imported, "__all__"), f"functax.{module} is missing __all__"

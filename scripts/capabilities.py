@@ -64,9 +64,20 @@ PACKAGE = _package_name()
 
 # Libraries the package builds on, as {distribution: [public modules]}, with a
 # one-paragraph blurb each, e.g. {"numpy": ["numpy"]}.
-# template-example: empty because the example package is dependency-free.
-UPSTREAM: dict[str, list[str]] = {}
-UPSTREAM_BLURB: dict[str, str] = {}
+# The libraries of the `functax[jax]` extra that functax builds on. Only their
+# top-level namespaces are indexed; jax.numpy and jax.lax are too large to list.
+UPSTREAM: dict[str, list[str]] = {
+    "jax": ["jax"],
+    "equinox": ["equinox"],
+    "lineax": ["lineax"],
+    "einx": ["einx"],
+}
+UPSTREAM_BLURB: dict[str, str] = {
+    "jax": "transformations (jit, vmap, grad, linear_transpose) and the array type",
+    "equinox": "modules as pytrees, filtered transformations and static fields",
+    "lineax": "linear operators and solvers; the lineax view of every plan",
+    "einx": "named-axis rearrangements and reductions",
+}
 
 # Names two homes may bind to different objects, and why, e.g.
 # {"Mean": "stats.Mean is the statistic, aggregation.Mean the reducer"}.
@@ -76,6 +87,7 @@ _AUTOREF = re.compile(r"\[([^\]]+)\]\[[^\]]*\]")
 # A full stop that ends a sentence (not "e.g." / "i.e." / "etc.").
 _SENTENCE_END = re.compile(r"(?<!e\.g)(?<!i\.e)(?<!etc)\.\s+(?=[A-Z])")
 UPSTREAM_MARKER = "<!-- upstream -->"
+_ADDRESS = re.compile(r" at 0x[0-9a-fA-F]+")
 
 
 def _first_line(text: str) -> str:
@@ -119,6 +131,8 @@ def _summary(obj: object, *, home: str) -> str:
         return f"Alias of `{obj.__value__!r}`.".replace("|", "\\|")
     if not callable(obj):
         value = repr(obj)
+        # A default repr carries the object's address, which changes every run.
+        value = _ADDRESS.sub("", value)
         return f"`{value if len(value) <= 60 else value[:57] + '...'}`".replace(
             "|", "\\|"
         )

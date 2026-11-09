@@ -2,21 +2,17 @@
 
 Every error raised by this package derives from
 [`FunctaxError`][functax.FunctaxError], so a caller can trap the whole
-package with a single ``except`` clause while still being able to discriminate
-between failure modes when it matters.
-
-The concrete errors also inherit from the closest standard-library exception
-(`ValueError`, `RuntimeError`), so code written against the stdlib keeps
-working without importing anything from this package.
+package with a single ``except`` clause. Each concrete error also inherits from
+the closest standard-library exception, so code written against the stdlib
+keeps working without importing anything from this package.
 """
 
 from __future__ import annotations
 
 
 __all__ = [
-    "EmptySeriesError",
     "FunctaxError",
-    "NotFittedError",
+    "MissingExtraError",
     "ValidationError",
 ]
 
@@ -25,8 +21,8 @@ class FunctaxError(Exception):
     """Base class for every exception raised by ``functax``.
 
     Examples:
-        >>> from functax import EmptySeriesError, FunctaxError
-        >>> issubclass(EmptySeriesError, FunctaxError)
+        >>> from functax import FunctaxError, ValidationError
+        >>> issubclass(ValidationError, FunctaxError)
         True
     """
 
@@ -37,36 +33,22 @@ class ValidationError(FunctaxError, ValueError):
     Also a `ValueError`, so ``except ValueError`` still catches it.
 
     Examples:
-        >>> from functax import moving_average
-        >>> try:
-        ...     moving_average([1.0, 2.0, 3.0], window=0)
-        ... except ValueError as err:
-        ...     print(err)
-        'window' must be a positive integer, got 0
+        >>> from functax import ValidationError
+        >>> issubclass(ValidationError, ValueError)
+        True
     """
 
 
-class EmptySeriesError(ValidationError):
-    """Raised when an operation requires at least one observation.
+class MissingExtraError(FunctaxError, ImportError):
+    """Raised when a module needs the ``functax[jax]`` extra and it is missing.
+
+    The base install depends on NumPy alone, so every module that needs JAX
+    checks for it on import and raises this error, whose message names the
+    extra to install. It is also an `ImportError`, so ``except ImportError``
+    still catches it.
 
     Examples:
-        >>> from functax import EmptySeriesError, summarize
-        >>> try:
-        ...     summarize([])
-        ... except EmptySeriesError as err:
-        ...     print(err)
-        'series' must contain at least one value, got 0
-    """
-
-
-class NotFittedError(FunctaxError, RuntimeError):
-    """Raised when a stateful transform is used before it has been fitted.
-
-    Examples:
-        >>> from functax import NotFittedError, Standardize
-        >>> try:
-        ...     Standardize().apply([1.0, 2.0])
-        ... except NotFittedError as err:
-        ...     print(err)
-        Standardize is not fitted; call .fit(series) first
+        >>> from functax import MissingExtraError
+        >>> issubclass(MissingExtraError, ImportError)
+        True
     """

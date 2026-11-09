@@ -1,13 +1,13 @@
 [project]
 name = "functax"
-version = "0.1.7"
-description = "My short description for my project."
+version = "0.0.1"
+description = "Function approximation for JAX: bases, interpolation plans with adjoints, quadrature and transforms."
 authors = [
     {name="J. Emmanuel Johnson", email="jemanjohnson34@gmail.com"},
 ]
 license = { file = "LICENSE" }
 readme = "README.md"
-keywords = []
+keywords = ["jax", "interpolation", "function approximation", "quadrature", "geoscience"]
 requires-python = ">=3.12"
 classifiers = [
     "Topic :: Scientific/Engineering",
@@ -19,13 +19,16 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Development Status :: 2 - Pre-Alpha",
 ]
-dependencies = []
+# The base install is NumPy alone, so NumPy-only consumers (geoarray, geoops,
+# xrops) get the affine raster kernels without JAX. Every other module needs
+# the `jax` extra (decision 17 in the functax design page; functax#48).
+dependencies = ["numpy>=1.26"]
+
+[project.optional-dependencies]
+jax = ["jax>=0.4.35", "equinox", "lineax", "einx", "jaxtyping"]
 
 [project.urls]
 Repository = "https://github.com/jejjohnson/functax"
-
-[project.scripts]
-functax = "functax.cli:main"
 
 [dependency-groups]
 dev = [
@@ -35,6 +38,15 @@ dev = [
     "poethepoet>=0.49.0",
     "cyclopts>=5.3.3",
     "loguru>=0.7.3",
+]
+test = [
+    # The suite tests every module, so it installs the `jax` extra.
+    "functax[jax]",
+    # SciPy is the oracle every scheme is tested against.
+    "scipy>=1.14",
+    "hypothesis>=6.100",
+    # The runtime checker behind jaxtyping's import hook in tests/conftest.py.
+    "beartype>=0.19",
 ]
 lint = [
     "ruff>=0.15.22",
@@ -64,6 +76,9 @@ docs = [
     # through as None. Pin until a fixed pymdown-extensions release ships (#38).
     "pygments>=2.21.0,<2.22",
 ]
+
+[tool.uv]
+default-groups = ["dev", "test"]
 
 [build-system]
 requires = ["hatchling"]
@@ -135,7 +150,7 @@ exclude_also = [
 #   uv run poe            # list every task with its help text
 #   uv run poe install    # first run: `uv run` syncs the dev group, so poe exists
 # Extra arguments are passed through to the underlying command, e.g.
-#   uv run poe test tests/test_stats.py -k summarize
+#   uv run poe test tests/test_backend.py -k require_jax
 # ---------------------------------------------------------------------------
 [tool.poe]
 # Tasks call `uv run --group …` themselves, exactly as CI does, so poe must not

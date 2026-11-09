@@ -16,8 +16,8 @@ project:
   id: functax-docs
   title: functax
   description: >-
-    Descriptive statistics, smoothing filters, and composable transforms for
-    one-dimensional numeric series — with zero runtime dependencies.
+    Function approximation for JAX: bases, interpolation plans with adjoints,
+    quadrature and transforms.
   github: https://github.com/jejjohnson/functax
   authors:
     - name: J. Emmanuel Johnson
@@ -36,18 +36,9 @@ project:
     - title: Guide
       children:
         - file: guide/quickstart.md
-        - file: guide/statistics.md
-        - file: guide/smoothing.md
-        - file: guide/transforms.md
-        - file: guide/cli.md
-    - title: Examples
-      children:
-        - file: notebooks/tour.ipynb
-        - file: notebooks/smoothing_deep_dive.ipynb
     - title: Project
       children:
         - file: contributing.md
-        - file: agents.md
         - file: changelog.md
 
 site:

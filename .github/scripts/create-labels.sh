@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Bootstrap the standard label taxonomy for this template.
+# Bootstrap functax's label taxonomy.
 #
-# Creates labels for: type / area / layer / wave / priority.
+# Creates labels for: type / area / wave / priority.
 # Idempotent — uses `gh label create --force` so re-runs are safe.
 #
 # Usage:
@@ -46,30 +46,29 @@ create "type:docs"        "0075ca" "Documentation work"
 create "type:research"    "bfe5bf" "Comparative analysis / prior-art survey / investigation"
 
 echo "Creating area:* labels..."
-create "area:engineering" "0e8a16" "Build, packaging, CI, tooling"
+# One area per public module, plus the cross-cutting ones.
+create "area:geometry"    "c2e0c6" "functax.geometry"
+create "area:basis"       "c2e0c6" "functax.basis"
+create "area:diffops"     "c2e0c6" "functax.diffops"
+create "area:interp"      "c2e0c6" "functax.interp"
+create "area:quad"        "c2e0c6" "functax.quad"
+create "area:transform"   "c2e0c6" "functax.transform"
+create "area:project"     "c2e0c6" "functax.project"
+create "area:engineering" "ededed" "Build, packaging, CI, tooling"
 create "area:testing"     "bfdadc" "Test suite"
 create "area:docs"        "1d76db" "Docs + notebooks"
-create "area:code"        "c2e0c6" "Source-code changes (catch-all fallback)"
-# Edit / extend for your project. Common domain-specific areas:
-#   area:algorithmic, area:integration, area:performance, area:security
 
 echo "Creating Dependabot / misc labels..."
 create "dependencies" "ededed" "Pull requests that update a dependency file"
 
-echo "Creating layer:* labels (edit to match your project's layer stack)..."
-create "layer:0-primitives" "fef2c0" "Layer 0 — pure primitives"
-create "layer:1-components" "fbca04" "Layer 1 — components / services"
-create "layer:2-models"     "d4c5f9" "Layer 2 — public API / wrappers"
-
-echo "Creating wave:* labels (edit to match your release plan)..."
-# Plain `wave:N` scheme — simple and matches the label format referenced in
-# the epic issue templates. If you prefer descriptive slugs, add extras like
-# `wave:0-bootstrap`, `wave:1-mvp` alongside the numeric base.
-create "wave:0" "c2e0c6" "Wave 0"
+echo "Creating wave:* labels..."
+# One per wave epic (functax#8 to functax#13).
+create "wave:0" "bfd4f2" "Wave 0"
 create "wave:1" "bfd4f2" "Wave 1"
-create "wave:2" "d4c5f9" "Wave 2"
-create "wave:3" "f9d0c4" "Wave 3"
-create "wave:4" "fef2c0" "Wave 4"
+create "wave:2" "bfd4f2" "Wave 2"
+create "wave:3" "bfd4f2" "Wave 3"
+create "wave:4" "bfd4f2" "Wave 4"
+create "wave:5" "bfd4f2" "Wave 5"
 
 echo "Creating priority:* labels..."
 create "priority:p0" "b60205" "Blocker for current wave"
