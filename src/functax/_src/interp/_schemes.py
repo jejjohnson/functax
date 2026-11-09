@@ -18,6 +18,7 @@ from typing import Any
 
 import equinox as eqx
 
+from functax._src.geometry._types import AffineGrid, RectilinearGrid
 from functax._src.interp._bases import (
     Basis,
     BSplineBasis,
@@ -80,7 +81,8 @@ class LocalScheme(Scheme):
             policies: The outside, missing and boundary rules.
 
         Returns:
-            The `Plan`.
+            The `Plan`; a grid target keeps its shape as ``target_shape``, so
+            the plan cuts into windows of it.
 
         Raises:
             GeometryError: If the geometries are unsupported or mismatched.
@@ -99,7 +101,10 @@ class LocalScheme(Scheme):
         prefilter = prefilter_for(orders, shape, periodic, policies.boundary)
         fit = Identity() if prefilter is None else prefilter
         local = LocalGeometry(source, coordinates, bases)
-        return Plan(fit, stencil, policies, local)
+        # a grid target's rows are its nodes, row-major, so windows can cut it
+        grid_target = isinstance(target, RectilinearGrid | AffineGrid)
+        target_shape = target.shape if grid_target else None
+        return Plan(fit, stencil, policies, local, target_shape)
 
 
 class Nearest(LocalScheme):

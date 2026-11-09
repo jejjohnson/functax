@@ -47,6 +47,20 @@ A B-spline of order $k \ge 2$ does not pass through its samples, so its plan fir
 
 `plan.derivative(axis=c, order=m)` returns a `DerivativePlan` whose read-out holds $\partial^m \phi_j / \partial x_c^m$ at each target, so it evaluates $\partial^m \hat{f} / \partial x_c^m$ with the plan's fit, taps and validity and has its own adjoint. The coordinate $c$ is a column of the targets' coordinates: per source axis on an `Axis` or a `RectilinearGrid`, and $(x, y)$ map coordinates on an `AffineGrid`, so a rotated grid differentiates along the map axes. The weights are the forward-mode derivative of the weight construction, so the chain rule through the spacing, the cell widths and the transform is exact, and `jax.grad` through a plan built on traced targets gives the same values. Plans on one source add (`plan.derivative(axis=-1, order=2) + plan.derivative(axis=-2, order=2)` is a Laplacian). Nearest has zero derivative, linear a piecewise-constant one, and a B-spline of order $k$ is $k - 1$ times continuously differentiable.
 
+## Composition and windows
+
+`outer @ inner` folds two plans into one `ComposedPlan`, with the product stencil computed when it is built: an instrument response after spectral interpolation, or a warp followed by a sample, becomes one sparse $\mat{H}$ with one adjoint. For an inner stencil $\mat{H}_a$ ($P \times N$, $S_a$ taps per row) and an outer stencil $\mat{H}_b$ ($M \times P$, $S_b$ taps per row), row $k$ of the product is
+
+$$
+(\mat{H}_b \mat{H}_a)_{kj} = \sum_{s=1}^{S_b} w^b_{ks} (\mat{H}_a)_{i^b_{ks} j},
+$$
+
+so it has $S_a S_b$ taps, at indices $i^a_{i^b_{ks} r}$ with weights $w^b_{ks} w^a_{i^b_{ks} r}$. `compose(outer, inner, merge=True)` sums repeated indices on the host. A row of $\mat{H}_b$ that reads an invalid row of $\mat{H}_a$ is invalid, at any weight, and on every row it marks valid the composed plan equals `outer(inner(y))`. Its adjoint is $\mat{H}_a^\top \mat{H}_b^\top$. The outer plan must be local with `missing="propagate"`, and the inner one may fill missing samples (with the outer plan's fill value) but not renormalise; plans that do not fold raise `PolicyError`, and their linear maps still compose in lineax as `outer.operator() @ inner.operator()`.
+
+A plan on a grid target keeps the grid's shape, and `plan[window]` takes one slice per target axis and returns a `WindowedPlan` with the rows inside it, sources unchanged and `valid` sliced alongside. Each row is the parent's row, so every chip `plan[window](y)` equals the matching slice of `plan(y)` bit for bit: one plan on the destination grid, cut per chip, replaces warping each chip with a margin.
+
+`plan.to_gaussx()` returns the indices and weights of a local plan in gaussx's row layout, with invalid rows zeroed, which is what `InterpolatedOperator(base_operator, interp_indices, interp_values)` takes for $\mat{W} \mat{K} \mat{W}^\top$; functax imports nothing from gaussx.
+
 ## Reference
 
 ::: functax.interp
