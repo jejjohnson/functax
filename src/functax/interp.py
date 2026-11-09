@@ -8,10 +8,22 @@ the hand-written adjoint 𝒮ᵀ Hᵀ. Needs the ``functax[jax]`` extra.
 
 from __future__ import annotations
 
+from functax._src.interp._locate import (
+    check_outside,
+    index_positions,
+    locate,
+    remap_taps,
+)
+from functax._src.interp._policies import Policies
 from functax._src.interp._stencil import Readout, Stencil
 
 
 __all__ = [
+    "Policies",
     "Readout",
     "Stencil",
+    "check_outside",
+    "index_positions",
+    "locate",
+    "remap_taps",
 ]
