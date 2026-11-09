@@ -19,6 +19,7 @@ import functax
 SUBMODULES = [
     "_typing",
     "exceptions",
+    "interp",
 ]
 
 # Packages: the public area modules that are packages, and the private tree.

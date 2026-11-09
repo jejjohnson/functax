@@ -73,6 +73,7 @@ nav:
   - Overview: index.md
   - Capability index: capabilities.md
   - Geometry: geometry.md
+  - Interpolation: interp.md
   - Type aliases: typing.md
   - Exceptions: exceptions.md
 

@@ -85,3 +85,17 @@ def test_array_checks_never_import_jax(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not is_tracer(object())
     assert namespace([1.0, 2.0]).__name__ == "numpy"
     assert "jax" not in sys.modules
+
+
+def test_interp_names_the_extra_when_jax_is_blocked() -> None:
+    # gate G-message of #48: a module that needs JAX says which extra to install
+    result = _run(
+        "import sys; sys.modules['jax'] = None\n"
+        "try:\n"
+        "    import functax.interp\n"
+        "except ImportError as err:\n"
+        "    assert 'functax[jax]' in str(err), err\n"
+        "else:\n"
+        "    raise AssertionError('functax.interp imported without JAX')\n"
+    )
+    assert result.returncode == 0, result.stderr
