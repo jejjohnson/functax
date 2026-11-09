@@ -21,6 +21,7 @@ from functax._src.interp._bases import (
 from functax._src.interp._compose import compose
 from functax._src.interp._derivative import LocalGeometry
 from functax._src.interp._fit import Fit, Identity
+from functax._src.interp._hermite import HermiteFit
 from functax._src.interp._interpolant import Interpolant
 from functax._src.interp._locate import (
     check_outside,
@@ -40,11 +41,21 @@ from functax._src.interp._schemes import (
     Scheme,
     Tensor,
 )
+from functax._src.interp._series import (
+    Akima,
+    CubicSpline,
+    NonlinearPlan,
+    Pchip,
+    SeriesInterpolant,
+    SeriesScheme,
+    Steffen,
+)
 from functax._src.interp._stencil import Readout, Stencil
 from functax._src.interp._tensor import tensor_stencil
 
 
 __all__ = [
+    "Akima",
     "BSpline",
     "BSplineBasis",
     "BandedPrefilter",
@@ -52,8 +63,10 @@ __all__ = [
     "ComposedPlan",
     "Cubic",
     "CubicBasis",
+    "CubicSpline",
     "DerivativePlan",
     "Fit",
+    "HermiteFit",
     "Identity",
     "Interpolant",
     "Linear",
@@ -62,10 +75,15 @@ __all__ = [
     "LocalScheme",
     "Nearest",
     "NearestBasis",
+    "NonlinearPlan",
+    "Pchip",
     "Plan",
     "Policies",
     "Readout",
     "Scheme",
+    "SeriesInterpolant",
+    "SeriesScheme",
+    "Steffen",
     "Stencil",
     "Tensor",
     "WindowedPlan",
