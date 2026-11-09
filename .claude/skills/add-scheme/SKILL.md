@@ -46,16 +46,14 @@ One concept per file: a protocol and its implementations share a file. The first
 
 ## 5. Tests
 
-In `tests/<area>/test_<name>.py`, with x64 on (from `tests/conftest.py`):
+In `tests/<area>/test_<name>.py`, with x64 on (from `tests/conftest.py`), using the helpers in `tests/_harness.py` ("Testing a scheme" in `docs/contributing.md`):
 
-- **Oracle:** equal to the SciPy reference the issue names (`scipy.ndimage.map_coordinates`, `scipy.interpolate.RegularGridInterpolator`, `scipy.integrate`, …) at the stated tolerance, 1e-12 relative in float64 unless the issue says otherwise, on interior targets.
+- **Oracle** (`assert_matches_oracle`): equal to the SciPy reference the issue names (`scipy.ndimage.map_coordinates`, `scipy.interpolate.RegularGridInterpolator`, `scipy.integrate`, …) at the stated tolerance, 1e-12 relative in float64 unless the issue says otherwise, on interior targets.
 - **Properties** with hypothesis: reproduces constants (and linear fields, for linear and higher schemes), weights sum to one, a rule integrates its exact degree.
-- **Dot-product test** for a linear read-out: ⟨Hx, r⟩ = ⟨x, Hᵀr⟩ to 1e-12 relative on random x and r from a fixed key.
-- **Gradient check:** `jax.jacrev` against central differences, in the target positions and, for a basis, in θ.
-- **Transform invariance:** eager, `jit` and `vmap` agree with a Python loop to 1e-12 relative.
+- **Dot-product test** (`assert_adjoint`, then `assert_transpose_matches`) for a linear read-out: ⟨Hx, r⟩ = ⟨x, Hᵀr⟩ to 1e-12 relative on random x and r from a fixed key.
+- **Gradient check** (`assert_grad_matches_fd`): `jax.jacrev` against central differences, in the target positions and, for a basis, in θ.
+- **Transform invariance** (`assert_traces`): eager, `jit` and `vmap` agree with a Python loop to 1e-12 relative.
 - **Edges:** targets on the boundary and outside it (each outside policy), a single cell, a descending axis, float32 input keeps float32, each invalid argument raises `ValidationError` (`match=` on the field name).
-
-Once the oracle harness of #18 lands, use its helpers for the oracle, dot-product and transform checks rather than writing them inline.
 
 ## 6. Verify
 
