@@ -95,6 +95,22 @@ zero at the knots and $\sigma^2 \Delta_i / 4$ at mid-cell. Two targets with offs
 
     Only the linear row exists today; the others arrive with their schemes.
 
+## Curvilinear grids
+
+A `CurvilinearGrid` (a swath) gives the coordinates $\vect{x}_{rc}$ of every node, so a target cannot be located axis by axis. Cell $(r, c)$ maps the unit square onto its four corners by the bilinear map
+
+$$
+\vect{x}(s, t) = (1-s)(1-t) \vect{x}_{r,c} + s(1-t) \vect{x}_{r+1,c} + (1-s) t \vect{x}_{r,c+1} + s t \vect{x}_{r+1,c+1},
+$$
+
+and `locate_curvilinear` solves $\vect{x}(s, t) = \vect{x}_*$ for the target $\vect{x}_* \in \mathbb{R}^2$. It starts each target in the cell whose centre is nearest (a brute-force search over the cells, chunked, so it traces), then runs four Newton steps from $(\frac{1}{2}, \frac{1}{2})$,
+
+$$
+(s, t) \leftarrow (s, t) - \mat{J}^{-1} \left(\vect{x}(s, t) - \vect{x}_*\right) \text{ with } \mat{J} = \frac{\partial \vect{x}}{\partial (s, t)} \in \mathbb{R}^{2 \times 2}.
+$$
+
+Where $s$ or $t$ leaves $[0, 1]$, the target moves $\lfloor s \rfloor$ (or $\lfloor t \rfloor$) cells and Newton runs again, up to three times. The index position $\vect{u} = (r + s, c + t)$ then plays the role of the index position on a regular grid, so `Linear`, `Nearest` and `Tensor` plan a swath with the same stencil and the same `Policies`: past the edge of the swath the edge cell's map is continued, and a target whose Newton steps do not converge, or whose walk ends outside an inner cell, is invalid under every `outside` rule. Coordinates are planar: a swath across the dateline needs continuous (unwrapped) longitudes, with the targets in the same branch.
+
 ## Reference
 
 ::: functax.interp

@@ -23,8 +23,15 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from functax._src.geometry._affine import pixel_centres, to_pixel
-from functax._src.geometry._types import AffineGrid, Axis, Points, RectilinearGrid
+from functax._src.geometry._types import (
+    AffineGrid,
+    Axis,
+    CurvilinearGrid,
+    Points,
+    RectilinearGrid,
+)
 from functax._src.interp._bases import Basis
+from functax._src.interp._curvilinear import curvilinear_positions
 from functax._src.interp._locate import (
     check_outside,
     domain_bounds,
@@ -50,19 +57,19 @@ def source_layout(source: Any) -> tuple[tuple[int, ...], tuple[bool, ...]]:
     """The node counts (n₁, …, n_D) of a source, and which of its axes are periodic.
 
     Raises:
-        GeometryError: If ``source`` is not an `Axis`, `RectilinearGrid` or
-            `AffineGrid`.
+        GeometryError: If ``source`` is not an `Axis`, `RectilinearGrid`,
+            `AffineGrid` or `CurvilinearGrid`.
     """
     if isinstance(source, Axis):
         return (source.values.shape[0],), (source.period is not None,)
     if isinstance(source, RectilinearGrid):
         periodic = tuple(axis.period is not None for axis in source.axes)
         return source.shape, periodic
-    if isinstance(source, AffineGrid):
+    if isinstance(source, AffineGrid | CurvilinearGrid):
         return source.shape, (False, False)
     msg = (
-        "'source' must be an Axis, a RectilinearGrid or an AffineGrid, got "
-        f"{type(source).__name__}"
+        "'source' must be an Axis, a RectilinearGrid, an AffineGrid or a "
+        f"CurvilinearGrid, got {type(source).__name__}"
     )
     raise GeometryError(msg)
 
@@ -93,8 +100,9 @@ def coordinates_to_positions(
     """The (M, D) index positions u of target coordinates on each source axis.
 
     `index_positions` per axis for an `Axis` or a `RectilinearGrid` source,
-    and `to_pixel` (row, col) for an `AffineGrid`, whose coordinates are map
-    coordinates (x, y). Differentiable in ``coordinates``.
+    `to_pixel` (row, col) for an `AffineGrid`, and the Newton locate of
+    `locate_curvilinear` for a `CurvilinearGrid`; the targets of the last two
+    are map coordinates (x, y). Differentiable in ``coordinates``.
 
     Raises:
         GeometryError: If the number of coordinates differs from the number of
@@ -109,6 +117,8 @@ def coordinates_to_positions(
         raise GeometryError(msg)
     if isinstance(source, AffineGrid):
         return to_pixel(source.transform, coordinates)
+    if isinstance(source, CurvilinearGrid):
+        return curvilinear_positions(source, coordinates)
     axes = (source,) if isinstance(source, Axis) else source.axes
     columns = [index_positions(axis, coordinates[:, d]) for d, axis in enumerate(axes)]
     return jnp.column_stack(columns)
@@ -222,10 +232,12 @@ def tensor_stencil(
     """H = H₁ ⊗ … ⊗ H_D: one local basis per source axis, read at the targets.
 
     Args:
-        source: An `Axis`, a `RectilinearGrid` or an `AffineGrid`; its values
-            are flattened row-major, last axis fastest.
+        source: An `Axis`, a `RectilinearGrid`, an `AffineGrid` or a
+            `CurvilinearGrid`; its values are flattened row-major, last axis
+            fastest.
         target: `Points` (one coordinate per source axis, or (x, y) map
-            coordinates on an `AffineGrid`), or a grid read at its nodes.
+            coordinates on an `AffineGrid` or a `CurvilinearGrid`), or a grid
+            read at its nodes.
         bases: One `Basis` per source axis.
         policies: The outside and boundary rules.
 

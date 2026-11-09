@@ -20,6 +20,7 @@ from functax._src.interp._bases import (
 )
 from functax._src.interp._compose import compose
 from functax._src.interp._covariance import BrownianBridge, PosteriorCovariance
+from functax._src.interp._curvilinear import locate_curvilinear
 from functax._src.interp._derivative import LocalGeometry
 from functax._src.interp._fit import Fit, Identity
 from functax._src.interp._gaussian import GaussianPlan
@@ -97,6 +98,7 @@ __all__ = [
     "compose",
     "index_positions",
     "locate",
+    "locate_curvilinear",
     "remap_taps",
     "spline_poles",
     "tensor_stencil",
