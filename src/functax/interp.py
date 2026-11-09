@@ -19,8 +19,10 @@ from functax._src.interp._bases import (
     bspline,
 )
 from functax._src.interp._compose import compose
+from functax._src.interp._covariance import BrownianBridge, PosteriorCovariance
 from functax._src.interp._derivative import LocalGeometry
 from functax._src.interp._fit import Fit, Identity
+from functax._src.interp._gaussian import GaussianPlan
 from functax._src.interp._hermite import HermiteFit
 from functax._src.interp._interpolant import Interpolant
 from functax._src.interp._locate import (
@@ -60,12 +62,14 @@ __all__ = [
     "BSplineBasis",
     "BandedPrefilter",
     "Basis",
+    "BrownianBridge",
     "ComposedPlan",
     "Cubic",
     "CubicBasis",
     "CubicSpline",
     "DerivativePlan",
     "Fit",
+    "GaussianPlan",
     "HermiteFit",
     "Identity",
     "Interpolant",
@@ -79,6 +83,7 @@ __all__ = [
     "Pchip",
     "Plan",
     "Policies",
+    "PosteriorCovariance",
     "Readout",
     "Scheme",
     "SeriesInterpolant",

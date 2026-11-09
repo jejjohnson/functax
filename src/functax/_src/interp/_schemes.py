@@ -14,12 +14,13 @@ from functax._src._backend import require_jax
 require_jax(__name__)
 
 import abc
+import math
 from typing import Any
 
 import equinox as eqx
 from jaxtyping import Array, Float
 
-from functax._src.geometry._types import AffineGrid, RectilinearGrid
+from functax._src.geometry._types import AffineGrid, Axis, RectilinearGrid
 from functax._src.interp._bases import (
     Basis,
     BSplineBasis,
@@ -27,8 +28,10 @@ from functax._src.interp._bases import (
     LinearBasis,
     NearestBasis,
 )
+from functax._src.interp._covariance import BrownianBridge
 from functax._src.interp._derivative import LocalGeometry
 from functax._src.interp._fit import Identity
+from functax._src.interp._gaussian import GaussianPlan
 from functax._src.interp._interpolant import Interpolant, fit_interpolant
 from functax._src.interp._plan import Plan
 from functax._src.interp._policies import Policies
@@ -38,8 +41,9 @@ from functax._src.interp._tensor import (
     source_layout,
     stencil_from_positions,
     target_coordinates,
+    target_positions,
 )
-from functax.exceptions import GeometryError, ValidationError
+from functax.exceptions import GeometryError, PolicyError, ValidationError
 
 
 __all__ = [
@@ -165,18 +169,132 @@ class Linear(LocalScheme):
     function inside the domain, and its gradient in the target positions is
     piecewise constant.
 
+    On one axis, linear interpolation is the posterior mean of Brownian motion
+    with variance rate σ² observed exactly at the knots. With
+    ``prior_variance_rate=σ²`` the plan is a `GaussianPlan` whose covariance
+    is the Brownian bridge of each cell (`BrownianBridge`):
+
+        Var[f(x*) ∣ y] = σ² Δᵢ t (1 − t),
+
+    for a target at offset t in cell i of width Δᵢ.
+
+    Args:
+        prior_variance_rate: σ², the variance rate of the Brownian-motion
+            prior (squared field units per coordinate unit), or ``None`` (the
+            default) for a plain `Plan`. A float needs a 1-D `Axis` source and
+            ``outside`` ``"nan"`` or ``"raise"``, ``extent="nodes"`` and no
+            ``missing="renormalise"``, where the plan's mean is the bridge's.
+
+    Raises:
+        ValidationError: If ``prior_variance_rate`` is not ``None`` or a
+            positive, finite number.
+        GeometryError: When planned with a variance rate, if the source is not
+            an `Axis`.
+        PolicyError: When planned with a variance rate, under a policy whose
+            mean is not the Brownian-bridge mean.
+
     Examples:
         >>> import jax.numpy as jnp
-        >>> from functax.geometry import AffineGrid, Points
+        >>> from functax.geometry import AffineGrid, Axis, Points
         >>> from functax.interp import Linear
         >>> grid = AffineGrid([1.0, 0.0, 0.0, 0.0, -1.0, 4.0], (4, 4))
         >>> plan = Linear().plan(grid, Points(jnp.array([[0.5, 3.5], [1.0, 3.0]])))
         >>> plan(jnp.arange(16.0)).tolist()
         [0.0, 2.5]
+        >>> # σ² Δ t (1 − t) on cells of width 2
+        >>> gaussian = Linear(prior_variance_rate=1.0).plan(
+        ...     Axis(jnp.array([0.0, 2.0, 4.0])), Points(jnp.array([[1.0], [3.5]]))
+        ... )
+        >>> gaussian.variance().tolist()
+        [0.5, 0.375]
     """
+
+    # float | int rather than float, so an int reaches the check below
+    prior_variance_rate: float | int | None = eqx.field(static=True, default=None)
+
+    def __check_init__(self) -> None:
+        rate = self.prior_variance_rate
+        if rate is None:
+            return
+        is_number = isinstance(rate, int | float) and not isinstance(rate, bool)
+        if not is_number or not math.isfinite(rate) or rate <= 0:
+            msg = (
+                "'prior_variance_rate' must be None or a positive, finite number, "
+                f"got {rate!r}"
+            )
+            raise ValidationError(msg)
 
     def bases(self, n_axes: int) -> tuple[Basis, ...]:
         return (LinearBasis(),) * n_axes
+
+    def plan(
+        self, source: Any, target: Any, *, policies: Policies | None = None
+    ) -> Plan:
+        """H for ``source`` read at ``target``; a `GaussianPlan` with a variance rate.
+
+        Args:
+            source: An `Axis`, a `RectilinearGrid` or an `AffineGrid` (only an
+                `Axis` with ``prior_variance_rate``).
+            target: `Points`, or a grid read at its nodes.
+            policies: The outside, missing and boundary rules.
+
+        Returns:
+            The `Plan`, or a `GaussianPlan` when ``prior_variance_rate`` is set.
+
+        Raises:
+            GeometryError: If the geometries are unsupported or mismatched, or
+                the source is not an `Axis` under a variance rate.
+            PolicyError: Under a variance rate, if the policies change the mean
+                away from the Brownian-bridge mean.
+            OutsideDomainError: Under ``outside="raise"`` when a target is
+                outside.
+        """
+        if self.prior_variance_rate is None:
+            return super().plan(source, target, policies=policies)
+        policies = Policies() if policies is None else policies
+        _check_bridge(source, policies)
+        # the ordinary plan first, so the Gaussian one keeps its geometry
+        # (derivative) and target shape (windows)
+        plan = super().plan(source, target, policies=policies)
+        positions = target_positions(source, target)
+        posterior = BrownianBridge.from_positions(
+            source, positions[:, 0], rate=self.prior_variance_rate
+        )
+        return GaussianPlan(
+            plan.fit,
+            plan.read,
+            plan.policies,
+            plan.local,
+            plan.target_shape,
+            posterior=posterior,
+        )
+
+
+def _check_bridge(source: Any, policies: Policies) -> None:
+    """Raise unless the plan's mean is the Brownian-bridge mean of one axis."""
+    if not isinstance(source, Axis):
+        msg = (
+            "'prior_variance_rate' needs a 1-D Axis source (a D-dimensional "
+            f"prior is not available), got {type(source).__name__}"
+        )
+        raise GeometryError(msg)
+    # clamp, extrapolate and the half-cell border read means the bridge does not
+    if policies.outside not in ("nan", "raise"):
+        msg = (
+            "'prior_variance_rate' needs outside='nan' or 'raise', got "
+            f"outside={policies.outside!r}"
+        )
+        raise PolicyError(msg)
+    if policies.extent != "nodes":
+        msg = (
+            "'prior_variance_rate' needs extent='nodes', got "
+            f"extent={policies.extent!r}"
+        )
+        raise PolicyError(msg)
+    # renormalising drops a knot, so the bridge would span two cells
+    if policies.missing == "renormalise":
+        msg = "'prior_variance_rate' does not support missing='renormalise'"
+        raise PolicyError(msg)
 
 
 class Cubic(LocalScheme):
@@ -272,6 +390,13 @@ class Tensor(LocalScheme):
                 msg = (
                     f"'schemes[{index}]' must be a one-axis local scheme such as "
                     f"Nearest or Linear, got {type(scheme).__name__}"
+                )
+                raise ValidationError(msg)
+            # Tensor reads only the bases, so a variance rate would be dropped
+            if isinstance(scheme, Linear) and scheme.prior_variance_rate is not None:
+                msg = (
+                    f"'schemes[{index}]' must not set prior_variance_rate; "
+                    "Tensor builds a plain Plan"
                 )
                 raise ValidationError(msg)
 

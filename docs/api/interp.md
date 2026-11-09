@@ -71,6 +71,30 @@ $$
 
 and they differ in the slopes $m$. `CubicSpline(bc)` solves one tridiagonal system for the $C^2$ spline (not-a-knot, natural, clamped, or periodic by Sherman-Morrison, as `scipy.interpolate.CubicSpline`); its fit is linear in $\vect{y}$, so it builds an ordinary `Plan` with an adjoint. `Pchip` (Fritsch-Carlson), `Akima` and `Steffen` preserve shape (PCHIP and Steffen never overshoot monotone data), and their slopes depend on $\vect{y}$ nonlinearly, so they build a `NonlinearPlan`: it reads like any plan, has no fixed operator or adjoint (`NonlinearSchemeError`), and `linearize(y)` returns the tangent-linear `Stencil` at $\vect{y}$, 4 taps per target (6 for Akima). `scheme.fit(axis, y)` returns a `SeriesInterpolant` whose fit runs in JAX, so gradients reach both $\vect{y}$ and the knots.
 
+## Gaussian plans
+
+A scheme with a probabilistic reading builds a `GaussianPlan`: its mean is the plan, $\hat{\vect{f}} = \mat{H} \mathcal{S}(\vect{y})$, and `variance()`, `covariance()` and `sample(y, key=…)` add the posterior covariance $\gmat{\Sigma}_*$ at the $M$ targets, held by a `PosteriorCovariance`. Other plans have no `variance` method, rather than one that raises.
+
+On one axis, linear interpolation is the posterior mean of Brownian motion with variance rate $\sigma^2$ observed exactly at the knots, so `Linear(prior_variance_rate=σ²)` builds a `GaussianPlan` whose covariance is a `BrownianBridge`. A target at offset $t \in [0, 1]$ in cell $i$, of width $\Delta_i = \lvert x_{i+1} - x_i \rvert$, has variance
+
+$$
+\mathrm{Var}[f(x_*) \mid \vect{y}] = \sigma^2 \Delta_i t (1 - t),
+$$
+
+zero at the knots and $\sigma^2 \Delta_i / 4$ at mid-cell. Two targets with offsets $t_1 \le t_2$ in the same cell have covariance $\sigma^2 \Delta_i t_1 (1 - t_2)$, and targets in different cells are independent, so $\gmat{\Sigma}_*$ is block diagonal by cell and `sample` draws every cell's bridge at once. Targets outside the domain under `outside="nan"` have NaN variance. The bridge needs an `Axis` source and the policies under which the plan's mean is the bridge's mean: `outside` `"nan"` or `"raise"`, `extent="nodes"`, and any `missing` but `"renormalise"`.
+
+!!! note "Which schemes have a variance"
+
+    | Scheme | Variance from |
+    | --- | --- |
+    | Linear | the Brownian bridge between knots |
+    | Cubic and smoothing splines | the integrated Wiener process prior |
+    | RBF, kriging, GP | the kernel |
+    | Variational fits | the posterior precision $\mat{H}^\top \mat{R}^{-1} \mat{H} + \lambda \mat{L}^\top \mat{L}$ |
+    | Nearest, inverse distance, PCHIP, neural fields | none, without ensembles |
+
+    Only the linear row exists today; the others arrive with their schemes.
+
 ## Reference
 
 ::: functax.interp
