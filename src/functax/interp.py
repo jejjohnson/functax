@@ -16,6 +16,7 @@ from functax._src.interp._bases import (
     NearestBasis,
     bspline,
 )
+from functax._src.interp._derivative import LocalGeometry
 from functax._src.interp._fit import Fit, Identity
 from functax._src.interp._locate import (
     check_outside,
@@ -23,7 +24,7 @@ from functax._src.interp._locate import (
     locate,
     remap_taps,
 )
-from functax._src.interp._plan import Plan
+from functax._src.interp._plan import DerivativePlan, Plan
 from functax._src.interp._policies import Policies
 from functax._src.interp._prefilter import BandedPrefilter, spline_poles
 from functax._src.interp._schemes import (
@@ -46,10 +47,12 @@ __all__ = [
     "Basis",
     "Cubic",
     "CubicBasis",
+    "DerivativePlan",
     "Fit",
     "Identity",
     "Linear",
     "LinearBasis",
+    "LocalGeometry",
     "LocalScheme",
     "Nearest",
     "NearestBasis",

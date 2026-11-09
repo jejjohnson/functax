@@ -25,11 +25,17 @@ from functax._src.interp._bases import (
     LinearBasis,
     NearestBasis,
 )
+from functax._src.interp._derivative import LocalGeometry
 from functax._src.interp._fit import Identity
 from functax._src.interp._plan import Plan
 from functax._src.interp._policies import Policies
 from functax._src.interp._prefilter import prefilter_for
-from functax._src.interp._tensor import source_layout, tensor_stencil
+from functax._src.interp._tensor import (
+    coordinates_to_positions,
+    source_layout,
+    stencil_from_positions,
+    target_coordinates,
+)
 from functax.exceptions import GeometryError, ValidationError
 
 
@@ -84,11 +90,16 @@ class LocalScheme(Scheme):
         policies = Policies() if policies is None else policies
         shape, periodic = source_layout(source)
         bases = self.bases(len(shape))
-        stencil = tensor_stencil(source, target, bases, policies=policies)
+        coordinates = target_coordinates(source, target)
+        positions = coordinates_to_positions(source, coordinates)
+        stencil = stencil_from_positions(
+            positions, shape, periodic, bases, policies=policies
+        )
         orders = tuple(basis.prefilter_order for basis in bases)
         prefilter = prefilter_for(orders, shape, periodic, policies.boundary)
         fit = Identity() if prefilter is None else prefilter
-        return Plan(fit, stencil, policies)
+        local = LocalGeometry(source, coordinates, bases)
+        return Plan(fit, stencil, policies, local)
 
 
 class Nearest(LocalScheme):
