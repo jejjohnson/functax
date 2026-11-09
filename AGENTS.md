@@ -67,6 +67,7 @@ Before writing a helper, a validator, a sampler, a basis or a rule, find out whe
 | `tuple[int, ...]` for a grid shape | `Shape` (`functax._typing`) |
 | `jnp.linalg.solve`, `jnp.linalg.inv`, a hand-rolled CG | lineax (`lx.linear_solve` with the right solver) |
 | The transpose of a linear map | the plan's hand-written adjoint, checked against `jax.linear_transpose` by the dot-product test |
+| A SciPy comparison, a dot-product test, a `jit`/`vmap` agreement check or a finite-difference gradient check in a test | `assert_matches_oracle`, `assert_adjoint`, `assert_transpose_matches`, `assert_traces`, `assert_grad_matches_fd` (`tests/_harness.py`; "Testing a scheme" in `docs/contributing.md`) |
 | `x.T`, `x.reshape(...)`, `x[:, None]`, `jnp.sum(x, axis=…)` | `einx.rearrange`, `einx.sum` and friends |
 | Bilinear weights, a cell locate, a nearest-neighbour sampler | nothing yet: `Stencil`, `locate` and `Plan` land in Wave 2 (#24, #25, #26). Don't add a private copy in the meantime. |
 
@@ -116,6 +117,7 @@ Most rules here are tests, so CI tells you when one breaks. Read a test's docstr
 | `tests/test_capabilities.py` | `docs/api/capabilities.md` is current; no name is bound to two different objects |
 | `--doctest-modules` on `src/functax` (`addopts`) | Every docstring `Examples:` block runs and prints what it says |
 | `tests/test_exceptions.py` | The hierarchy: every error is a `FunctaxError` and its stdlib base |
+| `tests/test_harness.py` | Each helper in `tests/_harness.py` passes on a correct case and fails, naming the worst index, on one perturbed by 1e-6 |
 | `tests/test_build_docs.py` | The two-tool docs pipeline: inventory parsing, anchor repair, link checking, the inventory port and the absolute nav URL in `docs/myst.yml`, the files copied to the site root (`ROOT_FILES`) |
 | `[tool.coverage.report] fail_under = 90` | Coverage of `src/functax` in every coverage-enabled run (CI, `uv run poe test-cov`) |
 | `strict_markers = true` | Only the registered tier markers (`slow`, `integration`) exist |
