@@ -18,15 +18,24 @@ from typing import Any
 
 import equinox as eqx
 
-from functax._src.interp._bases import Basis, LinearBasis, NearestBasis
+from functax._src.interp._bases import (
+    Basis,
+    BSplineBasis,
+    CubicBasis,
+    LinearBasis,
+    NearestBasis,
+)
 from functax._src.interp._fit import Identity
 from functax._src.interp._plan import Plan
 from functax._src.interp._policies import Policies
+from functax._src.interp._prefilter import prefilter_for
 from functax._src.interp._tensor import source_layout, tensor_stencil
 from functax.exceptions import GeometryError, ValidationError
 
 
 __all__ = [
+    "BSpline",
+    "Cubic",
     "Linear",
     "LocalScheme",
     "Nearest",
@@ -73,11 +82,13 @@ class LocalScheme(Scheme):
                 outside.
         """
         policies = Policies() if policies is None else policies
-        shape, _ = source_layout(source)
-        stencil = tensor_stencil(
-            source, target, self.bases(len(shape)), policies=policies
-        )
-        return Plan(Identity(), stencil, policies)
+        shape, periodic = source_layout(source)
+        bases = self.bases(len(shape))
+        stencil = tensor_stencil(source, target, bases, policies=policies)
+        orders = tuple(basis.prefilter_order for basis in bases)
+        prefilter = prefilter_for(orders, shape, periodic, policies.boundary)
+        fit = Identity() if prefilter is None else prefilter
+        return Plan(fit, stencil, policies)
 
 
 class Nearest(LocalScheme):
@@ -120,6 +131,64 @@ class Linear(LocalScheme):
 
     def bases(self, n_axes: int) -> tuple[Basis, ...]:
         return (LinearBasis(),) * n_axes
+
+
+class Cubic(LocalScheme):
+    """Keys cubic convolution on every axis: 4ᴰ taps per target, no prefilter.
+
+    Args:
+        a: The kernel parameter; −½ by default (it then reproduces quadratics).
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis, Points
+        >>> from functax.interp import Cubic
+        >>> plan = Cubic().plan(Axis(jnp.arange(6.0)), Points(jnp.array([[2.5]])))
+        >>> plan(jnp.arange(6.0) ** 2).tolist()
+        [6.25]
+    """
+
+    a: float = eqx.field(static=True, default=-0.5)
+
+    def bases(self, n_axes: int) -> tuple[Basis, ...]:
+        return (CubicBasis(self.a),) * n_axes
+
+
+class BSpline(LocalScheme):
+    """A B-spline of order k on every axis: (k + 1)ᴰ taps, after the prefilter.
+
+    From order 2 the plan's fit is the `BandedPrefilter`, c = B⁻¹ y per axis,
+    and its adjoint applies 𝒮ᵀ after Hᵀ. The prefilter uses the mirror
+    boundary, or the wrap on a periodic axis or under ``boundary="wrap"``; it
+    equals ``scipy.ndimage.spline_filter`` there. It reproduces polynomials of
+    degree k only away from the ends: the mirror boundary's influence decays by
+    |z| per node (|z| ≈ 0.27 for the cubic).
+
+    Args:
+        order: k, from 0 to 5 (3 is the cubic B-spline).
+
+    Raises:
+        ValidationError: If ``order`` is not an integer in [0, 5].
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis, Points
+        >>> from functax.interp import BSpline
+        >>> # an interpolating spline: it passes through the samples at the knots
+        >>> plan = BSpline(3).plan(
+        ...     Axis(jnp.arange(6.0)), Points(jnp.array([[2.0], [3.0]]))
+        ... )
+        >>> [round(v, 12) for v in plan(jnp.arange(6.0) ** 3).tolist()]
+        [8.0, 27.0]
+    """
+
+    order: int = eqx.field(static=True, default=3)
+
+    def __check_init__(self) -> None:
+        BSplineBasis(self.order)
+
+    def bases(self, n_axes: int) -> tuple[Basis, ...]:
+        return (BSplineBasis(self.order),) * n_axes
 
 
 class Tensor(LocalScheme):

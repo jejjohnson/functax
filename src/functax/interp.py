@@ -8,7 +8,14 @@ the hand-written adjoint 𝒮ᵀ Hᵀ. Needs the ``functax[jax]`` extra.
 
 from __future__ import annotations
 
-from functax._src.interp._bases import Basis, LinearBasis, NearestBasis
+from functax._src.interp._bases import (
+    Basis,
+    BSplineBasis,
+    CubicBasis,
+    LinearBasis,
+    NearestBasis,
+    bspline,
+)
 from functax._src.interp._fit import Fit, Identity
 from functax._src.interp._locate import (
     check_outside,
@@ -18,13 +25,27 @@ from functax._src.interp._locate import (
 )
 from functax._src.interp._plan import Plan
 from functax._src.interp._policies import Policies
-from functax._src.interp._schemes import Linear, LocalScheme, Nearest, Scheme, Tensor
+from functax._src.interp._prefilter import BandedPrefilter, spline_poles
+from functax._src.interp._schemes import (
+    BSpline,
+    Cubic,
+    Linear,
+    LocalScheme,
+    Nearest,
+    Scheme,
+    Tensor,
+)
 from functax._src.interp._stencil import Readout, Stencil
 from functax._src.interp._tensor import tensor_stencil
 
 
 __all__ = [
+    "BSpline",
+    "BSplineBasis",
+    "BandedPrefilter",
     "Basis",
+    "Cubic",
+    "CubicBasis",
     "Fit",
     "Identity",
     "Linear",
@@ -38,9 +59,11 @@ __all__ = [
     "Scheme",
     "Stencil",
     "Tensor",
+    "bspline",
     "check_outside",
     "index_positions",
     "locate",
     "remap_taps",
+    "spline_poles",
     "tensor_stencil",
 ]
