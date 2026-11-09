@@ -28,6 +28,7 @@ from functax._src.interp._bases import (
     LinearBasis,
     NearestBasis,
 )
+from functax._src.interp._config import build_from_config, config_of
 from functax._src.interp._covariance import BrownianBridge
 from functax._src.interp._derivative import LocalGeometry
 from functax._src.interp._fit import Identity
@@ -58,13 +59,65 @@ __all__ = [
 
 
 class Scheme(eqx.Module):
-    """An interpolation scheme: configuration, frozen into a `Plan` by `plan`."""
+    """An interpolation scheme: configuration, frozen into a `Plan` by `plan`.
+
+    A scheme holds static fields only, so it round-trips through strict JSON
+    with `get_config` and `from_config`. A new scheme needs no registration:
+    `from_config` finds it by class name among the loaded subclasses.
+    """
 
     @abc.abstractmethod
     def plan(
         self, source: Any, target: Any, *, policies: Policies | None = None
     ) -> Plan:
         """The plan that reads ``source`` data at ``target``."""
+
+    def get_config(self) -> dict[str, Any]:
+        """The scheme as strict JSON: ``{"class": name, field: value, …}``.
+
+        Nested schemes become their own configs, tuples become lists, and a
+        non-finite float becomes ``{"float": "nan"}`` (or ``"inf"``,
+        ``"-inf"``), so ``json.dumps(config, allow_nan=False)`` succeeds.
+
+        Returns:
+            A dict of str, int, float, bool, None, lists and dicts.
+
+        Raises:
+            ValidationError: If a field has no strict-JSON form.
+
+        Examples:
+            >>> from functax.interp import Linear, Nearest, Tensor
+            >>> Linear().get_config()
+            {'class': 'Linear', 'prior_variance_rate': None}
+            >>> Tensor((Nearest(), Linear())).get_config()["schemes"]
+            [{'class': 'Nearest'}, {'class': 'Linear', 'prior_variance_rate': None}]
+        """
+        return config_of(self)
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> Scheme:
+        """The scheme a `get_config` config describes, found by its class name.
+
+        Args:
+            config: A config, typically ``json.loads`` of a stored one.
+
+        Returns:
+            The scheme, equal to the one the config came from.
+
+        Raises:
+            ValidationError: If the class is not a loaded scheme (or not a
+                ``cls``), its name is ambiguous, or a key is unknown or
+                missing.
+
+        Examples:
+            >>> import json
+            >>> from functax.interp import Linear, Nearest, Scheme, Tensor
+            >>> scheme = Tensor((Nearest(), Linear(), Linear()))
+            >>> text = json.dumps(scheme.get_config(), allow_nan=False)
+            >>> Scheme.from_config(json.loads(text)) == scheme
+            True
+        """
+        return build_from_config(config, root=Scheme, expected=cls)
 
 
 class LocalScheme(Scheme):

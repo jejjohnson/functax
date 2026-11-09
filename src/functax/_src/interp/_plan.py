@@ -11,13 +11,15 @@ plan on a grid target cuts to a window of it (``plan[window]``, a
 
 from __future__ import annotations
 
-from functax._src._backend import require_jax
+from functax._src._backend import is_tracer, require_jax
 
 
 require_jax(__name__)
 
 import dataclasses
+import io
 import math
+from typing import Any
 
 import einx
 import equinox as eqx
@@ -289,6 +291,90 @@ class Plan(eqx.Module):
             stencil.indices, normalised, n_source=stencil.n_source, valid=valid
         )
         return rows.operator()
+
+    def serialize(self) -> bytes:
+        """The plan's array leaves as bytes, by ``eqx.tree_serialise_leaves``.
+
+        Only the arrays (the stencil's indices, weights and valid rows) are
+        written; the static fields (N, the policies) come back from the
+        template that `deserialize` is given. Runs on the host.
+
+        Returns:
+            The bytes.
+
+        Raises:
+            ValidationError: If a leaf is traced or abstract, as inside ``jit``
+                or for a template from ``eqx.filter_eval_shape``.
+
+        Examples:
+            >>> import jax.numpy as jnp
+            >>> from functax.geometry import Axis, Points
+            >>> from functax.interp import Linear
+            >>> plan = Linear().plan(Axis(jnp.arange(4.0)), Points(jnp.array([[0.5]])))
+            >>> isinstance(plan.serialize(), bytes)
+            True
+        """
+        for leaf in jax.tree_util.tree_leaves(self):
+            if is_tracer(leaf) or not isinstance(leaf, jax.Array):
+                msg = (
+                    "'self' must hold concrete arrays to serialize, got a "
+                    f"{type(leaf).__name__} leaf; call serialize outside jit"
+                )
+                raise ValidationError(msg)
+        buffer = io.BytesIO()
+        eqx.tree_serialise_leaves(buffer, self)
+        return buffer.getvalue()
+
+    @classmethod
+    def deserialize(cls, data: bytes, *, like: Plan) -> Plan:
+        """The plan whose array leaves `serialize` wrote, in the structure of ``like``.
+
+        ``like`` fixes everything the bytes do not hold: the scheme's static
+        fields, N and the policies, and the shape and dtype of every leaf. It
+        need not be computed: ``eqx.filter_eval_shape(lambda:
+        scheme.plan(source, target))`` traces the build without running it
+        and gives a template with abstract leaves. Key the bytes by
+        `plan_key` so they are only read into the template of the same plan.
+
+        Args:
+            data: Bytes from `serialize`.
+            like: A plan, or an abstract template, of the same structure.
+
+        Returns:
+            The plan, applying bit-identically to the one serialized.
+
+        Raises:
+            ValidationError: If ``data`` is not bytes, ``like`` is not a
+                `Plan`, or ``data`` does not match ``like`` (another shape or
+                dtype, too few or too many leaves).
+
+        Examples:
+            >>> import equinox as eqx
+            >>> import jax.numpy as jnp
+            >>> from functax.geometry import Axis, Points
+            >>> from functax.interp import Linear, Plan
+            >>> axis, points = Axis(jnp.arange(4.0)), Points(jnp.array([[0.5]]))
+            >>> data = Linear().plan(axis, points).serialize()
+            >>> like = eqx.filter_eval_shape(lambda: Linear().plan(axis, points))
+            >>> Plan.deserialize(data, like=like)(jnp.arange(4.0)).tolist()
+            [0.5]
+        """
+        if not isinstance(data, bytes):
+            msg = f"'data' must be bytes from Plan.serialize, got {type(data).__name__}"
+            raise ValidationError(msg)
+        if not isinstance(like, Plan):
+            msg = f"'like' must be a Plan, got {type(like).__name__}"
+            raise ValidationError(msg)
+        buffer = io.BytesIO(data)
+        try:
+            plan: Any = eqx.tree_deserialise_leaves(buffer, like)
+        except (RuntimeError, ValueError, EOFError) as err:
+            msg = f"'data' does not match 'like': {err}"
+            raise ValidationError(msg) from err
+        if buffer.read(1):
+            msg = "'data' holds more leaves than 'like'"
+            raise ValidationError(msg)
+        return plan
 
     def derivative(self, axis: int, order: int = 1) -> DerivativePlan:
         """The plan of ∂ᵐf̂/∂x_cᵐ: H′ with H′ₖⱼ = ∂ᵐφⱼ/∂x_cᵐ at target k.

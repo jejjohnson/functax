@@ -111,6 +111,26 @@ $$
 
 Where $s$ or $t$ leaves $[0, 1]$, the target moves $\lfloor s \rfloor$ (or $\lfloor t \rfloor$) cells and Newton runs again, up to three times. The index position $\vect{u} = (r + s, c + t)$ then plays the role of the index position on a regular grid, so `Linear`, `Nearest` and `Tensor` plan a swath with the same stencil and the same `Policies`: past the edge of the swath the edge cell's map is continued, and a target whose Newton steps do not converge, or whose walk ends outside an inner cell, is invalid under every `outside` rule. Coordinates are planar: a swath across the dateline needs continuous (unwrapped) longitudes, with the targets in the same branch.
 
+## Caching plans
+
+A plan is a pure function of its scheme, its policies and its two geometries, so a pipeline that reads the same points every step can build it once and keep it. Three pieces make that work without functax depending on any cache library; they follow pipekit's `get_config`, `serialize_weights` and `stable_json` shapes, so a pipekit operator can wrap a plan with no glue.
+
+- `scheme.get_config()` and `Scheme.from_config(config)` round-trip a scheme through strict JSON (`json.dumps(config, allow_nan=False)` always succeeds). The config names the class under `"class"`, so `Tensor((Nearest(), Linear()))` is `{"class": "Tensor", "schemes": [{"class": "Nearest"}, {"class": "Linear"}]}`, and a new scheme is found by its class name with no registration. `Policies` has the same pair; strict JSON has no NaN, so a non-finite `fill_value` is written as `{"float": "nan"}`, `{"float": "inf"}` or `{"float": "-inf"}`.
+- `plan_key(scheme, source, target, policies=…)` is the sha256 hex of the functax version, both configs, and each geometry's class, static fields (period, epoch, metric, shape) and arrays (dtype, shape and C-contiguous bytes). It is the same in every process and changes when any coordinate moves by one ULP.
+- `plan.serialize()` writes the plan's array leaves to bytes with `eqx.tree_serialise_leaves`, and `Plan.deserialize(data, like=template)` reads them back into a template of the same structure. The template need not be computed: `eqx.filter_eval_shape(lambda: scheme.plan(source, target))` traces the build without running it.
+
+```python
+key = plan_key(scheme, grid, points)
+template = eqx.filter_eval_shape(lambda: scheme.plan(grid, points))
+if key in store:
+    plan = Plan.deserialize(store[key], like=template)
+else:
+    plan = scheme.plan(grid, points)
+    store[key] = plan.serialize()
+```
+
+All three run on the host and refuse traced inputs, so call them outside `jit`.
+
 ## Reference
 
 ::: functax.interp

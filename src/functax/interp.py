@@ -5,7 +5,9 @@ geometry. Every plan reads a field as f̂(X*) = H 𝒮(y), with a fit 𝒮 (the
 identity for local schemes) and a read-out H, and sends residuals back with
 the hand-written adjoint 𝒮ᵀ Hᵀ. Plans compose (``outer @ inner``), cut to
 windows of a grid target (``plan[window]``) and export their stencil for
-gaussx (``plan.to_gaussx()``). Needs the ``functax[jax]`` extra.
+gaussx (``plan.to_gaussx()``). Schemes and policies round-trip
+through strict JSON, plans through bytes, and `plan_key` names a plan by the
+content hash of its inputs. Needs the ``functax[jax]`` extra.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from functax._src.interp._bases import (
     NearestBasis,
     bspline,
 )
+from functax._src.interp._cache import plan_key
 from functax._src.interp._compose import compose
 from functax._src.interp._covariance import BrownianBridge, PosteriorCovariance
 from functax._src.interp._curvilinear import locate_curvilinear
@@ -99,6 +102,7 @@ __all__ = [
     "index_positions",
     "locate",
     "locate_curvilinear",
+    "plan_key",
     "remap_taps",
     "spline_poles",
     "tensor_stencil",
