@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.0.5](https://github.com/jejjohnson/functax/compare/v0.0.4...v0.0.5) (2026-11-10)
+
+
+### Features
+
+* **interp:** add a kernel protocol and RBF interpolation with polyharmonic and Wendland kernels ([#87](https://github.com/jejjohnson/functax/issues/87)) ([93e7f33](https://github.com/jejjohnson/functax/commit/93e7f33b39429449b321bc74352cb268a5017db8)), closes [#36](https://github.com/jejjohnson/functax/issues/36)
+* **interp:** add binning and cloud-in-cell as adjoints of a sampling stencil ([#86](https://github.com/jejjohnson/functax/issues/86)) ([06a1ee5](https://github.com/jejjohnson/functax/commit/06a1ee5940e44e6a29d52dfe58c3ec0a8cf4ec10))
+* **interp:** add first-order conservative remapping on tensor grids ([#89](https://github.com/jejjohnson/functax/issues/89)) ([2391d7a](https://github.com/jejjohnson/functax/commit/2391d7a006bfc4cb43cfd21ec61b3a56fad9c95c)), closes [#40](https://github.com/jejjohnson/functax/issues/40)
+* **interp:** add Fourier resampling of periodic axes as a plan with an adjoint ([#92](https://github.com/jejjohnson/functax/issues/92)) ([78a9c37](https://github.com/jejjohnson/functax/commit/78a9c37c2b93174e7feba52c5c80d5d33b6428b9))
+* **interp:** add inverse-distance weighting as a neighbourhood plan ([#84](https://github.com/jejjohnson/functax/issues/84)) ([63f4f1a](https://github.com/jejjohnson/functax/commit/63f4f1adba9f234f394d927ed67104048a736682))
+* **interp:** add linear interpolation on a Delaunay triangulation ([#85](https://github.com/jejjohnson/functax/issues/85)) ([3c4cc45](https://github.com/jejjohnson/functax/commit/3c4cc4571d17229aed30c44b7b8fc93e79dbedf4))
+* **interp:** add simple, ordinary and universal kriging as a GaussianPlan ([#88](https://github.com/jejjohnson/functax/issues/88)) ([7186fd7](https://github.com/jejjohnson/functax/commit/7186fd7a75e6bed60418157a61c51c3a9d2ab0d0)), closes [#37](https://github.com/jejjohnson/functax/issues/37)
+* **interp:** remap conservatively between curvilinear and spherical cells ([#90](https://github.com/jejjohnson/functax/issues/90)) ([c2d7c61](https://github.com/jejjohnson/functax/commit/c2d7c61a551042332a6d72d326480cc02ca84787)), closes [#41](https://github.com/jejjohnson/functax/issues/41)
+* **project:** add least-squares, Galerkin and variational fits, with Laplace and biharmonic gap fill ([#91](https://github.com/jejjohnson/functax/issues/91)) ([6457e26](https://github.com/jejjohnson/functax/commit/6457e267a6ceeb51cf9db03016380b2af291f93c))
+
+
+### Bug Fixes
+
+* **diffops:** annotate the derivative callables so the type hook checks them ([#93](https://github.com/jejjohnson/functax/issues/93)) ([678aad2](https://github.com/jejjohnson/functax/commit/678aad2c5e4f4656e3df2a42d2e8e26360ae8d20))
+
 ## [0.0.4](https://github.com/jejjohnson/functax/compare/v0.0.3...v0.0.4) (2026-11-10)
 
 
