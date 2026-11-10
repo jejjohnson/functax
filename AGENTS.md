@@ -83,6 +83,7 @@ Before writing a helper, a validator, a sampler, a basis or a rule, find out whe
 | Functions concentrated in a cap, a polar gap or a region of the sphere, a spherical point-in-polygon test | `slepian_cap_basis`, `slepian_polar_gap_basis`, `slepian_region_basis`, `spherical_polygon_mask` (`functax.basis.slepian`) |
 | Laplacian eigenfunctions of a box (Dirichlet, Neumann or periodic per axis), a divergence-free or curl-free vector basis | `fourier_basis`, `fourier_eigenvalues` (`functax.basis.fourier`), `divfree_basis`, `curlfree_basis` (`functax.basis.vector`) |
 | Radial bumps at chosen centres (Gaussian or compact Wendland, flat or on the sphere), a Gabor frame, an orthonormal wavelet basis | `rbf_basis`, `spherical_rbf_basis`, `wendland_c2`, `wendland_c4`, `gabor_frame`, `gabor_frame_grid`, `wavelet_basis_1d`, `wavelet_basis_2d` (`functax.basis.local`) |
+| Empirical orthogonal functions (PCA) of a data matrix, graph or mesh Laplacian eigenpairs | `eof_basis`, `graph_laplacian_eigpairs`, `cotangent_laplacian_eigpairs` (`functax.basis.eigen`) |
 | Random Fourier features at given frequencies, `cos`/`sin` features of a time or coordinate, Gaussian time windows | `rff_forward`, `rff_cosine_forward`, `fourier_features`, `seasonal_features`, `gaussian_window_features` (`functax.basis.features`) |
 | A 1-D cubic spline, PCHIP, Akima or Steffen, `interpax.interp1d`, a monotone lookup table | `CubicSpline`, `Pchip`, `Akima`, `Steffen` and `scheme.fit(axis, y)` (`functax.interp`); interpax stays out of the stack (decision 14) |
 

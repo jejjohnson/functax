@@ -1,6 +1,8 @@
-"""Tests for the cotangent Laplacian eigenbasis of `functax.basis.eigen`. The fast
-tier: the icosphere spectrum, mass-orthonormality, an independent assembly, the
-Neumann square and validation, each well under a second.
+"""Tests for `functax.basis.eigen`. The fast tier, each well under a second: the
+cotangent Laplacian (the icosphere spectrum, mass-orthonormality, an independent
+assembly, the Neumann square, validation); geonnax's EOF tests, copied from be5537d
+with functax imports; and graph-Laplacian tests written for functax (geonnax had
+none) against the closed-form spectra of the path and the cycle.
 """
 
 from __future__ import annotations
@@ -8,12 +10,18 @@ from __future__ import annotations
 import inspect
 import math
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 from _harness import assert_matches_oracle
 
 from functax import GeometryError, ValidationError
-from functax.basis.eigen import cotangent_laplacian_eigpairs
+from functax.basis.eigen import (
+    cotangent_laplacian_eigpairs,
+    eof_basis,
+    graph_laplacian_eigpairs,
+)
 from functax.geometry import icosphere, mesh_vertex_areas
 
 
@@ -216,3 +224,105 @@ def test_rejects_a_non_integer_num_basis() -> None:
     vertices, triangles = _tetrahedron()
     with pytest.raises(ValidationError, match="'num_basis' must be an integer"):
         inspect.unwrap(cotangent_laplacian_eigpairs)(vertices, triangles, 2.5)
+
+
+class TestEOFBasis:
+    def test_reconstructs_full_rank_anomalies(self):
+        # Keeping all min(T, N) modes reconstructs the centred data exactly.
+        X = jax.random.normal(jax.random.PRNGKey(2), (12, 6))
+        phi, _ = eof_basis(X, n_modes=6)
+        xc = X - X.mean(axis=0, keepdims=True)
+        np.testing.assert_allclose(xc @ phi @ phi.T, xc, atol=1e-4)
+
+    def test_recovers_known_low_rank_pattern(self):
+        # Data built from a single spatial pattern -> first EOF spans it.
+        pattern = jnp.array([1.0, -1.0, 2.0, 0.5])
+        pattern = pattern / jnp.linalg.norm(pattern)
+        amps = jax.random.normal(jax.random.PRNGKey(3), (40,))
+        X = amps[:, None] * pattern[None, :]
+        phi, _ = eof_basis(X, n_modes=1, center=False)
+        # the leading EOF is the pattern up to sign
+        cos = jnp.abs(phi[:, 0] @ pattern)
+        np.testing.assert_allclose(cos, 1.0, atol=1e-5)
+
+    def test_rejects_bad_args(self):
+        import inspect
+
+        # unwrapped: the type hook would reject the 3-D input first
+        with pytest.raises(ValueError):
+            inspect.unwrap(eof_basis)(jnp.ones((4, 3, 2)), n_modes=1)
+        with pytest.raises(ValueError):
+            eof_basis(jnp.ones((4, 3)), n_modes=5)  # > min(T, N)
+
+
+def _path(n: int) -> np.ndarray:
+    adjacency = np.zeros((n, n))
+    index = np.arange(n - 1)
+    adjacency[index, index + 1] = adjacency[index + 1, index] = 1.0
+    return adjacency
+
+
+def _cycle(n: int) -> np.ndarray:
+    adjacency = _path(n)
+    adjacency[0, -1] = adjacency[-1, 0] = 1.0
+    return adjacency
+
+
+class TestGraphLaplacian:
+    def test_path_combinatorial_spectrum(self):
+        # D − A of the n-node path: 2 − 2 cos(kπ/n), k = 0, …, n − 1
+        n = 9
+        values, _ = graph_laplacian_eigpairs(_path(n), n, normalized=False)
+        expected = 2 - 2 * np.cos(np.pi * np.arange(n) / n)
+        np.testing.assert_allclose(values, expected, atol=1e-12)
+
+    def test_path_normalised_spectrum(self):
+        # I − D^{−½} A D^{−½} of the n-node path: 1 − cos(kπ/(n − 1))
+        n = 9
+        values, _ = graph_laplacian_eigpairs(_path(n), n)
+        expected = 1 - np.cos(np.pi * np.arange(n) / (n - 1))
+        np.testing.assert_allclose(values, expected, atol=1e-12)
+
+    def test_cycle_spectrum_and_orthonormal_vectors(self):
+        # D − A of the n-cycle: 2 − 2 cos(2πk/n), each k ≠ 0, n/2 twice
+        n = 10
+        values, vectors = graph_laplacian_eigpairs(_cycle(n), n, normalized=False)
+        expected = np.sort(2 - 2 * np.cos(2 * np.pi * np.arange(n) / n))
+        np.testing.assert_allclose(values, expected, atol=1e-12)
+        np.testing.assert_allclose(vectors.T @ vectors, np.eye(n), atol=1e-12)
+        # the constant spans the null space
+        np.testing.assert_allclose(np.abs(vectors[:, 0]), 1 / math.sqrt(n), atol=1e-12)
+
+    def test_symmetrises_and_ignores_self_loops(self):
+        adjacency = _path(5)
+        adjacency[0, 1] = 3.0
+        adjacency[2, 2] = 7.0
+        symmetric = 0.5 * (adjacency + adjacency.T)
+        np.fill_diagonal(symmetric, 0.0)
+        values, _ = graph_laplacian_eigpairs(adjacency, 5, normalized=False)
+        laplacian = np.diag(symmetric.sum(1)) - symmetric
+        np.testing.assert_allclose(
+            values, np.linalg.eigvalsh(laplacian).clip(0), atol=1e-12
+        )
+
+    def test_returns_the_lowest_modes(self):
+        values, vectors = graph_laplacian_eigpairs(_cycle(8), 3)
+        assert values.shape == (3,) and vectors.shape == (8, 3)
+        assert bool(jnp.all(jnp.diff(values) >= 0))
+
+    @pytest.mark.parametrize(
+        ("adjacency", "num_basis", "match"),
+        [
+            (np.zeros((3, 4)), 1, "'adjacency' must be square"),
+            (-_path(3), 1, "non-negative"),
+            (_path(3), 0, "'num_basis' must be an integer in"),
+            (_path(3), 4, "'num_basis' must be an integer in"),
+            (_path(3), 1.5, "'num_basis' must be an integer in"),
+        ],
+    )
+    def test_validation(self, adjacency, num_basis, match):
+        import inspect
+
+        # unwrapped: the type hook would reject the shape or the float first
+        with pytest.raises(ValidationError, match=match):
+            inspect.unwrap(graph_laplacian_eigpairs)(adjacency, num_basis)

@@ -48,6 +48,6 @@ whose inner products $\vect{\phi}(\vect{x})^\top \vect{\phi}(\vect{x}')$ approxi
 
 ## Eigenbases
 
-`functax.basis.eigen` holds the eigenbases of discrete operators. `cotangent_laplacian_eigpairs` solves $\mat{L} \vect{\phi} = \lambda \mat{M} \vect{\phi}$ for the cotangent Laplacian $\mat{L}$ of a triangle mesh and its lumped mass $\mat{M}$, so the eigenvectors are $\mat{M}$-orthonormal and converge to the surface's eigenfunctions under refinement ($\lambda \to \ell(\ell + 1)$ on the unit sphere).
+`functax.basis.eigen` holds the eigenbases of data and of discrete operators. `eof_basis` returns the empirical orthogonal functions of a (sample, grid) data matrix, its leading right singular vectors, with the singular values that set the variance of each mode. `graph_laplacian_eigpairs` returns the low-frequency eigenpairs of the combinatorial or normalised Laplacian of a graph. `cotangent_laplacian_eigpairs` solves $\mat{L} \vect{\phi} = \lambda \mat{M} \vect{\phi}$ for the cotangent Laplacian $\mat{L}$ of a triangle mesh and its lumped mass $\mat{M}$, so the eigenvectors are $\mat{M}$-orthonormal and converge to the surface's eigenfunctions under refinement ($\lambda \to \ell(\ell + 1)$ on the unit sphere).
 
 ::: functax.basis.eigen

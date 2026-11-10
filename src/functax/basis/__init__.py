@@ -6,7 +6,7 @@ windowed features), ``fourier`` (box Laplacian eigenfunctions), ``local``
 (radial bumps, Gabor frames, wavelets), ``vector``
 (divergence-free and curl-free atoms), ``polynomial`` (Legendre), ``sphere``
 (scalar and vector harmonics, needlets, shell bases), ``slepian`` (caps, polar
-gaps, regions) and ``eigen`` (the cotangent Laplacian of a mesh). θ may be
+gaps, regions) and ``eigen`` (EOFs, graph and mesh Laplacians). θ may be
 learned: centres, widths and frequencies are ordinary arrays. Needs the
 ``functax[jax]`` extra.
 """
