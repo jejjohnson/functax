@@ -24,7 +24,7 @@ from jaxtyping import Array, Float, Int
 from functax._src.basis._legendre import _check_degree, legendre_polynomials
 from functax._src.basis._spherical_harmonics import _check_unit_points
 from functax._src.geometry._sphere_grids import gauss_legendre_grid
-from functax._src.quad._gauss_legendre import gauss_legendre
+from functax._src.quad._rules import gauss_legendre
 from functax.exceptions import ValidationError
 
 

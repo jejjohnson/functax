@@ -6,7 +6,19 @@ time stepping) belong to integrix. Needs the ``functax[jax]`` extra.
 
 from __future__ import annotations
 
-from functax._src.quad._gauss_legendre import gauss_legendre
+from functax._src.quad._rules import (
+    Rule,
+    clenshaw_curtis,
+    gauss_legendre,
+    simpson,
+    trapezoid,
+)
 
 
-__all__ = ["gauss_legendre"]
+__all__ = [
+    "Rule",
+    "clenshaw_curtis",
+    "gauss_legendre",
+    "simpson",
+    "trapezoid",
+]
