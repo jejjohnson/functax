@@ -32,6 +32,10 @@ for every pair. The $\mathrm{atan2}$ form is accurate at every angle, where $\ar
 
 `icosphere` subdivides the icosahedron into a quasi-uniform triangle mesh with $V = 10 \cdot 4^{\ell} + 2$ vertices at level $\ell$, and `mesh_vertex_areas` gives any triangle mesh its lumped vertex areas $a_v = \sum_{t \ni v} |t| / 3$, the diagonal of its mass matrix. The grids and meshes are built on the host with NumPy, as static geometry.
 
+## Chebyshev nodes
+
+`chebyshev_nodes(n, kind=..., interval=(a, b))` returns the nodes of the Chebyshev transforms on $[a, b]$, $x_j = c + h \xi_j$ with $c = (a + b)/2$ and $h = (b - a)/2$: the $N + 1$ Gauss–Lobatto nodes $\xi_j = \cos(j\pi/N)$, the extrema of $T_N$ with both ends, for `kind="lobatto"`, or the $N$ Gauss nodes $\xi_j = \cos((2j + 1)\pi/2N)$, the zeros of $T_N$, for `kind="gauss"`. They are the nodes of spectraldiffx's `ChebyshevGrid1D`, `ChebyshevGrid2D` and `ChebyshevGrid3D` at `d68f8f6` (its $[-L, L]$ is `interval=(-L, L)`), in its order, decreasing from the upper end, which is the order `ChebyshevTransform1D` expects. `clenshaw_curtis` orders the same Lobatto nodes ascending, so `clenshaw_curtis(n + 1, interval)` is the quadrature rule for these nodes reversed.
+
 ## Frames
 
 `lonlat_to_ecef` maps geodetic $(\lambda, \varphi)$ and height $h$ on the ellipsoid with semi-major axis $a$ and flattening $f$ to Earth-centred, Earth-fixed coordinates,

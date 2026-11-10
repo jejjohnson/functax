@@ -19,6 +19,7 @@ from functax.geometry.affine import from_pixel, pixel_centres, to_pixel, window
 
 
 if TYPE_CHECKING:
+    from functax._src.geometry._chebyshev import chebyshev_nodes
     from functax._src.geometry._frames import (
         cartesian_to_tangent,
         ecef_to_lonlat,
@@ -64,6 +65,7 @@ __all__ = [
     "Points",
     "RectilinearGrid",
     "cartesian_to_tangent",
+    "chebyshev_nodes",
     "chord_distance",
     "ecef_to_lonlat",
     "enu_basis",
@@ -97,6 +99,7 @@ _LAZY: dict[str, str] = {
     "Points": "functax._src.geometry._types",
     "RectilinearGrid": "functax._src.geometry._types",
     "cartesian_to_tangent": "functax._src.geometry._frames",
+    "chebyshev_nodes": "functax._src.geometry._chebyshev",
     "chord_distance": "functax._src.geometry._sphere",
     "ecef_to_lonlat": "functax._src.geometry._frames",
     "enu_basis": "functax._src.geometry._frames",
