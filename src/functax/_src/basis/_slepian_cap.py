@@ -33,7 +33,7 @@ from functax._src.basis._spherical_harmonics import (
     real_spherical_harmonics,
 )
 from functax._src.geometry._frames import rotation_to_pole
-from functax._src.quad._gauss_legendre import gauss_legendre
+from functax._src.quad._rules import gauss_legendre
 from functax.exceptions import ValidationError
 
 

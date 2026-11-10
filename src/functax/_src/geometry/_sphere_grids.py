@@ -23,7 +23,7 @@ import numpy as np
 from jaxtyping import Array, Float
 
 from functax._src.geometry._sphere import _check_unit
-from functax._src.quad._gauss_legendre import gauss_legendre
+from functax._src.quad._rules import gauss_legendre
 from functax.exceptions import GeometryError
 
 
