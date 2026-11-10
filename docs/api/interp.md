@@ -89,11 +89,11 @@ zero at the knots and $\sigma^2 \Delta_i / 4$ at mid-cell. Two targets with offs
     | --- | --- |
     | Linear | the Brownian bridge between knots |
     | Cubic and smoothing splines | the integrated Wiener process prior |
-    | RBF, kriging, GP | the kernel |
+    | Kriging (`Kriging`), and the GP posterior as simple kriging | the kernel |
     | Variational fits | the posterior precision $\mat{H}^\top \mat{R}^{-1} \mat{H} + \lambda \mat{L}^\top \mat{L}$ |
     | Nearest, inverse distance, PCHIP, neural fields | none, without ensembles |
 
-    Only the linear row exists today; the others arrive with their schemes.
+    The linear and kriging rows exist today; the others arrive with their schemes.
 
 ## Kernels and RBF
 
@@ -108,6 +108,14 @@ $$
 $$
 
 Its plan has a `KernelSolve` fit, which projects onto the null space $\mat{Q}_2$ of $\mat{P}^\top$ (from the complete QR $\mat{P} = \mat{Q} \mat{R}$) and factorises $\mat{Q}_2^\top (\mat{K} + \lambda \mat{I}) \mat{Q}_2$ once with the lineax solver (Cholesky, or LU when `degree` is below the kernel's `min_degree`), and a dense `KernelReadout` $\mat{H} = [\mat{K}_* \mat{P}_*]$, whose adjoint is $\mat{H}^\top \vect{r}$. The fit maps $N$ samples to $N + P$ coefficients, and the saddle matrix is symmetric, so its adjoint $\mathcal{S}^\top$ is the same solve restricted to the data block. The [gridding guide](../gridding/) walks through gridding stations with it.
+
+`Kriging(kernel, drift, nugget)` reads the same system as a Gaussian process: $\mat{K}$ is a covariance, $\lambda = \tau^2$ the nugget and $\mat{P} = \mat{F}$ the drift (`None` for simple kriging, `"constant"` for ordinary, a degree or a callable $F(\vect{x})$ for universal). Its plan is a `GaussianPlan` whose `KernelCovariance` is $\gmat{\Sigma}_*(\vect{x}, \vect{x}') = k(\vect{x}, \vect{x}') - \vect{h}(\vect{x})^\top \mat{A}^{-1} \vect{h}(\vect{x}')$, with $\mat{A}$ the saddle matrix and $\vect{h}(\vect{x}) = [k(\mat{X}, \vect{x}); \vect{f}(\vect{x})]$ a row of the read-out, so its diagonal is the kriging variance
+
+$$
+\sigma^2(\vect{x}_*) = k_{**} - \vect{k}_*^\top \mat{K}^{-1} \vect{k}_* + \vect{u}^\top (\mat{F}^\top \mat{K}^{-1} \mat{F})^{-1} \vect{u} \text{ and } \vect{u} = \vect{f}_* - \mat{F}^\top \mat{K}^{-1} \vect{k}_*.
+$$
+
+It is the variance of the latent field, zero at a noiseless source; a negative part above $10^{-10} k_{**}$ raises, and the rest of the rounding is clipped. `sample` draws from the eigendecomposition of $\gmat{\Sigma}_*$, which is singular wherever a target sits on a noiseless source.
 
 ## Curvilinear grids
 

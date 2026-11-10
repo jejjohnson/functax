@@ -3,8 +3,9 @@
 A scheme with a probabilistic reading has a posterior mean (its plan) and a
 posterior covariance at the targets. Linear interpolation on one axis is the
 posterior mean under a Brownian-motion prior, and its covariance is the
-Brownian bridge of each cell; kriging and the variational fits add dense
-covariances with the same three methods.
+Brownian bridge of each cell. Kriging's covariance, `KernelCovariance`, is
+dense: the prior kernel less what the samples explain, through the same
+saddle-point solve as the mean.
 """
 
 from __future__ import annotations
@@ -22,15 +23,24 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, ArrayLike, Float, Int, PRNGKeyArray
 
+from functax._src._checks import check_values
 from functax._src.geometry._types import Axis
+from functax._src.interp._fit import KernelSolve
+from functax._src.interp._kernels import Kernel, kernel_matrix
 from functax._typing import Shape
 from functax.exceptions import ValidationError
 
 
 __all__ = [
+    "NEGATIVE_VARIANCE_RTOL",
     "BrownianBridge",
+    "KernelCovariance",
     "PosteriorCovariance",
 ]
+
+
+NEGATIVE_VARIANCE_RTOL = 1e-10
+"""How far below 0 rounding may push a kernel posterior variance, relative to k**."""
 
 
 class PosteriorCovariance(eqx.Module):
@@ -284,3 +294,162 @@ class BrownianBridge(PosteriorCovariance):
 
         draw_batched = jnp.vectorize(draw, signature="(target),(target)->(target)")
         return draw_batched(walk_noise, end_noise)
+
+
+class KernelCovariance(PosteriorCovariance):
+    """Σ*(x, x′) = k(x, x′) − h(x)ᵀ A⁻¹ h(x′), the posterior covariance of a kernel fit.
+
+    A is the saddle-point matrix [[K + τ²I, F], [Fᵀ, 0]] of the fit and
+    h(x) = [k(X, x); f(x)] the cross-kernel and the drift at a target. Written
+    out, with the drift's correction u = f* − Fᵀ K⁻¹ k*, this is the kriging
+    variance
+
+        σ²(x*) = k** − k*ᵀ K⁻¹ k* + uᵀ (Fᵀ K⁻¹ F)⁻¹ u,
+
+    which drops the last term without a drift (simple kriging, a Gaussian
+    process posterior). It is the covariance of the latent field: the nugget
+    sits on the sources' diagonal only. Rounding can push σ² slightly below
+    0 where the samples pin the field (at the sources, with no nugget); a
+    negative part above ``NEGATIVE_VARIANCE_RTOL`` · k** raises, and the
+    rest is clipped to 0.
+
+    Algorithm:
+        1. W = A⁻¹ Hᵀ, one `KernelSolve.solve` per target row of H.
+        2. Σ* = K** − H W, symmetrised; σ² = k** − ∑_c H ⊙ Wᵀ.
+        3. `sample` draws ε = V √Λ₊ z from the eigendecomposition
+           Σ* = V Λ Vᵀ, with negative eigenvalues (rounding) set to 0, since
+           Σ* is singular wherever a target sits on a noiseless source.
+
+    Args:
+        fit: The `KernelSolve` of the plan, A factorised.
+        read: H, the (M, N + P) read-out [K* F*].
+        targets: x*, the M target coordinates.
+        kernel: k, the prior covariance.
+
+    Raises:
+        ValidationError: If ``read`` and ``targets`` do not have one row per
+            target, or ``read`` does not have N + P columns.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Points
+        >>> from functax.interp import Kriging, Wendland
+        >>> sources = Points(jnp.array([[0.0], [1.0], [2.0]]))
+        >>> targets = Points(jnp.array([[0.0], [0.5]]))
+        >>> plan = Kriging(Wendland(2, support=3.0), drift=None).plan(
+        ...     sources, targets
+        ... )
+        >>> variance = plan.posterior.variance()
+        >>> # zero at a noiseless source, positive between two
+        >>> bool(jnp.allclose(variance[0], 0.0)), bool(variance[1] > 0.0)
+        (True, True)
+        >>> plan.posterior.covariance().shape
+        (2, 2)
+    """
+
+    fit: KernelSolve
+    read: Float[Array, "target coefficient"]
+    targets: Float[Array, "target dim"]
+    kernel: Kernel = eqx.field(static=True)
+
+    def __check_init__(self) -> None:
+        n_target = self.read.shape[0]
+        if self.targets.ndim != 2 or self.targets.shape[0] != n_target:
+            msg = (
+                f"'targets' must have one row per row of 'read' ({n_target}), "
+                f"got shape {self.targets.shape}"
+            )
+            raise ValidationError(msg)
+        n_coefficients = self.fit.n_source + self.fit.n_terms
+        if self.read.shape[1] != n_coefficients:
+            msg = (
+                f"'read' must have the fit's {n_coefficients} coefficients as "
+                f"columns, got shape {self.read.shape}"
+            )
+            raise ValidationError(msg)
+
+    @property
+    def n_target(self) -> int:
+        """M, the number of targets."""
+        return self.read.shape[0]
+
+    def _weights(self) -> Float[Array, "target coefficient"]:
+        """W, with row k equal to A⁻¹ hₖ."""
+        return self.fit.solve(self.read)
+
+    def _prior_variance(self) -> Float[Array, " target"]:
+        """k(x*ₖ, x*ₖ) at each target."""
+
+        def at(target: jax.Array) -> jax.Array:
+            point = einx.id("dim -> 1 dim", target)
+            return kernel_matrix(self.kernel, point, point)[0, 0]
+
+        return jax.vmap(at)(self.targets)
+
+    def variance(self) -> Float[Array, " target"]:
+        """σ²(x*) = k** − hᵀ A⁻¹ h, clipped at 0 after the rounding check.
+
+        Returns:
+            The posterior variance at each target.
+
+        Raises:
+            ValidationError: If σ² < −``NEGATIVE_VARIANCE_RTOL`` · k** at a
+                target (checked when run under ``jit``): the kernel is not
+                positive definite on the sources, or needs a nugget.
+        """
+        prior = self._prior_variance()
+        # hᵀ A⁻¹ h, row by row
+        explained = einx.dot(
+            "target coefficient, target coefficient -> target",
+            self.read,
+            self._weights(),
+        )
+        variance = prior - explained
+        tolerance = NEGATIVE_VARIANCE_RTOL * jnp.abs(prior)
+        too_negative = jnp.any(variance < -tolerance)
+        variance = check_values(
+            variance,
+            too_negative,
+            "the kernel posterior variance must be non-negative up to "
+            f"{NEGATIVE_VARIANCE_RTOL:g} · k(x*, x*); is the kernel positive "
+            "definite on the sources, or does it need a nugget",
+        )
+        return jnp.maximum(variance, jnp.zeros((), variance.dtype))
+
+    def covariance(self) -> Float[Array, "target target"]:
+        """Σ* = K** − H A⁻¹ Hᵀ, dense (M, M) and symmetric.
+
+        Returns:
+            Σ*.
+        """
+        prior = kernel_matrix(self.kernel, self.targets, self.targets)
+        explained = einx.dot(
+            "row coefficient, col coefficient -> row col",
+            self.read,
+            self._weights(),
+        )
+        covariance = prior - explained
+        transposed = einx.id("row col -> col row", covariance)
+        return (covariance + transposed) / 2
+
+    def sample(
+        self, batch_shape: Shape, *, key: PRNGKeyArray
+    ) -> Float[Array, "*batch target"]:
+        """ε ~ 𝒩(0, Σ*), from the eigendecomposition of Σ*.
+
+        Args:
+            batch_shape: The leading shape of independent draws, () for one.
+            key: The PRNG key.
+
+        Returns:
+            ε, of shape (*batch_shape, M), in the dtype of ``read``.
+        """
+        covariance = self.covariance()
+        eigenvalues, eigenvectors = jnp.linalg.eigh(covariance)
+        # √Λ₊: the negative eigenvalues are rounding on a singular Σ*
+        root = _safe_sqrt(jnp.maximum(eigenvalues, jnp.zeros((), eigenvalues.dtype)))
+        shape = (*batch_shape, self.n_target)
+        noise = jax.random.normal(key, shape, covariance.dtype)
+        scaled = einx.multiply("... mode, mode -> ... mode", noise, root)
+        # ε = V √Λ₊ z
+        return einx.dot("... mode, target mode -> ... target", scaled, eigenvectors)

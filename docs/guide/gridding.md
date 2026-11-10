@@ -109,3 +109,48 @@ The kernel is anything that takes the targets and the sources and returns their 
 - [`Wendland(smoothness, support)`](xref:api#functax.interp.Wendland) is the compact $C^2$ or $C^4$ Wendland function of $r / \rho$, zero beyond the support radius $\rho$. It is positive definite in up to three dimensions and needs no tail.
 
 The plan's fit is a [`KernelSolve`](xref:api#functax.interp.KernelSolve), which factorises the saddle-point system once when the plan is built and solves it for each field. It projects onto the null space of $\mat{P}^\top$ (a QR factorisation of $\mat{P}$), where the kernel is positive definite, and factorises that block with the lineax solver you pass (Cholesky by default). The system is symmetric, so the adjoint of the fit is the same solve, and `plan.adjoint` and `plan.operator()` work as for any other plan. Building costs $O(N^3)$ and the dense $M \times (N + P)$ read-out; applying costs $O(N^2 + MN)$ per field, so RBF suits up to a few thousand sources.
+
+## Kriging
+
+Kriging reads the same system as a Gaussian process. The kernel is a covariance $k$, the tail is a drift, and the smoothing is the nugget $\tau^2$, the noise variance of the samples, so one plan gives the map and its uncertainty. With the $N \times N$ covariance $\mat{K}$ on the sources, the $N \times P$ drift matrix $\mat{F}$, and at one target $\vect{x}_*$ the cross-covariance $\vect{k}_* = k(\mat{X}, \vect{x}_*) \in \mathbb{R}^N$, the prior variance $k_{**} = k(\vect{x}_*, \vect{x}_*)$ and the drift $\vect{f}_* \in \mathbb{R}^P$, the mean is the RBF read-out with $\lambda = \tau^2$, and the variance is
+
+$$
+\sigma^2(\vect{x}_*) = k_{**} - \vect{k}_*^\top \mat{K}_\tau^{-1} \vect{k}_* + \vect{u}^\top (\mat{F}^\top \mat{K}_\tau^{-1} \mat{F})^{-1} \vect{u} \text{ with } \vect{u} = \vect{f}_* - \mat{F}^\top \mat{K}_\tau^{-1} \vect{k}_*,
+$$
+
+where $\mat{K}_\tau = \mat{K} + \tau^2 \mat{I}$. The last term is what estimating the drift costs. The `drift` picks the flavour:
+
+| `drift` | Kriging | $\mat{F}$ |
+|---|---|---|
+| `None` | simple (known zero mean), the GP posterior | none |
+| `"constant"` (the default) | ordinary, weights that sum to 1 | a column of ones |
+| a degree $d$ | universal, reproduces polynomial trends up to $d$ | monomials up to $d$ |
+| a callable $F(\vect{x})$ | universal, with your own drift | $F(\mat{X})$ |
+
+```python
+import jax
+import jax.numpy as jnp
+from functax.geometry import Axis, Points, RectilinearGrid
+from functax.interp import Kriging
+
+stations = Points(jax.random.uniform(jax.random.key(0), (50, 2)))
+grid = RectilinearGrid(
+    (Axis(jnp.linspace(0.0, 1.0, 20)), Axis(jnp.linspace(0.0, 1.0, 30)))
+)
+temperature = jnp.sin(3.0 * stations.xy[:, 0]) + stations.xy[:, 1] ** 2
+
+
+def covariance(targets, sources):
+    # σ² = 1, ℓ = 0.2; from a variogram fit, say
+    squared = jnp.sum((targets[:, None, :] - sources[None, :, :]) ** 2, axis=-1)
+    return jnp.exp(-0.5 * squared / 0.2**2)
+
+
+plan = Kriging(kernel=covariance, drift="constant", nugget=1e-4).plan(stations, grid)
+plan(temperature).shape  # (600,), the kriging mean
+plan.variance().shape  # (600,), the kriging variance
+fields = jnp.broadcast_to(temperature, (16, 50))
+plan.sample(fields, key=jax.random.key(1)).shape  # (16, 600)
+```
+
+The plan is a [`GaussianPlan`](xref:api#functax.interp.GaussianPlan) whose covariance is a [`KernelCovariance`](xref:api#functax.interp.KernelCovariance): `variance()`, `covariance()` and `sample(y, key=…)` reuse the factorised system of the mean, and the variance is that of the latent field (the nugget sits on the sources only), so it is zero at a noiseless source. Rounding can push it a hair below zero there; anything below $-10^{-10} k_{**}$ raises, because it means the covariance is not positive definite on the sources, and the rest is clipped to zero. The covariance's hyperparameters come from outside, from a variogram fit in kernellib for example, and the solve uses no jitter but your nugget.
