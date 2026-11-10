@@ -21,6 +21,7 @@ from _harness import (
 from functax._src.interp._clip import planar_polygon_area
 from functax._src.interp._conservative import _node_corners, _polygon_cells
 from functax.geometry import (
+    AffineGrid,
     Axis,
     CurvilinearGrid,
     RectilinearGrid,
@@ -48,6 +49,24 @@ def grid_from_edges(*edges: np.ndarray) -> RectilinearGrid:
 def cell_areas(*edges: np.ndarray) -> np.ndarray:
     lengths = [np.abs(np.diff(e)) for e in edges]
     return np.prod(np.meshgrid(*lengths, indexing="ij"), axis=0).ravel()
+
+
+def source_cell_areas(source: object, *, sphere: bool, unit: str | None) -> np.ndarray:
+    """|cⱼ| of the plan's own source cells, for the conservation checks."""
+    cells = _polygon_cells(source, "source", unit if sphere else None)
+    if sphere:
+        return np.abs(np.asarray(spherical_polygon_area(jnp.asarray(cells))))
+    counts = np.full(len(cells), 4)
+    return np.abs(planar_polygon_area(cells, counts))
+
+
+def warped_swath(
+    n_rows: int, n_cols: int, *, scale: float, shift: tuple
+) -> CurvilinearGrid:
+    rows, cols = np.meshgrid(np.arange(n_rows), np.arange(n_cols), indexing="ij")
+    x = shift[0] + scale * (cols + 0.15 * rows + 0.02 * rows**2)
+    y = shift[1] + scale * (rows + 0.1 * np.sin(cols))
+    return CurvilinearGrid(x=jnp.asarray(x), y=jnp.asarray(y))
 
 
 class TestConservation:
@@ -163,6 +182,46 @@ class TestGeometries:
         expected = einx.id("(y x) -> y x", plan(field), y=4)[1:3, 0:2]
         np.testing.assert_array_equal(np.asarray(window), np.asarray(expected).ravel())
 
+    def test_default_edges_are_midpoints(self) -> None:
+        # source cells [−½, ½], [½, 2], [2, 4]
+        source = Axis(jnp.array([0.0, 1.0, 3.0]))
+        target = Axis(jnp.array([0.0, 3.0]), edges=jnp.array([-0.5, 1.0, 4.0]))
+        weights = Conservative().plan(source, target).read.to_dense()
+        expected = [[1.0 / 1.5, 0.5 / 1.5, 0.0], [0.0, 1.0 / 3.0, 2.0 / 3.0]]
+        assert_matches_oracle(weights, expected, rtol=1e-15)
+
+    def test_descending_axes(self) -> None:
+        rng = np.random.default_rng(8)
+        edges = random_edges(rng, 6, 0.0, 1.0)
+        target_edges = np.array([0.0, 0.3, 1.0])
+        field = jnp.asarray(rng.normal(size=6))
+        ascending = Conservative().plan(
+            axis_from_edges(edges), axis_from_edges(target_edges)
+        )(field)
+        descending = Conservative().plan(
+            axis_from_edges(edges[::-1].copy()),
+            axis_from_edges(target_edges[::-1].copy()),
+        )(field[::-1])
+        assert_matches_oracle(descending, ascending[::-1], rtol=1e-14)
+
+    def test_a_north_up_affine_grid_equals_its_rectilinear_grid(self) -> None:
+        source = AffineGrid([2.0, 0.0, 10.0, 0.0, -1.0, 8.0], (8, 6))
+        target = AffineGrid([3.0, 0.0, 10.0, 0.0, -2.0, 8.0], (4, 4))
+        rows = grid_from_edges(8.0 - np.arange(9.0), 10.0 + 2.0 * np.arange(7.0))
+        target_rows = grid_from_edges(
+            8.0 - 2.0 * np.arange(5.0), 10.0 + 3.0 * np.arange(5.0)
+        )
+        field = jnp.asarray(np.random.default_rng(9).normal(size=48))
+        affine = Conservative().plan(source, target)
+        rectilinear = Conservative().plan(rows, target_rows)
+        assert affine.target_shape == (4, 4)
+        assert_matches_oracle(affine(field), rectilinear(field), rtol=1e-15)
+
+    def test_keeps_float32_weights(self) -> None:
+        axis = Axis(jnp.arange(4.0, dtype=jnp.float32))
+        plan = Conservative().plan(axis, Axis(jnp.array([0.5, 2.5], jnp.float32)))
+        assert plan.read.weights.dtype == jnp.float32
+
 
 def test_jit_and_vmap_agree_with_a_loop() -> None:
     rng = np.random.default_rng(10)
@@ -188,27 +247,6 @@ def test_gradient_matches_finite_differences() -> None:
     )
     plan = Conservative().plan(source, target)
     assert_grad_matches_fd(plan, jnp.asarray(rng.normal(size=20)))
-
-
-# --- curvilinear and spherical cells (#41) ---
-
-
-def source_cell_areas(source: object, *, sphere: bool, unit: str | None) -> np.ndarray:
-    """|cⱼ| of the plan's own source cells, for the conservation checks."""
-    cells = _polygon_cells(source, "source", unit if sphere else None)
-    if sphere:
-        return np.abs(np.asarray(spherical_polygon_area(jnp.asarray(cells))))
-    counts = np.full(len(cells), 4)
-    return np.abs(planar_polygon_area(cells, counts))
-
-
-def warped_swath(
-    n_rows: int, n_cols: int, *, scale: float, shift: tuple
-) -> CurvilinearGrid:
-    rows, cols = np.meshgrid(np.arange(n_rows), np.arange(n_cols), indexing="ij")
-    x = shift[0] + scale * (cols + 0.15 * rows + 0.02 * rows**2)
-    y = shift[1] + scale * (rows + 0.1 * np.sin(cols))
-    return CurvilinearGrid(x=jnp.asarray(x), y=jnp.asarray(y))
 
 
 class TestCurvilinear:
@@ -344,3 +382,52 @@ def test_matches_xesmf_on_a_curvilinear_grid() -> None:
     inside = np.asarray(einx.id("(x y) -> y x", plan.valid, x=11))
     assert inside.any()
     assert_matches_oracle(actual, expected, rtol=1e-8, where=inside)
+
+
+class TestPolicies:
+    source = Axis(jnp.arange(4.0) + 0.5)
+    target = Axis(
+        jnp.array([0.0, 2.0, 3.5, 5.0]), edges=jnp.array([-1.0, 1.0, 3.0, 4.0, 6.0])
+    )
+    field = jnp.array([1.0, 2.0, 3.0, 4.0])
+
+    def test_nan_marks_partly_covered_cells_invalid(self) -> None:
+        plan = Conservative().plan(self.source, self.target)
+        assert plan.valid.tolist() == [False, True, True, False]
+        assert_matches_oracle(plan(self.field), [np.nan, 2.5, 4.0, np.nan], rtol=1e-15)
+
+    def test_renormalise_averages_the_valid_covered_area(self) -> None:
+        plan = Conservative().plan(
+            self.source, self.target, policies=Policies(missing="renormalise")
+        )
+        masked = self.field.at[2].set(jnp.nan)
+        # a coastal mask: cell [1, 3] reads only its valid half
+        assert_matches_oracle(plan(masked), [1.0, 2.0, 4.0, np.nan], rtol=1e-15)
+
+
+class TestPolygonPath:
+    @staticmethod
+    def swath(y: np.ndarray, x: np.ndarray) -> CurvilinearGrid:
+        rows, cols = np.meshgrid(y, x, indexing="ij")
+        return CurvilinearGrid(x=jnp.asarray(cols), y=jnp.asarray(rows))
+
+    def test_degenerate_cells_give_zero_weight(self) -> None:
+        # three equal node rows: the middle one's cells have no area
+        collapsed = self.swath(np.array([0.0, 1.0, 1.0, 1.0, 2.0]), np.arange(3.0))
+        grid = RectilinearGrid(
+            (
+                Axis(jnp.array([0.0, 2.0]), edges=jnp.array([-1.0, 1.0, 3.0])),
+                Axis(jnp.array([0.0, 2.0]), edges=jnp.array([-1.0, 1.0, 3.0])),
+            )
+        )
+        keep = Policies(outside="extrapolate")
+        plan = Conservative().plan(collapsed, grid, policies=keep)
+        weights = np.asarray(plan.read.to_dense())
+        middle = einx.id("(y x) -> y x", np.arange(15), y=5)[2]
+        assert np.all(weights[:, middle] == 0.0)
+        assert np.all(weights.sum(axis=0)[np.setdiff1d(np.arange(15), middle)] > 0)
+        # as a target, a cell of no area is invalid
+        plan = Conservative().plan(grid, collapsed, policies=Policies(outside="clamp"))
+        rows = einx.id("(y x) -> y x", plan.valid, y=5)
+        assert not np.any(np.asarray(rows[2]))
+        assert np.all(np.asarray(plan.read.weights)[middle] == 0.0)

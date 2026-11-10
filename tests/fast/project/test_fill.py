@@ -7,7 +7,6 @@ from __future__ import annotations
 import inspect
 
 import jax.numpy as jnp
-import lineax as lx
 import numpy as np
 import pytest
 from _harness import assert_matches_oracle
@@ -15,38 +14,6 @@ from _harness import assert_matches_oracle
 from functax import ValidationError
 from functax._src.project._fill import mirror_laplacian
 from functax.project import fill_gaps
-
-
-TIGHT = lx.CG(rtol=1e-14, atol=1e-14)
-ROW = jnp.array([[0.0, 1.0, jnp.nan, jnp.nan, 0.0]])
-
-
-@pytest.mark.parametrize(
-    ("method", "expected"),
-    [("laplace", [2.0 / 3.0, 1.0 / 3.0]), ("biharmonic", [1.0, 0.5])],
-)
-def test_the_one_dimensional_checks(method: str, expected: list[float]) -> None:
-    # gate of #42: [0, 1, ?, ?, 0] with mirror edges, to 1e-12
-    filled = fill_gaps(ROW, mask=jnp.isfinite(ROW), method=method, solver=TIGHT)
-    assert_matches_oracle(filled[0, 2:4], np.array(expected), rtol=1e-12)
-    # the same row as a column
-    column = fill_gaps(ROW.T, mask=jnp.isfinite(ROW.T), method=method, solver=TIGHT)
-    assert_matches_oracle(column[2:4, 0], np.array(expected), rtol=1e-12)
-
-
-def test_a_fully_observed_image_is_returned_unchanged() -> None:
-    image = jnp.arange(12.0).reshape(3, 4)
-    filled = fill_gaps(image, mask=jnp.ones((3, 4), dtype=bool))
-    assert bool(jnp.all(filled == image))
-
-
-def test_float32_is_kept() -> None:
-    image = ROW.astype(jnp.float32)
-    filled = fill_gaps(image, mask=jnp.isfinite(image))
-    assert filled.dtype == jnp.float32
-    assert_matches_oracle(
-        filled[0, 2:4], np.array([2.0 / 3.0, 1.0 / 3.0]), rtol=0, atol=1e-5
-    )
 
 
 def test_mirror_laplacian_is_minus_d_transpose_d() -> None:

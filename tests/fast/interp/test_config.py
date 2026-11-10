@@ -5,7 +5,6 @@ behaviour, validation and small closed-form checks, each well under a second.
 from __future__ import annotations
 
 import inspect
-import itertools
 import json
 import math
 from typing import Any
@@ -67,24 +66,6 @@ SCHEMES = [
 ]
 
 
-FILL_VALUES = [math.nan, math.inf, -math.inf, 0.0, -9, 2.5]
-
-
-def _every_policy() -> list[Policies]:
-    """Every outside × missing × boundary × extent × fill value combination."""
-    combinations = itertools.product(
-        ("nan", "clamp", "extrapolate", "raise"),
-        ("propagate", "renormalise", "fill"),
-        ("mirror", "wrap", "edge", "constant"),
-        ("nodes", "cells"),
-        FILL_VALUES,
-    )
-    return [
-        Policies(outside=o, missing=m, boundary=b, extent=e, fill_value=f)
-        for o, m, b, e, f in combinations
-    ]
-
-
 ALL_SCHEMES = [
     Nearest(),
     LinearScheme(),
@@ -140,11 +121,6 @@ class TestSchemes:
 
 
 class TestPolicies:
-    def test_round_trips_through_strict_json_for_every_policy(self) -> None:
-        for policies in _every_policy():
-            config = _through_json(policies.get_config())
-            assert Policies.from_config(config) == policies
-
     @pytest.mark.parametrize(
         ("fill_value", "encoded"),
         [

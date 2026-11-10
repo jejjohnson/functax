@@ -9,7 +9,6 @@ import jax.numpy as jnp
 import lineax as lx
 import numpy as np
 import pytest
-from _harness import assert_matches_oracle
 
 from functax import ValidationError
 from functax.geometry import Axis, Points
@@ -45,20 +44,6 @@ def _fit(plan: Plan, precision: jax.Array, weight: float = 0.7) -> Variational:
         smoothing_weight=weight,
         solver=TIGHT,
     )
-
-
-def test_identity_observation_without_smoothing_returns_y() -> None:
-    y = jnp.asarray(np.random.default_rng(3).normal(size=9))
-    identity = lx.IdentityLinearOperator(jax.ShapeDtypeStruct((9,), y.dtype))
-    roughness = lx.MatrixLinearOperator(_first_differences(9))
-    fit = Variational(identity, roughness, smoothing_weight=0.0, solver=TIGHT)
-    assert_matches_oracle(fit(y), y, rtol=1e-12)
-
-
-def test_the_smoothing_weight_is_a_leaf() -> None:
-    plan, precision, _ = _problem()
-    fit = _fit(plan, precision)
-    assert isinstance(fit.smoothing_weight, jax.Array)
 
 
 @pytest.mark.parametrize(

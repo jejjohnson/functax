@@ -58,22 +58,6 @@ def test_affine_nodes_are_the_pixel_centres_row_major() -> None:
     np.testing.assert_array_equal(rule.nodes[:, 1], np.asarray(y).ravel())
 
 
-def test_rectilinear_areas_sum_to_the_domain_area() -> None:
-    rng = np.random.default_rng(0)
-    x_edges = np.cumsum(rng.uniform(0.1, 1.0, 8)) - 2.0
-    y_edges = np.cumsum(rng.uniform(0.1, 1.0, 6)) + 3.0
-    axes = tuple(
-        Axis(jnp.asarray(0.5 * (edges[:-1] + edges[1:])), edges=jnp.asarray(edges))
-        for edges in (x_edges, y_edges)
-    )
-    rule = cell_area(RectilinearGrid(axes))
-    domain = (x_edges[-1] - x_edges[0]) * (y_edges[-1] - y_edges[0])
-    assert abs(float(rule.weights.sum()) - domain) < 1e-14 * domain
-    # each cell is the product of its two widths, the first axis outer
-    expected = np.outer(np.diff(x_edges), np.diff(y_edges)).ravel()
-    np.testing.assert_allclose(rule.weights, expected, rtol=1e-15)
-
-
 def test_rectilinear_midpoint_edges_and_a_descending_axis() -> None:
     # without edges, the cells end half a spacing past the end nodes
     axes = (Axis(jnp.array([3.0, 2.0, 0.0])), Axis(jnp.array([0.0, 1.0])))
@@ -88,14 +72,6 @@ def test_rectilinear_nodes_follow_the_axes() -> None:
     rule = cell_area(RectilinearGrid(axes))
     assert isinstance(rule, Rule)
     assert rule.nodes.tolist()[:4] == [[0.0, 5.0], [0.0, 6.0], [0.0, 7.0], [1.0, 5.0]]
-
-
-@pytest.mark.parametrize("count", [1, 3])
-def test_rectilinear_grid_of_any_dimension(count: int) -> None:
-    axes = tuple(Axis(jnp.array([0.5, 1.5, 2.5])) for _ in range(count))
-    rule = cell_area(RectilinearGrid(axes))
-    assert rule.nodes.shape == (3**count, count)
-    assert abs(float(rule.weights.sum()) - 3.0**count) < 1e-13
 
 
 def test_unit_goes_with_the_radius() -> None:

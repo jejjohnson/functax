@@ -12,14 +12,23 @@ import pytest
 from _harness import assert_adjoint, assert_matches_oracle, assert_transpose_matches
 from scipy.interpolate import LinearNDInterpolator
 
+from functax import OutsideDomainError
 from functax.geometry import (
+    Axis,
     Points,
+    RectilinearGrid,
     icosphere,
     local_tangent_plane,
     lonlat_to_unit,
     unit_to_lonlat,
 )
-from functax.interp import Delaunay
+from functax.interp import Delaunay, Policies
+
+
+SQUARE = Points(jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]))
+
+
+TARGETS = Points(jnp.array([[0.25, 0.5], [0.9, 0.8], [2.0, 2.0], [-0.1, 0.5]]))
 
 
 RNG = np.random.default_rng(38)
@@ -90,3 +99,42 @@ def test_a_given_icosphere_mesh_on_a_tangent_plane_equals_a_fresh_triangulation(
     assert_matches_oracle(
         mesh.read.to_dense(), fresh.read.to_dense(), rtol=1e-12, atol=1e-14
     )
+
+
+def test_outside_the_hull_is_invalid_with_taps_at_vertex_zero() -> None:
+    plan = Delaunay().plan(SQUARE, TARGETS)
+    assert plan.valid.tolist() == [True, True, False, False]
+    assert plan.read.indices[2:].tolist() == [[0, 0, 0], [0, 0, 0]]
+    assert plan.read.weights[2:].tolist() == [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+    values = plan(jnp.array([1.0, 3.0, 4.0, 6.0]))
+    assert np.isnan(values[2:]).all()
+    with pytest.raises(OutsideDomainError, match="2 of 4 targets"):
+        Delaunay().plan(SQUARE, TARGETS, policies=Policies(outside="raise"))
+
+
+def test_float32_coordinates_keep_float32_weights() -> None:
+    source = Points(jnp.asarray(SQUARE.xy, dtype=jnp.float32))
+    target = Points(jnp.asarray(TARGETS.xy, dtype=jnp.float32))
+    assert Delaunay().plan(source, target).read.weights.dtype == jnp.float32
+
+
+def test_a_grid_target_keeps_its_shape() -> None:
+    grid = RectilinearGrid(
+        (Axis(jnp.linspace(0.0, 1.0, 3)), Axis(jnp.linspace(0.0, 1.0, 4)))
+    )
+    plan = Delaunay().plan(SQUARE, grid)
+    assert plan.grid_shape == (3, 4)
+    assert bool(plan.valid.all())
+
+
+def test_weights_sum_to_one_inside() -> None:
+    plan = Delaunay().plan(SQUARE, TARGETS)
+    totals = np.asarray(plan.read.weights).sum(axis=1)
+    np.testing.assert_allclose(totals[:2], 1.0, rtol=1e-14)
+
+
+def test_a_given_mesh_equals_its_fresh_triangulation() -> None:
+    fresh = Delaunay().plan(SQUARE, TARGETS)
+    mesh = Delaunay(simplices=[[0, 1, 3], [0, 3, 2]]).plan(SQUARE, TARGETS)
+    np.testing.assert_allclose(mesh.read.to_dense(), fresh.read.to_dense(), atol=1e-15)
+    assert mesh.valid.tolist() == fresh.valid.tolist()

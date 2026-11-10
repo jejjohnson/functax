@@ -6,6 +6,7 @@ checks, each a second or more (mostly einx compiling new shapes).
 from __future__ import annotations
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from functax import ValidationError
@@ -28,3 +29,16 @@ class TestSerialize:
         other = Linear().plan(GRID, Points(jnp.zeros((2, 2))))
         with pytest.raises(ValidationError, match="'data' does not match 'like'"):
             Plan.deserialize(data, like=other)
+
+    def test_a_concrete_plan_is_a_template_too(self) -> None:
+        plan = Linear().plan(GRID, self.targets)
+        restored = Plan.deserialize(plan.serialize(), like=plan)
+        np.testing.assert_array_equal(restored(self.field), plan(self.field))
+
+    def test_rejects_truncated_and_padded_data(self) -> None:
+        plan = Linear().plan(GRID, self.targets)
+        data = plan.serialize()
+        with pytest.raises(ValidationError, match="'data' does not match 'like'"):
+            Plan.deserialize(data[: len(data) // 2], like=plan)
+        with pytest.raises(ValidationError, match="holds more leaves than 'like'"):
+            Plan.deserialize(data + data, like=plan)

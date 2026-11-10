@@ -21,6 +21,7 @@ from _harness import (
 )
 from hypothesis import given, settings
 
+from functax import OutsideDomainError
 from functax.geometry import (
     AffineGrid,
     Axis,
@@ -207,6 +208,58 @@ class TestWarped:
         # float32 coordinates near 10 resolve the index to about 1e-5
         assert_matches_oracle(cell + offset, truth, rtol=0.0, atol=1e-4)
 
+    def test_the_found_position_maps_back_to_the_target(self) -> None:
+        x, y = _warped_nodes((8, 9))
+        rng = np.random.default_rng(11)
+        # any point within two units of the central cell, not built from a cell
+        centre = [_bilinear(nodes, 3, 4, 0.5, 0.5) for nodes in (x, y)]
+        targets = np.asarray(centre) + rng.uniform(-2.0, 2.0, size=(200, 2))
+        cell, offset, inside = locate_curvilinear(_warped(), jnp.asarray(targets))
+        assert bool(jnp.all(inside))
+        row, col = np.asarray(cell).T
+        s, t = np.asarray(offset).T
+        # on the far edge node u = N − 1 sits in cell N − 1; read the last cell
+        row_cell = np.minimum(row, 6)
+        col_cell = np.minimum(col, 7)
+        s = s + (row - row_cell)
+        t = t + (col - col_cell)
+        mapped = np.column_stack(
+            [
+                _bilinear(x, row_cell, col_cell, s, t),
+                _bilinear(y, row_cell, col_cell, s, t),
+            ]
+        )
+        assert_matches_oracle(mapped, targets, rtol=1e-12, atol=1e-12)
+
+    def test_linear_reproduces_affine_functions_of_the_index(self) -> None:
+        targets, truth = _warped_targets((8, 9), 200, seed=12)
+        rows, cols = np.meshgrid(np.arange(8.0), np.arange(9.0), indexing="ij")
+        # f = 2 − 0.7 r + 1.3 c at the nodes
+        field = 2.0 - 0.7 * rows + 1.3 * cols
+        plan = Linear().plan(_warped(), Points(jnp.asarray(targets)))
+        expected = 2.0 - 0.7 * truth[:, 0] + 1.3 * truth[:, 1]
+        assert_matches_oracle(
+            plan(jnp.asarray(field.ravel())), expected, rtol=1e-12, atol=1e-12
+        )
+
+    def test_the_walk_leaves_the_nearest_cell(self) -> None:
+        targets, truth = _warped_targets((8, 9), 500, seed=13)
+        grid = _warped()
+        _, _, without_walk = locate_curvilinear(grid, jnp.asarray(targets), n_walks=0)
+        cell, offset, inside = locate_curvilinear(grid, jnp.asarray(targets))
+        # some targets do not sit in the cell with the nearest centre
+        assert int(jnp.sum(without_walk)) < 500
+        assert bool(jnp.all(inside))
+        assert_matches_oracle(cell + offset, truth, rtol=1e-12, atol=1e-12)
+
+    def test_too_few_newton_steps_find_nothing(self) -> None:
+        targets, _ = _warped_targets((8, 9), 20, seed=14)
+        _, offset, inside = locate_curvilinear(
+            _warped(), jnp.asarray(targets), n_steps=1
+        )
+        assert not bool(jnp.any(inside))
+        assert bool(jnp.all(jnp.isnan(offset)))
+
 
 class TestOutside:
     def test_targets_outside_are_invalid(self) -> None:
@@ -229,6 +282,23 @@ class TestOutside:
         _, _, cells = locate_curvilinear(swath, targets, extent="cells")
         assert nodes.tolist() == [False, False]
         assert cells.tolist() == [True, True]
+
+    def test_raise(self) -> None:
+        targets = Points(
+            from_pixel(AFFINE.transform, jnp.array([[2.0, 2.0], [9.0, 1.0]]))
+        )
+        with pytest.raises(OutsideDomainError, match="1 of 2 targets"):
+            Linear().plan(
+                _affine_in_disguise(), targets, policies=Policies(outside="raise")
+            )
+
+    def test_non_finite_targets_are_invalid_under_every_policy(self) -> None:
+        targets = Points(jnp.array([[jnp.nan, 45.0], [104.0, 46.0]]))
+        for outside in ("nan", "clamp", "extrapolate"):
+            plan = Linear().plan(
+                _affine_in_disguise(), targets, policies=Policies(outside=outside)
+            )
+            assert plan.valid.tolist() == [False, True]
 
 
 class TestAdjoint:

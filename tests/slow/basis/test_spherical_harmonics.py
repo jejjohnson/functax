@@ -183,3 +183,12 @@ def test_gradient_finite_at_poles(l_max):
     )
     assert jac.shape == (2, (l_max + 1) ** 2, 3)
     assert bool(jnp.isfinite(jac).all())
+
+
+def test_trace_size_independent_of_degree():
+    x = jnp.asarray(_unit_points(4), dtype=jnp.float32)
+
+    def n_eqns(l_max):
+        return len(jax.make_jaxpr(lambda u: real_spherical_harmonics(u, l_max))(x).eqns)
+
+    assert n_eqns(10) == n_eqns(60)

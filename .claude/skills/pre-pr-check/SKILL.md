@@ -1,6 +1,6 @@
 ---
 name: pre-pr-check
-description: Run the repository's full pre-PR verification — ruff lint and format on the whole repo, ty on the package and scripts, the whole test suite with doctests and the coverage gate, the capability index, the lockfile and the assembled docs build. Use before committing, pushing or opening a pull request, and after any change to public API, dependencies, docstrings or docs.
+description: Run the repository's full pre-PR verification — ruff lint and format on the whole repo, ty on the package and scripts, the targeted tests of the change (CI runs every tier and the coverage gate), the capability index, the lockfile and the assembled docs build. Use before committing, pushing or opening a pull request, and after any change to public API, dependencies, docstrings or docs.
 ---
 
 # Pre-PR check
@@ -13,10 +13,10 @@ Run from the repo root and fix what fails before committing. Report results hone
 uv run --group lint ruff check .          # entire repo: tests/, scripts/, notebook cells
 uv run --group lint ruff format --check .
 uv run poe typecheck                            # ty on src/functax and scripts (what CI runs)
-uv run poe test-cov                             # every test + doctests, with the 90 % coverage gate (what CI runs)
+uv run pytest --no-cov <the targeted tests>    # see "Which tests to run while you work" in AGENTS.md
 ```
 
-`uv run poe test` is the same suite without coverage, and `uv run poe test-fast` the fast tier and the doctests alone, for quick iterations ("Test tiers" in `AGENTS.md`). For a part of the suite, pass `--no-cov` (a subset never reaches the gate): `uv run pytest --no-cov tests/fast/<file>.py`.
+The targeted tests are the fast and slow test files of each module the diff changes, the module's doctests, the direct consumers of a changed shared primitive and the contract test whose pinned behaviour changed; pass `--no-cov`, since a subset never reaches the gate. `uv run poe test-fast` (`-m fast`) is the broadest run worth doing locally. The slow and integration tiers and `uv run poe test-cov` (every tier with the 90 % gate) run in CI; run them locally only when CI cannot tell you what you need.
 
 ## When the public API changed
 

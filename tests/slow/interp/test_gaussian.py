@@ -12,12 +12,15 @@ import lineax as lx
 import numpy as np
 import pytest
 from _harness import (
+    assert_adjoint,
+    assert_grad_matches_fd,
     assert_matches_oracle,
     assert_traces,
 )
 
 from functax.geometry import Axis, Points
 from functax.interp import (
+    GaussianPlan,
     Linear,
     Policies,
 )
@@ -32,16 +35,16 @@ def _knots(count: int, seed: int) -> np.ndarray:
     return np.cumsum(rng.uniform(0.3, 1.7, size=count))
 
 
+def _points(coordinates: np.ndarray) -> Points:
+    """1-D targets as (M, 1) points."""
+    return Points(einx.id("target -> target 1", jnp.asarray(coordinates)))
+
+
 def _targets(knots: np.ndarray, count: int, seed: int) -> np.ndarray:
     """Random interior targets, every knot, and one repeated target."""
     rng = np.random.default_rng(seed)
     interior = rng.uniform(knots[0], knots[-1], size=count)
     return np.concatenate([interior, knots, interior[:1]])
-
-
-def _points(coordinates: np.ndarray) -> Points:
-    """1-D targets as (M, 1) points."""
-    return Points(einx.id("target -> target 1", jnp.asarray(coordinates)))
 
 
 def _brownian_gp_posterior(
@@ -149,6 +152,18 @@ class TestBridge:
         data = jnp.ones((2, 4), dtype=jnp.float32)
         assert plan.sample(data, key=jax.random.key(0)).dtype == jnp.float32
 
+    def test_zero_at_the_knots_and_a_quarter_at_mid_cell(self) -> None:
+        knots = [[0.0], [1.0], [3.0], [4.0]]
+        mids = [[0.5], [2.0], [3.5]]
+        plan = Linear(prior_variance_rate=RATE).plan(
+            self.axis, Points(jnp.array(knots + mids))
+        )
+        variance = plan.variance()
+        assert variance[:4].tolist() == [0.0, 0.0, 0.0, 0.0]
+        # σ² Δᵢ / 4 for Δ = 1, 2, 1
+        expected = [RATE * width / 4 for width in (1.0, 2.0, 1.0)]
+        assert_matches_oracle(variance[4:], jnp.array(expected), rtol=1e-15)
+
 
 class TestPlan:
     axis = Axis(jnp.arange(4.0))
@@ -211,6 +226,20 @@ class TestPlan:
         spread = np.sqrt((np.outer(variance, variance) + covariance**2) / n_draws)
         assert np.all(np.abs(empirical - covariance) < 5.0 * spread)
 
+    def test_mean_adjoint_and_operator_are_the_plain_plan(self) -> None:
+        plain = Linear().plan(self.axis, self.targets)
+        gaussian = Linear(prior_variance_rate=RATE).plan(self.axis, self.targets)
+        assert isinstance(gaussian, GaussianPlan)
+        assert_matches_oracle(gaussian.mean(self.data), plain(self.data), rtol=0.0)
+        residual = jnp.array([1.0, 2.0, 3.0, 4.0])
+        assert_matches_oracle(
+            gaussian.adjoint(residual), plain.adjoint(residual), rtol=0.0
+        )
+        operator = gaussian.operator()
+        assert_adjoint(
+            lambda y: operator.mv(y), gaussian.adjoint, 4, 4, key=jax.random.key(1)
+        )
+
 
 class TestTraces:
     knots = _knots(6, seed=8)
@@ -238,3 +267,27 @@ class TestTraces:
         eager = plan.sample(fields, key=key)
         jitted = jax.jit(lambda y: plan.sample(y, key=key))(fields)
         assert_matches_oracle(jitted, eager, rtol=1e-12)
+
+    def test_grad_of_the_variance_in_the_target_positions(self) -> None:
+        axis = Axis(jnp.asarray(self.knots))
+        rng = np.random.default_rng(13)
+        # inside cells, away from the kinks at the knots
+        cells = np.arange(5)
+        offsets = rng.uniform(0.1, 0.9, size=5)
+        widths = self.knots[cells + 1] - self.knots[cells]
+        positions = _points(self.knots[cells] + offsets * widths).xy
+
+        def variance(xy: jax.Array) -> jax.Array:
+            return Linear(prior_variance_rate=RATE).plan(axis, Points(xy)).variance()
+
+        assert_grad_matches_fd(variance, positions)
+
+
+def test_a_gaussian_plan_keeps_its_geometry_and_target_shape() -> None:
+    # built on the ordinary plan, so derivative() and windows still work
+    axis = Axis(jnp.arange(5.0))
+    target = Axis(jnp.array([0.5, 1.5, 2.5]))
+    plan = Linear(prior_variance_rate=2.0).plan(axis, target)
+    assert plan.local is not None
+    slope = plan.derivative(axis=0)(jnp.arange(5.0) * 3.0)
+    assert slope.tolist() == [3.0, 3.0, 3.0]

@@ -156,7 +156,7 @@ Most rules here are tests, so CI tells you when one breaks. Read a test's docstr
 | `tests/fast/test_harness.py` | Each helper in `tests/_harness.py` passes on a correct case and fails, naming the worst index, on one perturbed by 1e-6 |
 | `tests/fast/test_build_docs.py` | The two-tool docs pipeline: inventory parsing, anchor repair, link checking, the inventory port and the absolute nav URL in `docs/myst.yml`, the files copied to the site root (`ROOT_FILES`); `tests/integration/test_docs_site.py` reads a built site |
 | `[tool.coverage.report] fail_under = 90` | Coverage of `src/functax` in every coverage-enabled run (CI, `uv run poe test-cov`) |
-| `strict_markers = true` and the tier hook in `conftest.py` | Only the registered tier markers (`slow`, `integration`) exist, and they come from the directory |
+| `strict_markers = true` and the tier hook in `conftest.py` | Every test has exactly one tier marker (`fast`, `slow` or `integration`), from its directory (or `SLOW_DOCTESTS` for a doctest), never by hand |
 | ruff (`select = E, F, I, UP, B, SIM, RUF`), ty | Lint (the whole repo, notebook code cells included), format, types on `src/functax` and `scripts` |
 
 ## Recipes
@@ -183,7 +183,7 @@ Always run Python tools through `uv run` (never the system Python); `git`, `ls` 
 uv run poe                  # list every task (they live in [tool.poe.tasks] in pyproject.toml)
 uv run poe install          # uv sync --all-groups + pre-commit hooks
 uv run poe test             # every tier + doctests, no coverage
-uv run poe test-fast        # tests/fast + doctests, no coverage (the quick loop)
+uv run poe test-fast        # -m fast: tests/fast + fast doctests, no coverage (the quick loop)
 uv run poe test-cov         # the same with coverage and the 90 % gate (what CI runs)
 uv run poe lint             # ruff check .   (entire repo)
 uv run poe format           # ruff format . && ruff check --fix .
@@ -208,21 +208,29 @@ uv run pytest --no-cov tests/fast/test_backend.py::test_require_jax_is_silent_wh
 
 ### Test tiers
 
-A test's tier is the directory it lives in, and each tier mirrors the package layout (`tests/fast/interp/test_plan.py` and `tests/slow/interp/test_plan.py` test the same module):
+A test's tier is the directory it lives in, and each tier mirrors the package layout (`tests/fast/interp/test_plan.py` and `tests/slow/interp/test_plan.py` test the same module). Every test carries the marker of its tier, so `-m fast`, `-m slow` and `-m integration` select one:
 
-- **`tests/fast/`:** behaviour, validation, small closed-form checks and the repo-wide checks (public API, capability index, exceptions, harness, docs pipeline), each well under a second. The doctests in `src/functax` belong to this tier.
-- **`tests/slow/`:** oracle sweeps across orders and policies, dot-product tests across policies, gradient and trace checks, anything over about a second (mostly einx compiling each new shape in an eager call).
-- **`tests/integration/`:** what crosses a process or a package boundary: the install checks run in a subprocess (`test_install.py`), other libraries' pinned outputs (`contracts/`, with their `.npz` files in `contracts/data/`), end-to-end workflows (`workflows/`) and the built docs site (`test_docs_site.py`).
+- **`tests/fast/`** (`fast`): behaviour, validation, small closed-form checks and the repo-wide checks (public API, capability index, exceptions, harness, docs pipeline), each under about 0.3 s on CI, so the whole tier runs in well under a minute and stays usable while you edit. The doctests in `src/functax` belong to this tier, except the slow ones listed in `SLOW_DOCTESTS` in `conftest.py`.
+- **`tests/slow/`** (`slow`): oracle sweeps across orders and policies, dot-product tests across policies, gradient and trace checks, and anything over about 0.3 s (mostly einx and XLA compiling each new shape in an eager call), plus the doctests in `SLOW_DOCTESTS`.
+- **`tests/integration/`** (`integration`): what crosses a process or a package boundary: the install checks run in a subprocess (`test_install.py`), other libraries' pinned outputs (`contracts/`, with their `.npz` files in `contracts/data/`), end-to-end workflows (`workflows/`) and the built docs site (`test_docs_site.py`).
 
-`conftest.py` marks every test in `tests/slow` `slow` and every test in `tests/integration` `integration`, so `-m` still selects a tier; a test never carries a tier marker by hand, and one whose marker disagrees with its directory is a collection error. A new test goes to the fast tier unless it measures over a second (`--durations`), in which case it goes to the slow file of the same module. Modules are imported by path (`--import-mode=importlib`), so the tiers can share basenames; shared helpers live in `tests/` itself (`_harness.py`, `_paths.py`, `_geoarray_reference.py`).
+`conftest.py` gives every test its tier marker from its directory (a doctest is `fast` unless its name is in `SLOW_DOCTESTS`); a test never carries a tier marker by hand, and one that does is a collection error. A new test goes to the fast tier unless it measures over about 0.3 s (`--durations`), in which case it goes to the slow file of the same module; a new doctest over that joins `SLOW_DOCTESTS`. Modules are imported by path (`--import-mode=importlib`), so the tiers can share basenames; shared helpers live in `tests/` itself (`_harness.py`, `_paths.py`, `_geoarray_reference.py`).
 
 ```bash
-uv run poe test-fast          # tests/fast and the doctests, about two minutes
-uv run poe test-slow          # tests/slow
-uv run poe test-integration   # tests/integration
+uv run poe test-fast          # -m fast: tests/fast and the fast doctests
+uv run poe test-slow          # -m slow: tests/slow and the slow doctests
+uv run poe test-integration   # -m integration: tests/integration
 ```
 
 CI ("Tests", `ci.yml`) runs the fast tier on Python 3.12 and 3.13, and every tier with coverage (the 90 % gate) on 3.12.
+
+### Which tests to run while you work
+
+Run the tests of what you changed, not the suite. For each changed module `src/functax/_src/<area>/_x.py`, run `tests/fast/<area>/test_x.py`, `tests/slow/<area>/test_x.py` and the module's doctests (`src/functax/_src/<area>/_x.py`); add the direct consumers of a shared primitive you changed, the contract test in `tests/integration/contracts/` whose pinned behaviour you touched, and `tests/fast/test_public_api.py tests/fast/test_capabilities.py` after a public API change. `uv run poe test-fast` is the broadest run worth doing by hand; leave the slow and integration tiers and the coverage gate to CI.
+
+```bash
+uv run pytest --no-cov tests/fast/interp/test_plan.py tests/slow/interp/test_plan.py src/functax/_src/interp/_plan.py
+```
 
 ### Tests that assert on random draws
 
@@ -235,7 +243,7 @@ functax's tests draw random fields, targets and the vectors of the dot-product t
 
 All of these must pass, from the repo root:
 
-1. `uv run poe test`: zero failures (doctests included).
+1. The targeted tests of "Which tests to run while you work" pass (CI runs every tier).
 2. `uv run --group lint ruff check .`: the **entire** repo, which includes `tests/`, `scripts/` and the code cells of `docs/notebooks/*.ipynb`. Never lint a subdirectory: `ruff check src/functax/` misses errors CI catches.
 3. `uv run --group lint ruff format --check .`
 4. `uv run poe typecheck` (`ty check src/functax scripts`, as CI runs it).

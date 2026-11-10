@@ -204,19 +204,6 @@ class TestSerialize:
     targets = Points(jnp.array([[0.5, 0.25], [1.5, 0.8], [2.4, -0.3], [9.0, 0.5]]))
     field = jnp.array([1.0, 2.0, jnp.nan, 4.0, 8.0] * 3)
 
-    def test_a_concrete_plan_is_a_template_too(self) -> None:
-        plan = Linear().plan(GRID, self.targets)
-        restored = Plan.deserialize(plan.serialize(), like=plan)
-        np.testing.assert_array_equal(restored(self.field), plan(self.field))
-
-    def test_rejects_truncated_and_padded_data(self) -> None:
-        plan = Linear().plan(GRID, self.targets)
-        data = plan.serialize()
-        with pytest.raises(ValidationError, match="'data' does not match 'like'"):
-            Plan.deserialize(data[: len(data) // 2], like=plan)
-        with pytest.raises(ValidationError, match="holds more leaves than 'like'"):
-            Plan.deserialize(data + data, like=plan)
-
     def test_refuses_traced_and_abstract_plans(self) -> None:
         def serialize_inside(xy: jax.Array) -> jax.Array:
             Linear().plan(GRID, Points(xy)).serialize()

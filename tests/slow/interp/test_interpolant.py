@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from _harness import assert_matches_oracle, assert_traces
 
-from functax import ValidationError
+from functax import PolicyError, ValidationError
 from functax.geometry import AffineGrid, Axis, Points, RectilinearGrid
 from functax.interp import (
     BSpline,
@@ -133,3 +133,13 @@ class TestDerivativesAndPolicies:
             field = scheme.fit(GRID, data, policies=policies)
             expected = scheme.plan(GRID, Points(targets), policies=policies)(data)
             assert_matches_oracle(field(targets), expected, rtol=1e-14, atol=1e-15)
+
+    def test_renormalise(self) -> None:
+        data = FIELD.at[10].set(jnp.nan)
+        policies = Policies(missing="renormalise")
+        targets = _targets(12, seed=10)
+        field = Linear().fit(GRID, data, policies=policies)
+        expected = Linear().plan(GRID, Points(targets), policies=policies)(data)
+        assert_matches_oracle(field(targets), expected, rtol=1e-14, atol=1e-15)
+        with pytest.raises(PolicyError, match="needs a local plan"):
+            BSpline(3).fit(GRID, data, policies=policies)

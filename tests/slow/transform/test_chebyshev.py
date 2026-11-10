@@ -16,6 +16,11 @@ from functax.geometry import chebyshev_nodes
 from functax.transform import ChebyshevTransform1D, ChebyshevTransform2D
 
 
+def _chebyshev(k: int, x: jax.Array) -> jax.Array:
+    """Tₖ(x) = cos(k arccos x), for x in [−1, 1]."""
+    return jnp.cos(k * jnp.arccos(x))
+
+
 KINDS = ["lobatto", "gauss"]
 
 
@@ -140,3 +145,41 @@ def test_transform_gradients_match_finite_differences(kind: str) -> None:
     u = jax.random.normal(jax.random.key(7), (transform.n_nodes,))
     assert_grad_matches_fd(transform.to_spectral, u)
     assert_grad_matches_fd(transform.from_spectral, u)
+
+
+def test_transform1d_roundtrip_lobatto() -> None:
+    x = chebyshev_nodes(32)
+    transform = ChebyshevTransform1D(32)
+    u = jnp.sin(jnp.pi * x) + 0.25 * jnp.cos(3 * jnp.pi * x)
+    a = transform.to_spectral(u)
+    assert jnp.allclose(transform.from_spectral(a), u, atol=1e-12)
+
+
+def test_lobatto_constant_is_the_unit_mode() -> None:
+    a = ChebyshevTransform1D(12).to_spectral(3.0 * jnp.ones(13))
+    assert jnp.allclose(a, jnp.zeros(13).at[0].set(3.0), atol=1e-13)
+
+
+def test_gauss_transform_preserves_float64() -> None:
+    transform = ChebyshevTransform1D(8, kind="gauss")
+    u = _chebyshev(3, chebyshev_nodes(8, kind="gauss"))
+    a = transform.to_spectral(u)
+    assert a.dtype == jnp.float64
+    assert jnp.abs(a[3] - 1.0) < 1e-13
+    assert transform.from_spectral(a).dtype == jnp.float64
+
+
+@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize("k", [0, 1, 2, 3, 4, 23])
+def test_transform_of_t_k_is_the_kth_unit_vector(kind: str, k: int) -> None:
+    # also spectraldiffx's test, there for Lobatto with N = 24 (k = 24, the end
+    # mode, is checked below, as it exists on the Lobatto nodes only)
+    transform = ChebyshevTransform1D(24, kind=kind)
+    a = transform.to_spectral(_chebyshev(k, chebyshev_nodes(24, kind=kind)))
+    unit = jnp.eye(transform.n_nodes)[k]
+    assert_matches_oracle(a, unit, rtol=0.0, atol=1e-13)
+
+
+def test_transform_of_the_end_mode_on_lobatto_nodes() -> None:
+    a = ChebyshevTransform1D(24).to_spectral(_chebyshev(24, chebyshev_nodes(24)))
+    assert_matches_oracle(a, jnp.eye(25)[24], rtol=0.0, atol=1e-13)

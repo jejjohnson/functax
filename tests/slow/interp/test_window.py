@@ -5,17 +5,22 @@ second or more (mostly einx compiling new shapes).
 
 from __future__ import annotations
 
+import inspect
+
 import einx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from _harness import assert_adjoint, assert_matches_oracle
 
+from functax import ValidationError
 from functax.geometry import AffineGrid, Axis, Points, RectilinearGrid
 from functax.interp import (
     Linear,
     Plan,
     Policies,
+    WindowedPlan,
 )
 
 
@@ -77,6 +82,17 @@ class TestWindow:
             composed[0:4, 3:6](field), _as_raster(composed(field))[0:4, 3:6].ravel()
         )
 
+    def test_rejects_bad_windows(self) -> None:
+        warp = _warp()
+        with pytest.raises(ValidationError, match=r"one slice per target axis \(2\)"):
+            warp[0:2]
+        with pytest.raises(ValidationError, match="selects no targets"):
+            warp[3:3, :]
+        # the type hook would reject a non-slice first, so skip it
+        init = inspect.unwrap(WindowedPlan.__init__)
+        with pytest.raises(ValidationError, match="one slice per target axis"):
+            init(object.__new__(WindowedPlan), warp, (0, slice(None)))
+
 
 class TestToGaussx:
     def test_round_trip_through_a_dense_matrix(self) -> None:
@@ -88,6 +104,13 @@ class TestToGaussx:
         dense = jnp.zeros((72, 120)).at[rows, indices].add(weights)
         np.testing.assert_array_equal(dense, warp.read.to_dense())
         np.testing.assert_array_equal(dense, warp.operator().as_matrix())
+
+    def test_a_composed_plan_exports_its_product(self) -> None:
+        warp = _warp(Policies(outside="clamp"))
+        smooth = Linear().plan(DESTINATION, DESTINATION)
+        indices, weights = (smooth @ warp).to_gaussx()
+        assert indices.shape == (72, 16)
+        assert_matches_oracle(weights, (smooth @ warp).read.weights, rtol=0.0)
 
 
 def test_a_derivative_plan_keeps_the_grid_target_and_windows() -> None:
@@ -101,3 +124,8 @@ def test_a_derivative_plan_keeps_the_grid_target_and_windows() -> None:
     window = derivative[slice(1, 3), slice(2, 5)]
     field = jnp.tile(jnp.arange(7.0) * 2.0, 6)
     assert window(field).tolist() == [2.0] * 6
+
+
+class TestTargetShape:
+    def test_grid_targets_keep_their_shape(self) -> None:
+        assert _warp().target_shape == (8, 9)

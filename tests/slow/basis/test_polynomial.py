@@ -167,3 +167,76 @@ def test_legendre_series_traces() -> None:
     x = jnp.asarray(rng.uniform(-1.0, 1.0, (4, 9)))
     coeffs = jnp.asarray(rng.standard_normal((4, 12)))
     assert_traces(legendre_series, x, coeffs)
+
+
+def test_legendre_polynomials_match_scipy():
+    with jax.enable_x64(True):
+        P = np.asarray(legendre_polynomials(jnp.asarray(T), 200))
+    ref = np.stack([sp.eval_legendre(ell, T) for ell in range(201)], axis=-1)
+    assert P.shape == (41, 201)
+    np.testing.assert_allclose(P, ref, atol=1e-12)
+
+
+def test_legendre_polynomials_shape_and_l_max_zero():
+    t = jnp.zeros((2, 3))
+    assert legendre_polynomials(t, 4).shape == (2, 3, 5)
+    assert legendre_polynomials(t, 0).shape == (2, 3, 1)
+    with pytest.raises(ValueError, match="l_max"):
+        legendre_polynomials(t, -1)
+
+
+def test_schmidt_matches_definition():
+    l_max = 20
+    with jax.enable_x64(True):
+        S = np.asarray(
+            associated_legendre(jnp.asarray(T), l_max, normalization="schmidt")
+        )
+    ref = np.stack(
+        [
+            math.sqrt(
+                (2 - (m == 0)) * math.factorial(ell - m) / math.factorial(ell + m)
+            )
+            * (-1.0) ** m
+            * sp.lpmv(m, ell, T)
+            for ell, m in associated_legendre_indices(l_max)
+        ],
+        axis=-1,
+    )
+    np.testing.assert_allclose(S, ref, atol=1e-12)
+
+
+@pytest.mark.parametrize("end", [-1.0, 1.0])
+def test_legendre_series_gradient_is_finite_and_exact_at_the_ends(end: float) -> None:
+    # P_l′(±1) = (±1)^{l+1} l(l + 1)/2, so f′(±1) = ∑ₗ cₗ (±1)^{l+1} l(l + 1)/2;
+    # the clip passes the gradient straight through, so it is not halved there
+    degree = 30
+    coeffs = jnp.asarray(np.random.default_rng(1).standard_normal(degree + 1))
+    gradient = jax.grad(lambda x: legendre_series(x, coeffs))(jnp.asarray(end))
+    ells = np.arange(degree + 1)
+    expected = np.sum(np.asarray(coeffs) * end ** (ells + 1) * ells * (ells + 1) / 2)
+    assert bool(jnp.isfinite(gradient))
+    np.testing.assert_allclose(float(gradient), expected, rtol=1e-12)
+
+
+def test_legendre_series_matches_scipy() -> None:
+    # kernellib's test: L = 200 against scipy's P_l, summed term by term
+    degree = 200
+    rng = np.random.default_rng(0)
+    coeffs = rng.standard_normal(degree + 1)
+    x = np.concatenate([np.linspace(-1.0, 1.0, 401), [-1.0, 1.0, 0.0]])
+    expected = sum(c * sp.eval_legendre(ell, x) for ell, c in enumerate(coeffs))
+    got = np.asarray(legendre_series(jnp.asarray(x), jnp.asarray(coeffs)))
+    np.testing.assert_allclose(got, expected, rtol=0.0, atol=1e-12)
+
+
+def test_legendre_series_low_degrees_and_shapes() -> None:
+    x = jnp.array([[-0.3, 0.2], [0.9, 1.0]])
+    assert legendre_series(x, jnp.array([2.0])).tolist() == [[2.0, 2.0], [2.0, 2.0]]
+    np.testing.assert_allclose(legendre_series(x, jnp.array([1.0, 3.0])), 1.0 + 3 * x)
+    # rounding outside [-1, 1] is clipped: P_l(1) = 1
+    assert float(legendre_series(jnp.array(1.0 + 1e-9), jnp.ones(5))) == 5.0
+
+
+def test_legendre_series_keeps_float32() -> None:
+    x = jnp.linspace(-1.0, 1.0, 5, dtype=jnp.float32)
+    assert legendre_series(x, jnp.ones(4, dtype=jnp.float32)).dtype == jnp.float32

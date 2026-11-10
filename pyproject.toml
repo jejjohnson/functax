@@ -127,11 +127,13 @@ testpaths = ["tests", "src/functax"]
 # tests/_harness.py ("Testing a scheme" in docs/contributing.md).
 pythonpath = ["tests"]
 # Test tiers are directories (see "Test tiers" in AGENTS.md): tests/fast,
-# tests/slow and tests/integration. conftest.py marks slow and integration
-# tests from their path. CI runs every tier.
+# tests/slow and tests/integration. conftest.py gives every test exactly one
+# tier marker from its path (doctests are fast unless listed in SLOW_DOCTESTS),
+# so `-m fast`, `-m slow` and `-m integration` select a tier. CI runs every tier.
 strict_markers = true
 markers = [
-    "slow: in tests/slow; a sweep, a gradient or trace check, over ~1 s",
+    "fast: in tests/fast, or a doctest; under ~0.3 s each, for the edit-test loop",
+    "slow: in tests/slow, or a doctest in SLOW_DOCTESTS; sweeps, oracle, gradient and trace checks",
     "integration: in tests/integration; subprocesses, other libraries' pinned outputs, workflows, the built site",
 ]
 # The tiers mirror one another (tests/fast/interp/test_plan.py and
@@ -241,16 +243,16 @@ help = "Run every tier + doctests (no coverage)"
 cmd = "uv run pytest -v -o addopts='--import-mode=importlib --doctest-modules'"
 
 [tool.poe.tasks.test-fast]
-help = "Run the fast tier and the doctests (tests/fast, src/functax), no coverage"
-cmd = "uv run pytest -v -o addopts='--import-mode=importlib --doctest-modules' tests/fast src/functax"
+help = "Run the fast tier: tests/fast and the fast doctests (-m fast), no coverage"
+cmd = "uv run pytest -q -m fast -o addopts='--import-mode=importlib --doctest-modules' tests/fast src/functax"
 
 [tool.poe.tasks.test-slow]
-help = "Run the slow tier (tests/slow): sweeps, gradient and trace checks"
-cmd = "uv run pytest -v -o addopts=--import-mode=importlib tests/slow"
+help = "Run the slow tier: tests/slow and the slow doctests (-m slow)"
+cmd = "uv run pytest -v -m slow -o addopts='--import-mode=importlib --doctest-modules' tests/slow src/functax"
 
 [tool.poe.tasks.test-integration]
 help = "Run the integration tier (tests/integration)"
-cmd = "uv run pytest -v -o addopts=--import-mode=importlib tests/integration"
+cmd = "uv run pytest -v -m integration -o addopts=--import-mode=importlib tests/integration"
 
 [tool.poe.tasks.test-cov]
 help = "Run tests with coverage and the 90 % gate (what CI runs)"
