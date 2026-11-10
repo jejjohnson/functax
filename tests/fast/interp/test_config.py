@@ -18,6 +18,7 @@ from functax.interp import (
     Akima,
     Basis,
     BSpline,
+    Chebyshev,
     Cubic,
     CubicSpline,
     Linear as LinearScheme,
@@ -95,6 +96,7 @@ ALL_SCHEMES = [
     Pchip(),
     Akima(),
     Steffen(),
+    Chebyshev(n_coefficients=8, kind="gauss"),
 ]
 
 
