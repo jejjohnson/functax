@@ -15,6 +15,7 @@ import functax
 
 SUBMODULES = [
     "_typing",
+    "diffops",
     "exceptions",
     "interp",
     "quad",

@@ -91,7 +91,8 @@ class TestMissingExtra:
         assert result.returncode == 0, result.stderr
 
     @pytest.mark.parametrize(
-        "module", ["functax.interp", "functax.basis", "functax.quad"]
+        "module",
+        ["functax.interp", "functax.basis", "functax.quad", "functax.diffops"],
     )
     def test_a_jax_module_names_the_extra_when_jax_is_blocked(
         self, module: str
