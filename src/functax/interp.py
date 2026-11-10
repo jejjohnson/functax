@@ -23,6 +23,7 @@ from functax._src.interp._bases import (
 )
 from functax._src.interp._cache import plan_key
 from functax._src.interp._compose import compose
+from functax._src.interp._conservative import Conservative
 from functax._src.interp._covariance import (
     BrownianBridge,
     KernelCovariance,
@@ -43,6 +44,7 @@ from functax._src.interp._locate import (
     remap_taps,
 )
 from functax._src.interp._neighbourhood import InverseDistance
+from functax._src.interp._overlap import overlap_weights_1d
 from functax._src.interp._plan import ComposedPlan, DerivativePlan, Plan, WindowedPlan
 from functax._src.interp._policies import Policies
 from functax._src.interp._prefilter import BandedPrefilter, spline_poles
@@ -82,6 +84,7 @@ __all__ = [  # noqa: RUF022
     "BinningPlan",
     "BrownianBridge",
     "ComposedPlan",
+    "Conservative",
     "Cubic",
     "CubicBasis",
     "CubicSpline",
@@ -128,6 +131,7 @@ __all__ = [  # noqa: RUF022
     "index_positions",
     "locate",
     "locate_curvilinear",
+    "overlap_weights_1d",
     "plan_key",
     "remap_taps",
     "spline_poles",

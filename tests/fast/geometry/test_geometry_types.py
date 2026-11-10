@@ -124,6 +124,64 @@ class TestAxis:
             Axis(jnp.array([0.0, 1.0]), epoch=np.datetime64("NaT"))
 
 
+class TestAxisEdges:
+    def test_edges_default_to_none_and_keep_their_dtype(self) -> None:
+        assert Axis(jnp.arange(3.0)).edges is None
+        edges = jnp.arange(4.0, dtype=jnp.float32) - 0.5
+        axis = Axis(jnp.arange(3.0, dtype=jnp.float32), edges=edges)
+        assert axis.edges is not None
+        assert axis.edges.dtype == jnp.float32
+        assert axis.cell_edges() is axis.edges
+
+    def test_default_cell_edges_are_midpoints_with_symmetric_ends(self) -> None:
+        edges = Axis(jnp.array([3.0, 2.0, 0.0])).cell_edges()
+        assert edges.tolist() == [3.5, 2.5, 1.0, -1.0]
+
+    @pytest.mark.parametrize(
+        ("values", "expected"),
+        [
+            ([10.0, 20.0, 340.0], [-5.0, 15.0, 180.0, 355.0]),
+            ([340.0, 20.0, 10.0], [355.0, 180.0, 15.0, -5.0]),
+        ],
+    )
+    def test_periodic_cell_edges_tile_the_circle(
+        self, values: list[float], expected: list[float]
+    ) -> None:
+        edges = Axis(jnp.array(values), period=360.0).cell_edges()
+        assert edges.tolist() == expected
+
+    @pytest.mark.parametrize(
+        ("edges", "match"),
+        [
+            (
+                jnp.arange(3.0),
+                r"'edges' must be 1-D with one more entry .* got shape \(3,\)",
+            ),
+            (jnp.zeros((2, 2)), "'edges' must be 1-D"),
+            (jnp.arange(4), "'edges' must have a floating dtype"),
+            (jnp.array([0.0, 1.0, 1.0, 2.0]), "'edges' must be strictly monotone"),
+            (jnp.array([3.0, 2.0, 1.0, 0.0]), "in the direction of 'values'"),
+        ],
+    )
+    def test_rejects_bad_edges(self, edges: jax.Array, match: str) -> None:
+        with pytest.raises(GeometryError, match=match):
+            Axis(jnp.arange(3.0), edges=edges)
+
+    def test_rejects_edges_spanning_more_than_the_period(self) -> None:
+        with pytest.raises(GeometryError, match=r"'edges' must span at most 360\.0"):
+            Axis(
+                jnp.array([0.0, 180.0]),
+                period=360.0,
+                edges=jnp.array([-100.0, 90.0, 270.0]),
+            )
+
+    def test_traced_edges_skip_the_value_checks(self) -> None:
+        build = jax.jit(lambda edges: Axis(jnp.arange(2.0), edges=edges).cell_edges())
+        np.testing.assert_array_equal(
+            build(jnp.array([2.0, 1.0, 0.0])), [2.0, 1.0, 0.0]
+        )
+
+
 class TestDatetimes:
     def test_epoch_defaults_to_the_first_time(self) -> None:
         times = np.array(["2026-03-01T06", "2026-03-01T12"], dtype="datetime64[h]")
