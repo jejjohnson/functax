@@ -141,6 +141,16 @@ $$
 
 so the read-out is a `Stencil` of $Q$ taps and the plan has the identity fit, an adjoint and every policy of a local plan (`missing="renormalise"` drops a NaN source from each row it is in). The distance is the source's `Points.metric`: `"euclidean"` on the coordinates as given, or `"chord"` on $(\lambda, \phi)$ in the `unit` passed to `plan`, the straight line between unit vectors, so the search crosses the dateline. The search runs on the host with SciPy's `cKDTree` (the `functax[scipy]` extra) when the coordinates are concrete, and as a chunked brute force (`lax.map` over chunks of targets) when they are traced, so a plan built inside `jit` or `grad` traces; both searches give the same stencil, since the distances of the chosen neighbours are recomputed in JAX. A neighbour counts when $d < r$, and a target with none (beyond the radius, padding, or a non-finite coordinate) is invalid. The [gridding guide](../gridding/) grids stations onto a grid with it.
 
+## Triangulation
+
+`Delaunay()` triangulates scattered `Points` sources on the host with SciPy's Delaunay (the `functax[scipy]` extra), and `Delaunay(simplices=mesh)` takes a given mesh as it is, one row of $D + 1$ source indices per simplex. For a target $\vect{x}$ in simplex $\tau$ with inverse affine map $\mat{T}_\tau^{-1}$ and reference vertex $\vect{r}_\tau$ (the layout of `scipy.spatial.Delaunay.transform`), the barycentric weights are
+
+$$
+(b_1, \dots, b_D) = \mat{T}_\tau^{-1} (\vect{x} - \vect{r}_\tau) \text{ and } b_{D+1} = 1 - \sum_{k=1}^{D} b_k,
+$$
+
+at the simplex's vertices, so the read-out is a `Stencil` of $D + 1$ taps (three on a plane) that reproduces affine functions inside the hull and equals `LinearNDInterpolator`. A target outside the hull is invalid, with zero weights and its taps at vertex 0. A fresh triangulation is located by `find_simplex`; a given mesh by brute force over chunks of targets on the host, the first simplex whose barycentric coordinates are all at least $-10^{-12}$. The plan is built on the host from concrete coordinates; applying it traces.
+
 ## Reference
 
 ::: functax.interp

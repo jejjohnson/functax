@@ -89,6 +89,7 @@ Before writing a helper, a validator, a sampler, a basis or a rule, find out whe
 | Random Fourier features at given frequencies, `cos`/`sin` features of a time or coordinate, Gaussian time windows | `rff_forward`, `rff_cosine_forward`, `fourier_features`, `seasonal_features`, `gaussian_window_features` (`functax.basis.features`) |
 | A 1-D cubic spline, PCHIP, Akima or Steffen, `interpax.interp1d`, a monotone lookup table | `CubicSpline`, `Pchip`, `Akima`, `Steffen` and `scheme.fit(axis, y)` (`functax.interp`); interpax stays out of the stack (decision 14) |
 | A `cKDTree` k-nearest search with inverse-distance weights, IDW gridding of scattered points, a neighbour search on lon/lat | `InverseDistance` and its `Plan` (`functax.interp`): a tree on the host, a chunked brute force under `jit`, the chord metric for `Points(metric="chord")` |
+| `scipy.interpolate.LinearNDInterpolator`, barycentric weights on a triangle mesh, a `find_simplex` locate | `Delaunay()` or `Delaunay(simplices=mesh)` and its `Plan` (`functax.interp`): D + 1 taps, NaN outside the hull |
 
 ## The contracts
 

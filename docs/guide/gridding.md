@@ -30,3 +30,18 @@ A cell with no station within the radius is not valid and reads NaN (the `fill_v
 The distance is the source's metric. On longitude and latitude, `Points(lonlat, metric="chord")` measures the straight line between unit vectors, so a target at $180°$ finds the stations on both sides of the dateline; pass `unit="degrees"` (or `"radians"`) to `plan`. The radius is then a chord of the unit sphere, $2 \sin(\theta / 2)$ for an angle $\theta$.
 
 The neighbour search runs on the host with SciPy's k-d tree, which needs the `functax[scipy]` extra. Inside `jit` or `grad`, where the coordinates are traced, the same plan searches by brute force over chunks of targets instead, and gives the same stencil; the neighbour set is piecewise constant, so gradients with respect to the coordinates come through the weights.
+
+## Triangulation
+
+[`Delaunay`](xref:api#functax.interp.Delaunay) triangulates the stations and reads each target as the barycentric average of its triangle's three corners. The weights are linear in the target position, so the plan reproduces any affine field inside the convex hull of the stations; outside it a target is not valid and reads NaN:
+
+```python
+from functax.interp import Delaunay
+
+targets = Points(jnp.array([[5.0, 5.0], [12.0, 5.0]]))
+plan = Delaunay().plan(stations, targets)
+plan.read.indices.shape  # (2, 3)
+plan.valid.tolist()  # [True, False]
+```
+
+A mesh that already has its triangles (an icosphere patch, a finite-element mesh) passes them in instead, `Delaunay(simplices=triangles)`, and the plan locates each target in those triangles rather than in a fresh triangulation; that path does not need SciPy. The same scheme works in three dimensions with tetrahedra, four taps per target.

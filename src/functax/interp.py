@@ -59,6 +59,7 @@ from functax._src.interp._series import (
 )
 from functax._src.interp._stencil import Readout, Stencil
 from functax._src.interp._tensor import tensor_stencil
+from functax._src.interp._triangulation import Delaunay
 
 
 __all__ = [
@@ -72,6 +73,7 @@ __all__ = [
     "Cubic",
     "CubicBasis",
     "CubicSpline",
+    "Delaunay",
     "DerivativePlan",
     "Fit",
     "GaussianPlan",
