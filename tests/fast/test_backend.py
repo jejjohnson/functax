@@ -1,5 +1,6 @@
-"""Tests for the ``functax[jax]`` extra check and the NumPy-only import rule. The fast
-tier: behaviour, validation and small closed-form checks, each well under a second.
+"""Tests for the ``functax[jax]`` and ``functax[scipy]`` extra checks and the
+NumPy-only import rule. The fast tier: behaviour, validation and small closed-form
+checks, each well under a second.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ import sys
 import pytest
 
 from functax import MissingExtraError
-from functax._src._backend import JAX_EXTRA, require_jax
+from functax._src._backend import JAX_EXTRA, import_scipy, require_jax
 
 
 def test_require_jax_is_silent_when_the_extra_is_installed() -> None:
@@ -26,6 +27,22 @@ def test_require_jax_names_the_extra_when_a_distribution_is_missing(
         require_jax("functax.interp")
     assert "functax.interp" in str(excinfo.value)
     assert repr(name) in str(excinfo.value)
+
+
+def test_import_scipy_returns_the_submodule() -> None:
+    assert import_scipy("spatial", needed_by="InverseDistance.plan").__name__ == (
+        "scipy.spatial"
+    )
+
+
+def test_import_scipy_names_the_extra_when_scipy_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A ``None`` entry in sys.modules makes ``import scipy.spatial`` raise.
+    monkeypatch.setitem(sys.modules, "scipy.spatial", None)
+    with pytest.raises(MissingExtraError, match=r"functax\[scipy\]") as excinfo:
+        import_scipy("spatial", needed_by="InverseDistance.plan")
+    assert "InverseDistance.plan" in str(excinfo.value)
 
 
 def test_array_checks_never_import_jax(monkeypatch: pytest.MonkeyPatch) -> None:

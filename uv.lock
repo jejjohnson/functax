@@ -517,7 +517,7 @@ wheels = [
 
 [[package]]
 name = "functax"
-version = "0.0.2"
+version = "0.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
@@ -530,6 +530,9 @@ jax = [
     { name = "jax" },
     { name = "jaxtyping" },
     { name = "lineax" },
+]
+scipy = [
+    { name = "scipy" },
 ]
 
 [package.dev-dependencies]
@@ -572,8 +575,9 @@ requires-dist = [
     { name = "jaxtyping", marker = "extra == 'jax'" },
     { name = "lineax", marker = "extra == 'jax'" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "scipy", marker = "extra == 'scipy'", specifier = ">=1.14" },
 ]
-provides-extras = ["jax"]
+provides-extras = ["jax", "scipy"]
 
 [package.metadata.requires-dev]
 dev = [
