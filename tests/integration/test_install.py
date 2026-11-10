@@ -137,3 +137,29 @@ class TestAcrossProcesses:
         policies = Policies(extent="cells", boundary="edge")
         expected = plan_key(Linear(), AFFINE, points, policies=policies)
         assert result.stdout.strip() == expected
+
+
+class TestMissingScipy:
+    @pytest.mark.parametrize("scheme", ["InverseDistance()"])
+    def test_a_scipy_plan_names_the_extra_when_scipy_is_blocked(
+        self, scheme: str
+    ) -> None:
+        # functax imports without SciPy; a scheme that searches or triangulates on
+        # the host raises MissingExtraError naming functax[scipy] when it plans
+        result = _run(
+            "import sys; sys.modules['scipy'] = None\n"
+            "import jax\n"
+            "jax.config.update('jax_enable_x64', True)\n"
+            "import jax.numpy as jnp\n"
+            "from functax import MissingExtraError\n"
+            "from functax.geometry import Points\n"
+            "from functax.interp import InverseDistance\n"
+            "points = Points(jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]))\n"
+            "try:\n"
+            f"    {scheme}.plan(points, Points(jnp.array([[0.2, 0.2]])))\n"
+            "except MissingExtraError as err:\n"
+            "    assert 'functax[scipy]' in str(err), err\n"
+            "else:\n"
+            "    raise AssertionError('planned without SciPy')\n"
+        )
+        assert result.returncode == 0, result.stderr

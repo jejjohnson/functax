@@ -131,6 +131,16 @@ else:
 
 All three run on the host and refuse traced inputs, so call them outside `jit`.
 
+## Inverse distance
+
+`InverseDistance(k, power, radius, floor)` plans scattered `Points` sources onto `Points` or a grid. For target $i$ with the distances $d_{ij}$ to its $Q = \min(k, N)$ nearest sources, power $p$ and floor $\varepsilon$, the weights are
+
+$$
+v_{ij} = \max(d_{ij}, \varepsilon)^{-p} \text{ and } w_{ij} = \frac{v_{ij}}{\sum_{j'} v_{ij'}},
+$$
+
+so the read-out is a `Stencil` of $Q$ taps and the plan has the identity fit, an adjoint and every policy of a local plan (`missing="renormalise"` drops a NaN source from each row it is in). The distance is the source's `Points.metric`: `"euclidean"` on the coordinates as given, or `"chord"` on $(\lambda, \phi)$ in the `unit` passed to `plan`, the straight line between unit vectors, so the search crosses the dateline. The search runs on the host with SciPy's `cKDTree` (the `functax[scipy]` extra) when the coordinates are concrete, and as a chunked brute force (`lax.map` over chunks of targets) when they are traced, so a plan built inside `jit` or `grad` traces; both searches give the same stencil, since the distances of the chosen neighbours are recomputed in JAX. A neighbour counts when $d < r$, and a target with none (beyond the radius, padding, or a non-finite coordinate) is invalid. The [gridding guide](../gridding/) grids stations onto a grid with it.
+
 ## Reference
 
 ::: functax.interp

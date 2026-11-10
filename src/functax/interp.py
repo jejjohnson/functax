@@ -35,6 +35,7 @@ from functax._src.interp._locate import (
     locate,
     remap_taps,
 )
+from functax._src.interp._neighbourhood import InverseDistance
 from functax._src.interp._plan import ComposedPlan, DerivativePlan, Plan, WindowedPlan
 from functax._src.interp._policies import Policies
 from functax._src.interp._prefilter import BandedPrefilter, spline_poles
@@ -77,6 +78,7 @@ __all__ = [
     "HermiteFit",
     "Identity",
     "Interpolant",
+    "InverseDistance",
     "Linear",
     "LinearBasis",
     "LocalGeometry",
