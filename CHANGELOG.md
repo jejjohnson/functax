@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.0.3](https://github.com/jejjohnson/functax/compare/v0.0.2...v0.0.3) (2026-11-10)
+
+
+### Features
+
+* **basis:** move geonnax's box Fourier and vector bases into functax.basis ([#75](https://github.com/jejjohnson/functax/issues/75)) ([a0dc7f2](https://github.com/jejjohnson/functax/commit/a0dc7f2e6fb0b5375d7a395b383936f526ba8428)), closes [#19](https://github.com/jejjohnson/functax/issues/19)
+* **basis:** move geonnax's Fourier features into functax.basis.features ([#70](https://github.com/jejjohnson/functax/issues/70)) ([29e3ac9](https://github.com/jejjohnson/functax/commit/29e3ac96630f6821de603705a0e6fc729c12294e))
+* **basis:** move geonnax's Legendre and sphere bases into functax.basis ([#73](https://github.com/jejjohnson/functax/issues/73)) ([de9177b](https://github.com/jejjohnson/functax/commit/de9177bd176726330b9ace0edc63d2aa07562113)), closes [#19](https://github.com/jejjohnson/functax/issues/19)
+* **basis:** move geonnax's Slepian bases into functax.basis.slepian ([#74](https://github.com/jejjohnson/functax/issues/74)) ([9c3c542](https://github.com/jejjohnson/functax/commit/9c3c542bee234aa8576db894a5698ed9a0fdb983)), closes [#19](https://github.com/jejjohnson/functax/issues/19)
+* **geometry:** move geonnax's sphere grids, icosphere and frames into functax.geometry ([#71](https://github.com/jejjohnson/functax/issues/71)) ([f3b9752](https://github.com/jejjohnson/functax/commit/f3b9752369fa8f6fd7a28f76e438e731a80e7b2b)), closes [#20](https://github.com/jejjohnson/functax/issues/20)
+
 ## [0.0.2](https://github.com/jejjohnson/functax/compare/v0.0.1...v0.0.2) (2026-11-09)
 
 

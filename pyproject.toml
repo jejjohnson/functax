@@ -1,6 +1,6 @@
 [project]
 name = "functax"
-version = "0.0.2"
+version = "0.0.3"
 description = "Function approximation for JAX: bases, interpolation plans with adjoints, quadrature and transforms."
 authors = [
     {name="J. Emmanuel Johnson", email="jemanjohnson34@gmail.com"},
