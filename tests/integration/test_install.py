@@ -140,7 +140,7 @@ class TestAcrossProcesses:
 
 
 class TestMissingScipy:
-    @pytest.mark.parametrize("scheme", ["InverseDistance()"])
+    @pytest.mark.parametrize("scheme", ["InverseDistance()", "Delaunay()"])
     def test_a_scipy_plan_names_the_extra_when_scipy_is_blocked(
         self, scheme: str
     ) -> None:
@@ -153,7 +153,7 @@ class TestMissingScipy:
             "import jax.numpy as jnp\n"
             "from functax import MissingExtraError\n"
             "from functax.geometry import Points\n"
-            "from functax.interp import InverseDistance\n"
+            "from functax.interp import Delaunay, InverseDistance\n"
             "points = Points(jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]))\n"
             "try:\n"
             f"    {scheme}.plan(points, Points(jnp.array([[0.2, 0.2]])))\n"
