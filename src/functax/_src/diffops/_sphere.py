@@ -88,7 +88,7 @@ def surface_grad(f: ScalarField) -> Callable[[Float[Array, " 3"]], Float[Array, 
     """
     extension = _radial_extension(f)
 
-    def _surface_grad(n: Real[ArrayLike, ...]) -> Float[Array, " 3"]:
+    def _surface_grad(n: Real[ArrayLike, "*shape"]) -> Float[Array, " 3"]:
         n = _check_sphere_point(n)
         ambient = jax.grad(extension)(n)
         # (I − n nᵀ) ∇g
@@ -133,7 +133,7 @@ def surface_grad_enu(
     _check_unit(unit)
     gradient_on_sphere = surface_grad(f)
 
-    def _surface_grad_enu(lonlat: Real[ArrayLike, ...]) -> Float[Array, " 2"]:
+    def _surface_grad_enu(lonlat: Real[ArrayLike, "*shape"]) -> Float[Array, " 2"]:
         lonlat = _check_point(lonlat, "lonlat")
         if lonlat.shape[0] != 2:
             msg = f"'lonlat' must have shape (2,), got {lonlat.shape}"
@@ -177,7 +177,7 @@ def laplace_beltrami(
     """
     lap = laplacian(_radial_extension(f))
 
-    def _laplace_beltrami(n: Real[ArrayLike, ...]) -> Float[Array, ""]:
+    def _laplace_beltrami(n: Real[ArrayLike, "*shape"]) -> Float[Array, ""]:
         n = _check_sphere_point(n)
         return lap(n)
 
