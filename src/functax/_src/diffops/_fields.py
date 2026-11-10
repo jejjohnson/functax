@@ -76,7 +76,7 @@ def gradient(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, " 
         (3, 2)
     """
 
-    def _gradient(x: Real[ArrayLike, ...]) -> Float[Array, " dim"]:
+    def _gradient(x: Real[ArrayLike, "*shape"]) -> Float[Array, " dim"]:
         x = _check_point(x)
         return jax.grad(f)(x)
 
@@ -108,7 +108,7 @@ def jacobian_field(
         [[3.0, 2.0], [0.0, 1.0]]
     """
 
-    def _jacobian(x: Real[ArrayLike, ...]) -> Float[Array, "component dim"]:
+    def _jacobian(x: Real[ArrayLike, "*shape"]) -> Float[Array, "component dim"]:
         x = _check_point(x)
         return jax.jacfwd(u)(x)
 
@@ -136,7 +136,7 @@ def divergence(u: VectorField) -> Callable[[Float[Array, " dim"]], Float[Array, 
         6.0
     """
 
-    def _divergence(x: Real[ArrayLike, ...]) -> Float[Array, ""]:
+    def _divergence(x: Real[ArrayLike, "*shape"]) -> Float[Array, ""]:
         x = _check_point(x)
         jac = jax.jacfwd(u)(x)
         if jac.shape != (x.shape[0], x.shape[0]):
@@ -174,7 +174,7 @@ def curl2d(u: VectorField) -> Callable[[Float[Array, " 2"]], Float[Array, ""]]:
         2.0
     """
 
-    def _curl(x: Real[ArrayLike, ...]) -> Float[Array, ""]:
+    def _curl(x: Real[ArrayLike, "*shape"]) -> Float[Array, ""]:
         x = _check_point(x)
         jac = jax.jacfwd(u)(x)
         if jac.shape != (2, 2):
@@ -209,7 +209,7 @@ def laplacian(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, "
         6.0
     """
 
-    def _laplacian(x: Real[ArrayLike, ...]) -> Float[Array, ""]:
+    def _laplacian(x: Real[ArrayLike, "*shape"]) -> Float[Array, ""]:
         x = _check_point(x)
         grad_f = jax.grad(f)
 
