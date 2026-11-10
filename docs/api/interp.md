@@ -188,6 +188,15 @@ $$
 all through the stencil's scatter-add. Nearest weights bin each sample into the cell of its nearest node, with the cell boundaries half-way between nodes and half a cell past the end nodes, as `scipy.stats.binned_statistic_dd` does with those edges; linear weights give cloud-in-cell deposition, which conserves the total of the samples inside the hull of the nodes and is differentiable in the positions. Samples off the grid get zero weights and drop out of every cell; they are never clamped onto the edge.
 
 The counts depend only on the positions, so for fixed positions the sum and the mean are linear in $\vect{y}$, and `plan()` returns a `BinningPlan` that is an ordinary plan from samples to cells: its read-out is a `TransposedStencil`, $\mathrm{diag}(\vect{s}) \mat{H}^\top$ with $s_j = 1$ for sums and $1 / n_j$ for means, its `adjoint` is $\mat{H} \mathrm{diag}(\vect{s})$, and an empty cell under the mean is an invalid row that reads `fill_value` (NaN by default) and has a zero row in `operator()`, just as a target outside the domain does for sampling. A count does not depend on the data at all, so under `statistic="count"` the plan returns $\vect{n}$ for every field, and its `operator`, `adjoint` and `linearize` raise `NonlinearSchemeError`; `plan.counts` holds $\vect{n}$ for every statistic.
+## Spectral interpolation
+
+`Fourier()` resamples $N$ samples of a periodic axis onto $M$ nodes of the same period and origin (both `Axis` objects with nodes $x_0 + jP/N$ and $x_0 + jP/M$). The samples define the trigonometric polynomial with their discrete Fourier coefficients $\hat{\vect{y}} = \mat{F}_N \vect{y}$, and the plan reads it on the new nodes by zero-padding the spectrum ($M > N$) or cropping it ($M < N$):
+
+$$
+\hat{\vect{f}} = \frac{M}{N} \mat{F}_M^{-1} \mat{S} \mat{F}_N \vect{y},
+$$
+
+with $\mat{F}_N$ the length-$N$ DFT and $\mat{S}$ $(M, N)$ the mode map that copies every wavenumber $|k| < \min(N, M)/2$. For even $\min(N, M)$ the unpaired Nyquist bin is halved into $\pm N/2$ when upsampling and the bins $\pm M/2$ are added into one when downsampling, as `scipy.signal.resample` does, which the plan equals to $10^{-12}$. A field whose spectrum lies in $|k| < \min(N, M)/2$ is resampled exactly, and upsampling then downsampling returns the samples. The read-out `FourierReadout` applies two FFTs, and its adjoint has the same form with the roles of $N$ and $M$ swapped, $\mat{H}^\top \vect{r} = \mathrm{Re} (\mat{F}_N^{-1} \mat{S}^\top \mat{F}_M \vect{r})$, checked by the dot-product test. The axis must be periodic or the field band-limited; at a jump the read-out rings (Gibbs). The Chebyshev read-out follows with the Chebyshev transform (#46).
 
 ## Reference
 

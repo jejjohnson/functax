@@ -67,6 +67,7 @@ from functax._src.interp._series import (
     SeriesScheme,
     Steffen,
 )
+from functax._src.interp._spectral import Fourier, FourierReadout
 from functax._src.interp._stencil import Readout, Stencil
 from functax._src.interp._tensor import tensor_stencil
 from functax._src.interp._triangulation import Delaunay
@@ -91,6 +92,8 @@ __all__ = [  # noqa: RUF022
     "Delaunay",
     "DerivativePlan",
     "Fit",
+    "Fourier",
+    "FourierReadout",
     "GaussianPlan",
     "HermiteFit",
     "Identity",
