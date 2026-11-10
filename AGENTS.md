@@ -94,6 +94,9 @@ Before writing a helper, a validator, a sampler, a basis or a rule, find out whe
 | `binned_statistic_dd`, a histogram or `searchsorted` binning of samples into cells, particle deposition (cloud-in-cell), a hand-written `segment_sum` over cell indices | `Binning(statistic, weights)` and its `BinningPlan` (`functax.interp`): the adjoint Hᵀ of the nearest or linear sampling stencil, normalised for the mean, differentiable in the positions |
 | A radial basis function interpolant, a thin-plate spline, `scipy.interpolate.RBFInterpolator`, a kernel solve with a polynomial tail, a kernel passed in from another library | `RBF` with `Polyharmonic`, `Wendland` or any `Kernel` callable, `KernelSolve` and `KernelReadout` (`functax.interp`) |
 | Simple, ordinary or universal kriging, a GP posterior mean and variance on scattered sources, a dense posterior covariance with samples | `Kriging` (a `GaussianPlan` with a `KernelCovariance`, `functax.interp`) |
+| `np.linalg.lstsq` onto a basis, a ridge regression, a projection with quadrature weights | `least_squares`, `galerkin` (`functax.project`) |
+| A hand-rolled 3D-Var / DIVA-style smoothing solve, (HᵀR⁻¹H + λLᵀL)x = HᵀR⁻¹y, with H, R⁻¹ and L as operators | `Variational` (`functax.project`), a `Fit` that sits in a `Plan` |
+| A Jacobi or SOR loop that fills NaN holes, a Laplace or biharmonic inpaint | `fill_gaps` (`functax.project`) |
 
 ## The contracts
 

@@ -21,6 +21,7 @@ The [capability index](capabilities.md) lists every public name on one page, wit
 | [Transforms](transform.md) | `SphericalHarmonicTransform`, `nonuniform_rfft`, `nonuniform_irfft` (Wave 1) |
 | [Derivatives](diffops.md) | `gradient`, `jacobian_field`, `divergence`, `curl2d`, `laplacian`, `surface_grad`, `surface_grad_enu`, `laplace_beltrami` (Wave 1) |
 | [Interpolation](interp.md) | `Stencil`, `locate`, `Policies`, `Nearest`, `Linear`, `Tensor`, `Plan` (Wave 2) |
+| [Projection](project.md) | `least_squares`, `galerkin`, `Variational`, `fill_gaps` (Wave 3) |
 | [Type aliases](typing.md) | `Shape` |
 | [Exceptions](exceptions.md) | `FunctaxError`, `ValidationError`, `MissingExtraError` |
 

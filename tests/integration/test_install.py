@@ -94,6 +94,7 @@ class TestMissingExtra:
         "module",
         [
             "functax.interp",
+            "functax.project",
             "functax.basis",
             "functax.quad",
             "functax.diffops",
