@@ -92,6 +92,7 @@ Before writing a helper, a validator, a sampler, a basis or a rule, find out whe
 | `scipy.interpolate.LinearNDInterpolator`, barycentric weights on a triangle mesh, a `find_simplex` locate | `Delaunay()` or `Delaunay(simplices=mesh)` and its `Plan` (`functax.interp`): D + 1 taps, NaN outside the hull |
 | `binned_statistic_dd`, a histogram or `searchsorted` binning of samples into cells, particle deposition (cloud-in-cell), a hand-written `segment_sum` over cell indices | `Binning(statistic, weights)` and its `BinningPlan` (`functax.interp`): the adjoint Hᵀ of the nearest or linear sampling stencil, normalised for the mean, differentiable in the positions |
 | A radial basis function interpolant, a thin-plate spline, `scipy.interpolate.RBFInterpolator`, a kernel solve with a polynomial tail, a kernel passed in from another library | `RBF` with `Polyharmonic`, `Wendland` or any `Kernel` callable, `KernelSolve` and `KernelReadout` (`functax.interp`) |
+| Simple, ordinary or universal kriging, a GP posterior mean and variance on scattered sources, a dense posterior covariance with samples | `Kriging` (a `GaussianPlan` with a `KernelCovariance`, `functax.interp`) |
 
 ## The contracts
 
