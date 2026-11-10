@@ -12,4 +12,16 @@ spectraldiffx's complex transform $\hat{u}(l, m)$, an FFT in longitude followed 
 
 `nonuniform_rfft` computes the low Fourier modes of a field sampled at arbitrary points of the torus $[0, 1)^d$ as a quadrature of the continuous coefficient, $\hat{c}_{\vect{k}} = \sum_n w_n u_n e^{-2\pi i \vect{k} \cdot \vect{\xi}_n}$, so it converges as the points grow. `nonuniform_irfft` evaluates the truncated real Fourier series at arbitrary points, the scattered-point read-out of spectral interpolation. The spectrum is stored as the $2^{d-1}$ low corners of an rfft spectrum; on a uniform grid of $S$ nodes with $w_n = 1/S$ the coefficients equal `rfftn(u) / S`.
 
+## Chebyshev transforms
+
+`ChebyshevTransform1D` maps values $\vect{u}$ on the nodes of `chebyshev_nodes` to the true Chebyshev coefficients $\vect{a}$ of $u(x_j) = \sum_k a_k T_k(\xi_j)$, with $T_k(\xi) = \cos(k \arccos \xi)$ and $\xi_j$ the node mapped onto $[-1, 1]$, so a constant $c$ maps to $(c, 0, \ldots, 0)$ and $T_n$ to the unit vector $\vect{e}_n$. On the $N + 1$ Gauss–Lobatto nodes $\xi_j = \cos(j\pi/N)$ the forward transform is a type-I discrete cosine transform with the end coefficients halved,
+
+$$
+a_k = \frac{2}{N c_k} \sum_{j=0}^{N} \frac{u_j}{c_j} \cos(\pi j k / N),
+$$
+
+with $c_0 = c_N = 2$ and $c_k = 1$ otherwise, evaluated as a length-$2N$ real FFT of the even extension of $\vect{u}$. On the $N$ Gauss nodes $\xi_j = \cos((2j + 1)\pi/2N)$ it is the type-II transform $a_k = (2 / N c_k) \sum_j u_j \cos(\pi k (2j + 1)/2N)$ with $c_0 = 2$, a half-sample-shifted FFT of the zero-padded samples. The inverses synthesise $\sum_k a_k T_k(\xi_j)$, so forward then inverse returns the input to $10^{-12}$ relative (gate G4-roundtrip), and band-limited samples give back their coefficients. `ChebyshevTransform2D` is the tensor product on a $(N_y, N_x)$ grid, $x$ on the last axis: forward along $x$ then $y$, inverse along $y$ then $x$. Both act on the trailing axes and keep any leading batch dims and the input dtype.
+
+The classes are spectraldiffx's, moved at `d68f8f6` with their method names (`to_spectral`, `from_spectral`, and `__call__(u, inverse=False)`) and their normalisation, and they equal spectraldiffx there to $10^{-13}$ on both node kinds. spectraldiffx's transforms wrapped a `ChebyshevGrid1D` or `ChebyshevGrid2D`; here they take the grid's degree and node kind (`"lobatto"` for its `"gauss-lobatto"`, or `"gauss"`), and the grids, derivatives, filters and solvers stay in spectraldiffx. The values follow the nodes in spectraldiffx's order, from the upper end of the interval down, while `clenshaw_curtis` orders the same Lobatto nodes ascending, so its rule pairs with the values reversed.
+
 ::: functax.transform
