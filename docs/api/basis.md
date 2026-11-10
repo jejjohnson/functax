@@ -14,6 +14,14 @@ whose inner products $\vect{\phi}(\vect{x})^\top \vect{\phi}(\vect{x}')$ approxi
 
 ::: functax.basis.features
 
+## Box Fourier and vector bases
+
+`functax.basis.fourier` evaluates the Laplacian eigenfunctions of the box $[-L, L]^D$ under Dirichlet, Neumann or periodic boundaries, chosen per axis, with their eigenvalues; the $D$-dimensional functions are tensor products, flattened row-major. `functax.basis.vector` builds 2-D vector atoms from them: `divfree_basis` takes the skew gradient $\nabla^\perp \psi = (-\partial_y \psi, \partial_x \psi)$ of each stream function, so every atom is divergence-free, and `curlfree_basis` the gradient, so every atom is curl-free.
+
+::: functax.basis.fourier
+
+::: functax.basis.vector
+
 ## Polynomials
 
 `functax.basis.polynomial` evaluates the Legendre polynomials $P_l$ by their three-term recurrence and the associated Legendre functions $P_l^m$ by the fully normalised recurrences, carried as a mantissa and a binary exponent per order so they stay finite to high degree in float32 as well as float64. `associated_legendre` comes in the orthonormal, Schmidt and classical normalisations.

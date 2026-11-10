@@ -70,9 +70,11 @@ def test_no_unexpected_subpackages() -> None:
         "basis",
         "basis.eigen",
         "basis.features",
+        "basis.fourier",
         "basis.polynomial",
         "basis.slepian",
         "basis.sphere",
+        "basis.vector",
         "geometry",
     ],
 )
