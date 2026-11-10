@@ -92,7 +92,13 @@ class TestMissingExtra:
 
     @pytest.mark.parametrize(
         "module",
-        ["functax.interp", "functax.basis", "functax.quad", "functax.diffops"],
+        [
+            "functax.interp",
+            "functax.basis",
+            "functax.quad",
+            "functax.diffops",
+            "functax.transform",
+        ],
     )
     def test_a_jax_module_names_the_extra_when_jax_is_blocked(
         self, module: str
