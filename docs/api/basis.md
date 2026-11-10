@@ -26,6 +26,12 @@ whose inner products $\vect{\phi}(\vect{x})^\top \vect{\phi}(\vect{x}')$ approxi
 
 ::: functax.basis.sphere
 
+## Slepian functions
+
+`functax.basis.slepian` builds the band-limited functions that concentrate the most energy in a region $R$ of the sphere: the eigenvectors of $D_{ij} = \int_R Y_i Y_j \mathrm{d}\Omega$, with the concentrations $\lambda_k \in [0, 1]$ as eigenvalues and the Shannon number $\operatorname{tr} D = (l_{\max} + 1)^2 A / 4\pi$ counting the well-concentrated ones. `slepian_cap_basis` handles a cap block by block in the azimuthal order and can be rotated to any centre, `slepian_polar_gap_basis` the band between two polar caps, and `slepian_region_basis` any region given by a quadrature over it, for instance a global grid masked by `spherical_polygon_mask`.
+
+::: functax.basis.slepian
+
 ## Eigenbases
 
 `functax.basis.eigen` holds the eigenbases of discrete operators. `cotangent_laplacian_eigpairs` solves $\mat{L} \vect{\phi} = \lambda \mat{M} \vect{\phi}$ for the cotangent Laplacian $\mat{L}$ of a triangle mesh and its lumped mass $\mat{M}$, so the eigenvectors are $\mat{M}$-orthonormal and converge to the surface's eigenfunctions under refinement ($\lambda \to \ell(\ell + 1)$ on the unit sphere).
