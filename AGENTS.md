@@ -90,6 +90,7 @@ Before writing a helper, a validator, a sampler, a basis or a rule, find out whe
 | A 1-D cubic spline, PCHIP, Akima or Steffen, `interpax.interp1d`, a monotone lookup table | `CubicSpline`, `Pchip`, `Akima`, `Steffen` and `scheme.fit(axis, y)` (`functax.interp`); interpax stays out of the stack (decision 14) |
 | A `cKDTree` k-nearest search with inverse-distance weights, IDW gridding of scattered points, a neighbour search on lon/lat | `InverseDistance` and its `Plan` (`functax.interp`): a tree on the host, a chunked brute force under `jit`, the chord metric for `Points(metric="chord")` |
 | `scipy.interpolate.LinearNDInterpolator`, barycentric weights on a triangle mesh, a `find_simplex` locate | `Delaunay()` or `Delaunay(simplices=mesh)` and its `Plan` (`functax.interp`): D + 1 taps, NaN outside the hull |
+| `binned_statistic_dd`, a histogram or `searchsorted` binning of samples into cells, particle deposition (cloud-in-cell), a hand-written `segment_sum` over cell indices | `Binning(statistic, weights)` and its `BinningPlan` (`functax.interp`): the adjoint Hᵀ of the nearest or linear sampling stencil, normalised for the mean, differentiable in the positions |
 
 ## The contracts
 

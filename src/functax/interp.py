@@ -12,6 +12,7 @@ content hash of its inputs. Needs the ``functax[jax]`` extra.
 
 from __future__ import annotations
 
+from functax._src.interp._aggregate import Binning, BinningPlan, TransposedStencil
 from functax._src.interp._bases import (
     Basis,
     BSplineBasis,
@@ -68,6 +69,8 @@ __all__ = [
     "BSplineBasis",
     "BandedPrefilter",
     "Basis",
+    "Binning",
+    "BinningPlan",
     "BrownianBridge",
     "ComposedPlan",
     "Cubic",
@@ -99,6 +102,7 @@ __all__ = [
     "Steffen",
     "Stencil",
     "Tensor",
+    "TransposedStencil",
     "WindowedPlan",
     "bspline",
     "check_outside",
