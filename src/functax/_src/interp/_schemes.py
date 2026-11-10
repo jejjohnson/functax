@@ -18,6 +18,7 @@ import math
 from typing import Any
 
 import equinox as eqx
+import lineax as lx
 from jaxtyping import Array, Float
 
 from functax._src.geometry._types import AffineGrid, Axis, RectilinearGrid
@@ -34,6 +35,7 @@ from functax._src.interp._derivative import LocalGeometry
 from functax._src.interp._fit import Identity
 from functax._src.interp._gaussian import GaussianPlan
 from functax._src.interp._interpolant import Interpolant, fit_interpolant
+from functax._src.interp._kernels import RadialKernel
 from functax._src.interp._plan import Plan
 from functax._src.interp._policies import Policies
 from functax._src.interp._prefilter import prefilter_for
@@ -63,7 +65,9 @@ class Scheme(eqx.Module):
 
     A scheme holds static fields only, so it round-trips through strict JSON
     with `get_config` and `from_config`. A new scheme needs no registration:
-    `from_config` finds it by class name among the loaded subclasses.
+    `from_config` finds it by class name among the loaded subclasses. A
+    nested `RadialKernel` or lineax solver (an `RBF`'s kernel and solver) is
+    found the same way among its own kind.
     """
 
     @abc.abstractmethod
@@ -117,7 +121,12 @@ class Scheme(eqx.Module):
             >>> Scheme.from_config(json.loads(text)) == scheme
             True
         """
-        return build_from_config(config, root=Scheme, expected=cls)
+        return build_from_config(
+            config,
+            root=Scheme,
+            expected=cls,
+            nested=(RadialKernel, lx.AbstractLinearSolver),
+        )
 
 
 class LocalScheme(Scheme):

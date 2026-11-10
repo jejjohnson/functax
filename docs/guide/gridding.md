@@ -65,3 +65,47 @@ int(jnp.isnan(means(masses)).sum())  # 155 empty cells read NaN
 ```
 
 Samples off the grid are dropped from every cell rather than clamped onto the edge. The counts depend only on the positions, so for fixed positions the sum and the mean are linear in the data, and `plan.adjoint` sends a residual on the cells back to the samples. The plan also traces in the positions, so `jax.grad` of a loss on the deposited field reaches the particle positions through the linear weights; with nearest weights that gradient is zero, as it is for any histogram.
+
+## RBF
+
+Radial basis function interpolation writes the field as a sum of kernels centred on the $N$ sources plus a polynomial tail,
+
+$$
+\hat{f}(\vect{x}) = \sum_{j=1}^{N} c_j k(\vect{x}, \vect{x}_j) + \sum_{p=1}^{P} b_p p_p(\vect{x}),
+$$
+
+with $P$ monomials $p_p$ up to a chosen degree. With the $N \times N$ kernel matrix $\mat{K}$ on the sources, the $N \times P$ tail matrix $\mat{P}$, the samples $\vect{y} \in \mathbb{R}^N$ and a smoothing $\lambda \ge 0$, the weights $\vect{c} \in \mathbb{R}^N$ and $\vect{b} \in \mathbb{R}^P$ solve the saddle-point system
+
+$$
+\begin{pmatrix} \mat{K} + \lambda \mat{I} & \mat{P} \\ \mat{P}^\top & \mat{0} \end{pmatrix} \begin{pmatrix} \vect{c} \\ \vect{b} \end{pmatrix} = \begin{pmatrix} \vect{y} \\ \vect{0} \end{pmatrix},
+$$
+
+and the plan reads $\hat{\vect{f}}(\mat{X}_*) = \mat{K}_* \vect{c} + \mat{P}_* \vect{b}$ at $M$ targets, with the $M \times N$ cross-kernel $\mat{K}_*$ and the $M \times P$ monomials $\mat{P}_*$ there. With $\lambda = 0$ the interpolant passes through every sample; a positive $\lambda$ trades that for a smoother field.
+
+```python
+import jax
+import jax.numpy as jnp
+import lineax as lx
+from functax.geometry import Axis, Points, RectilinearGrid
+from functax.interp import RBF, Polyharmonic
+
+# 50 scattered stations and a 20 × 30 target grid
+stations = Points(jax.random.uniform(jax.random.key(0), (50, 2)))
+grid = RectilinearGrid(
+    (Axis(jnp.linspace(0.0, 1.0, 20)), Axis(jnp.linspace(0.0, 1.0, 30)))
+)
+temperature = jnp.sin(3.0 * stations.xy[:, 0]) + stations.xy[:, 1] ** 2
+
+scheme = RBF(kernel=Polyharmonic(2), degree=1, smoothing=0.0, solver=lx.Cholesky())
+plan = scheme.plan(stations, grid)
+plan(temperature).shape  # (600,)
+plan.grid_shape  # (20, 30)
+plan.adjoint(jnp.ones(600)).shape  # (50,)
+```
+
+The kernel is anything that takes the targets and the sources and returns their cross-kernel, as an array or as a lineax operator: a plain function, or another library's kernel object, so functax never imports the kernel library ([`Kernel`](xref:api#functax.interp.Kernel)). Two families ship with functax because they are about interpolation rather than Gaussian processes.
+
+- [`Polyharmonic(k)`](xref:api#functax.interp.Polyharmonic) is $\pm r^k$ for odd $k$ and $\pm r^k \log r$ for even $k$ ($k = 2$ is the thin-plate spline, $k = 3$ the cubic). It is only conditionally positive definite, so it needs a tail of degree at least `min_degree` (1 for both), which is what `degree=None` picks. Its signs are SciPy's, so the plan equals `scipy.interpolate.RBFInterpolator` for the same kernel, degree and smoothing.
+- [`Wendland(smoothness, support)`](xref:api#functax.interp.Wendland) is the compact $C^2$ or $C^4$ Wendland function of $r / \rho$, zero beyond the support radius $\rho$. It is positive definite in up to three dimensions and needs no tail.
+
+The plan's fit is a [`KernelSolve`](xref:api#functax.interp.KernelSolve), which factorises the saddle-point system once when the plan is built and solves it for each field. It projects onto the null space of $\mat{P}^\top$ (a QR factorisation of $\mat{P}$), where the kernel is positive definite, and factorises that block with the lineax solver you pass (Cholesky by default). The system is symmetric, so the adjoint of the fit is the same solve, and `plan.adjoint` and `plan.operator()` work as for any other plan. Building costs $O(N^3)$ and the dense $M \times (N + P)$ read-out; applying costs $O(N^2 + MN)$ per field, so RBF suits up to a few thousand sources.

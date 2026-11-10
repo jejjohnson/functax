@@ -20,6 +20,7 @@ import math
 from typing import Any
 
 import equinox as eqx
+import lineax as lx
 
 from functax.exceptions import ValidationError
 
@@ -40,7 +41,8 @@ def encode_json_value(value: Any, name: str) -> Any:
 
     A non-finite float becomes ``{"float": "nan"}``, ``{"float": "inf"}`` or
     ``{"float": "-inf"}``, the one tagged object a config holds besides a
-    nested config.
+    nested config. A lineax solver becomes the config of its fields
+    (``{"class": "Cholesky"}``).
 
     Raises:
         ValidationError: If ``value`` (named ``name`` in the message) has no
@@ -60,19 +62,38 @@ def encode_json_value(value: Any, name: str) -> Any:
     get_config = getattr(value, "get_config", None)
     if isinstance(value, eqx.Module) and callable(get_config):
         return get_config()
+    if isinstance(value, lx.AbstractLinearSolver):
+        return config_of(value)
     msg = f"'{name}' has no strict-JSON form, got {type(value).__name__}"
     raise ValidationError(msg)
 
 
-def _decode(value: Any, name: str, root: type[eqx.Module]) -> Any:
-    """The inverse of `encode_json_value`, with lists back as tuples."""
+def _decode(
+    value: Any,
+    name: str,
+    root: type[eqx.Module],
+    nested: tuple[type[eqx.Module], ...] = (),
+) -> Any:
+    """The inverse of `encode_json_value`, with lists back as tuples.
+
+    A nested config names a class among ``root``'s subclasses, or else among
+    those of the first ``nested`` root that has a class of that name.
+    """
     if isinstance(value, list):
         return tuple(
-            _decode(item, f"{name}[{index}]", root) for index, item in enumerate(value)
+            _decode(item, f"{name}[{index}]", root, nested)
+            for index, item in enumerate(value)
         )
     if isinstance(value, dict):
         if "class" in value:
-            return build_from_config(value, root=root, expected=root)
+            class_name = value["class"]
+            if not _concrete_classes(root, class_name):
+                for nested_root in nested:
+                    if _concrete_classes(nested_root, class_name):
+                        return build_from_config(
+                            value, root=nested_root, expected=nested_root
+                        )
+            return build_from_config(value, root=root, expected=root, nested=nested)
         if set(value) == {"float"} and value["float"] in _NON_FINITE:
             return float(value["float"])
         msg = (
@@ -115,16 +136,23 @@ def _concrete_classes(root: type[eqx.Module], name: str) -> list[type[eqx.Module
 
 
 def build_from_config(
-    config: Any, *, root: type[eqx.Module], expected: type[eqx.Module]
+    config: Any,
+    *,
+    root: type[eqx.Module],
+    expected: type[eqx.Module],
+    nested: tuple[type[eqx.Module], ...] = (),
 ) -> Any:
     """The module a `config_of` config describes, found among ``root``'s subclasses.
 
-    Nested configs (a `Tensor`'s schemes) are resolved among the same ``root``.
+    Nested configs (a `Tensor`'s schemes) are resolved among the same
+    ``root``, and a name ``root`` does not have among the ``nested`` roots (an
+    `RBF`'s kernel and solver).
 
     Args:
         config: The decoded config.
         root: The class whose loaded subclasses may be named.
         expected: The class the result must be an instance of.
+        nested: Further roots whose classes a nested config may name.
 
     Raises:
         ValidationError: If ``config`` is not a dict with a ``"class"`` name,
@@ -163,7 +191,7 @@ def build_from_config(
         msg = f"'config' is missing {missing}, which {name} needs"
         raise ValidationError(msg)
     arguments = {
-        field_name: _decode(config[field_name], field_name, root)
+        field_name: _decode(config[field_name], field_name, root, nested)
         for field_name in fields
         if field_name in config
     }
