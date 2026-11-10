@@ -196,7 +196,15 @@ $$
 \hat{\vect{f}} = \frac{M}{N} \mat{F}_M^{-1} \mat{S} \mat{F}_N \vect{y},
 $$
 
-with $\mat{F}_N$ the length-$N$ DFT and $\mat{S}$ $(M, N)$ the mode map that copies every wavenumber $|k| < \min(N, M)/2$. For even $\min(N, M)$ the unpaired Nyquist bin is halved into $\pm N/2$ when upsampling and the bins $\pm M/2$ are added into one when downsampling, as `scipy.signal.resample` does, which the plan equals to $10^{-12}$. A field whose spectrum lies in $|k| < \min(N, M)/2$ is resampled exactly, and upsampling then downsampling returns the samples. The read-out `FourierReadout` applies two FFTs, and its adjoint has the same form with the roles of $N$ and $M$ swapped, $\mat{H}^\top \vect{r} = \mathrm{Re} (\mat{F}_N^{-1} \mat{S}^\top \mat{F}_M \vect{r})$, checked by the dot-product test. The axis must be periodic or the field band-limited; at a jump the read-out rings (Gibbs). The Chebyshev read-out follows with the Chebyshev transform (#46).
+with $\mat{F}_N$ the length-$N$ DFT and $\mat{S}$ $(M, N)$ the mode map that copies every wavenumber $|k| < \min(N, M)/2$. For even $\min(N, M)$ the unpaired Nyquist bin is halved into $\pm N/2$ when upsampling and the bins $\pm M/2$ are added into one when downsampling, as `scipy.signal.resample` does, which the plan equals to $10^{-12}$. A field whose spectrum lies in $|k| < \min(N, M)/2$ is resampled exactly, and upsampling then downsampling returns the samples. The read-out `FourierReadout` applies two FFTs, and its adjoint has the same form with the roles of $N$ and $M$ swapped, $\mat{H}^\top \vect{r} = \mathrm{Re} (\mat{F}_N^{-1} \mat{S}^\top \mat{F}_M \vect{r})$, checked by the dot-product test. The axis must be periodic or the field band-limited; at a jump the read-out rings (Gibbs).
+
+`Chebyshev(n_coefficients=K)` reads samples on Chebyshev nodes at arbitrary points. The source is an `Axis` holding the nodes of `chebyshev_nodes` on an interval $[a, b]$ (Gauss–Lobatto by default, or `kind="gauss"`, in either order), and the samples $\vect{y}$ define the series of their first $K$ Chebyshev coefficients,
+
+$$
+\hat{f}(x) = \sum_{k=0}^{K-1} c_k T_k(\xi(x)) \text{ with } \vect{c} = \mat{P} \mat{C} \vect{y} \text{ and } \xi = (2x - a - b)/(b - a),
+$$
+
+with $\mat{C}$ the forward transform of `ChebyshevTransform1D` and $\mat{P}$ the truncation to $K$ modes; $K = N + 1$ on $N + 1$ Lobatto nodes interpolates the samples, and a field of degree below $K$ is reproduced exactly. The plan's fit is `ChebyshevFit` and its read-out the dense `KernelReadout` $T_{pk} = T_k(\xi_p)$, so the adjoint is $\mat{C}^\top \mat{P}^\top \mat{T}^\top \vect{r}$: on Lobatto nodes $\mat{C}$ is symmetric, and on Gauss nodes $\mat{C}^\top$ is $2/N$ times the synthesis of $\vect{g}$ with $g_0$ halved, both checked by the dot-product test. `scheme.fit(axis, y)` returns a `ChebyshevInterpolant`, which keeps $\vect{c}$ and sums the series at targets chosen inside the trace with `clenshaw`, Clenshaw's recurrence $b_k = c_k + 2\xi b_{k+1} - b_{k+2}$ from $k = K - 1$ down to 1 with $b_K = b_{K+1} = 0$ and $\hat{f} = c_0 + \xi b_1 - b_2$. `clenshaw` equals `numpy.polynomial.chebyshev.chebval` to $10^{-13}$ relative to $\sum_k |c_k|$. Targets off $[a, b]$ follow `outside`: `"nan"` and `"raise"` mark them, `"clamp"` reads the nearest end and `"extrapolate"` evaluates the polynomial.
 
 ## Reference
 

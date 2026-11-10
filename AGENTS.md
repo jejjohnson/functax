@@ -104,6 +104,7 @@ Before writing a helper, a validator, a sampler, a basis or a rule, find out whe
 | A hand-rolled 3D-Var / DIVA-style smoothing solve, (HᵀR⁻¹H + λLᵀL)x = HᵀR⁻¹y, with H, R⁻¹ and L as operators | `Variational` (`functax.project`), a `Fit` that sits in a `Plan` |
 | A Jacobi or SOR loop that fills NaN holes, a Laplace or biharmonic inpaint | `fill_gaps` (`functax.project`) |
 | `scipy.signal.resample`, an FFT zero-padding to upsample a periodic signal, geonnax `band_limited_resize` on one axis | `Fourier` and its `Plan` (`functax.interp`), with an adjoint |
+| `numpy.polynomial.chebyshev.chebval` or a hand-written Clenshaw sum in JAX, reading samples on Chebyshev nodes at arbitrary points, a Chebyshev read-out matrix T_pk = T_k(x_p) | `clenshaw`, `Chebyshev(n_coefficients=K)` with `ChebyshevFit` and `ChebyshevInterpolant` (`functax.interp`), with an adjoint |
 
 ## The contracts
 

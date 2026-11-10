@@ -94,6 +94,15 @@ def chebyshev_nodes(
     if not lower < upper:
         msg = f"'interval' must have a < b, got {interval!r}"
         raise GeometryError(msg)
+    return jnp.asarray(_mapped_nodes(degree, kind, lower, upper))
+
+
+def _mapped_nodes(degree: int, kind: str, lower: float, upper: float) -> np.ndarray:
+    """The nodes xⱼ = c + h ξⱼ of `chebyshev_nodes` as a float64 NumPy array.
+
+    The host-side constant, for callers that check an axis inside a trace
+    (where a JAX array would be traced); the arguments are assumed valid.
+    """
     if kind == "lobatto":
         # ξⱼ = cos(jπ/N), j = 0, …, N
         angles = np.pi * np.arange(degree + 1) / degree
@@ -105,4 +114,4 @@ def chebyshev_nodes(
     centre = 0.5 * (lower + upper)
     half_width = 0.5 * (upper - lower)
     # xⱼ = c + h ξⱼ
-    return jnp.asarray(centre + half_width * reference)
+    return centre + half_width * reference

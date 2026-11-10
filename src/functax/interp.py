@@ -67,7 +67,14 @@ from functax._src.interp._series import (
     SeriesScheme,
     Steffen,
 )
-from functax._src.interp._spectral import Fourier, FourierReadout
+from functax._src.interp._spectral import (
+    Chebyshev,
+    ChebyshevFit,
+    ChebyshevInterpolant,
+    Fourier,
+    FourierReadout,
+    clenshaw,
+)
 from functax._src.interp._stencil import Readout, Stencil
 from functax._src.interp._tensor import tensor_stencil
 from functax._src.interp._triangulation import Delaunay
@@ -84,6 +91,9 @@ __all__ = [  # noqa: RUF022
     "Binning",
     "BinningPlan",
     "BrownianBridge",
+    "Chebyshev",
+    "ChebyshevFit",
+    "ChebyshevInterpolant",
     "ComposedPlan",
     "Conservative",
     "Cubic",
@@ -130,6 +140,7 @@ __all__ = [  # noqa: RUF022
     "WindowedPlan",
     "bspline",
     "check_outside",
+    "clenshaw",
     "compose",
     "index_positions",
     "locate",
