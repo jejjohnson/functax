@@ -14,6 +14,18 @@ whose inner products $\vect{\phi}(\vect{x})^\top \vect{\phi}(\vect{x}')$ approxi
 
 ::: functax.basis.features
 
+## Polynomials
+
+`functax.basis.polynomial` evaluates the Legendre polynomials $P_l$ by their three-term recurrence and the associated Legendre functions $P_l^m$ by the fully normalised recurrences, carried as a mantissa and a binary exponent per order so they stay finite to high degree in float32 as well as float64. `associated_legendre` comes in the orthonormal, Schmidt and classical normalisations.
+
+::: functax.basis.polynomial
+
+## The sphere
+
+`functax.basis.sphere` holds the bases on the unit sphere. `real_spherical_harmonics` returns the tesseral harmonics $Y_{lm}$, orthonormal under $\mathrm{d}\Omega$, each a polynomial in $(x, y, z)$, so they are differentiable at the poles. `vector_spherical_harmonics` returns the gradient harmonics $\vect{\Psi}_{lm} = \nabla_S Y_{lm}$ and the toroidal harmonics $\vect{\Phi}_{lm} = \hat{\vect{r}} \times \nabla_S Y_{lm}$, a Helmholtz basis for tangent fields. `needlet_basis` builds the needlet tight frame, localised in space and frequency, and `shell_basis` multiplies harmonics by Legendre or Chebyshev polynomials in radius for fields on a shell.
+
+::: functax.basis.sphere
+
 ## Eigenbases
 
 `functax.basis.eigen` holds the eigenbases of discrete operators. `cotangent_laplacian_eigpairs` solves $\mat{L} \vect{\phi} = \lambda \mat{M} \vect{\phi}$ for the cotangent Laplacian $\mat{L}$ of a triangle mesh and its lumped mass $\mat{M}$, so the eigenvectors are $\mat{M}$-orthonormal and converge to the surface's eigenfunctions under refinement ($\lambda \to \ell(\ell + 1)$ on the unit sphere).

@@ -64,7 +64,16 @@ def test_no_unexpected_subpackages() -> None:
 
 
 @pytest.mark.parametrize(
-    "module", [*SUBMODULES, "basis", "basis.eigen", "basis.features", "geometry"]
+    "module",
+    [
+        *SUBMODULES,
+        "basis",
+        "basis.eigen",
+        "basis.features",
+        "basis.polynomial",
+        "basis.sphere",
+        "geometry",
+    ],
 )
 def test_submodules_declare_all(module: str) -> None:
     imported = importlib.import_module(f"functax.{module}")
