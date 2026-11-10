@@ -22,6 +22,7 @@ SUBMODULES = [
 
 SUBPACKAGES = [
     "_src",
+    "basis",
     "geometry",
 ]
 
@@ -61,7 +62,7 @@ def test_no_unexpected_subpackages() -> None:
     assert found == set(SUBPACKAGES)
 
 
-@pytest.mark.parametrize("module", [*SUBMODULES, "geometry"])
+@pytest.mark.parametrize("module", [*SUBMODULES, "basis", "basis.features", "geometry"])
 def test_submodules_declare_all(module: str) -> None:
     imported = importlib.import_module(f"functax.{module}")
     assert hasattr(imported, "__all__"), f"functax.{module} is missing __all__"
