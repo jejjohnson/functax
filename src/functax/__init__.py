@@ -17,8 +17,9 @@ never imports JAX.
 
 Examples:
     >>> import functax
-    >>> functax.__version__
-    '0.0.1'
+    >>> major, minor, patch = functax.__version__.split(".")[:3]
+    >>> patch.isdigit()
+    True
 """
 
 from __future__ import annotations
