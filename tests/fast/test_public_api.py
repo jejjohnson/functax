@@ -19,6 +19,7 @@ SUBMODULES = [
     "exceptions",
     "interp",
     "quad",
+    "transform",
 ]
 
 
