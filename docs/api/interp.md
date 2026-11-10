@@ -95,6 +95,20 @@ zero at the knots and $\sigma^2 \Delta_i / 4$ at mid-cell. Two targets with offs
 
     Only the linear row exists today; the others arrive with their schemes.
 
+## Kernels and RBF
+
+The global schemes take a kernel $k(\vect{x}, \vect{x}')$ as an argument. `Kernel` is a protocol: anything called as `kernel(targets, sources)` with the $M \times D$ targets and the $N \times D$ sources that returns the $M \times N$ cross-kernel, as an array or as a lineax operator (which is materialised with `as_matrix()`), is a kernel. A plain function satisfies it, and so does another library's kernel object, so kernellib hands its kernels to functax without functax importing it. Distances, metrics and length scales are the kernel's own business.
+
+functax ships two radial families, both `RadialKernel`s of the Euclidean distance $r = \lVert \vect{x} - \vect{x}' \rVert$ that round-trip through strict JSON inside a scheme's config. `Polyharmonic(k)` is $(-1)^m r^k$ for odd $k$ and $(-1)^m r^k \log r$ for even $k$, conditionally positive definite of order $m = \lceil k/2 \rceil$ (odd $k$) or $k/2 + 1$ (even $k$), so it needs a polynomial tail of degree at least $m - 1$ (`min_degree`); the signs are SciPy's (`"linear"`, `"thin_plate_spline"`, `"cubic"`, `"quintic"`), and $r^k \log r$ is guarded at $r = 0$ by the double `where`. `Wendland(smoothness, support)` is `wendland_c2` or `wendland_c4` of $r / \rho$, positive definite in up to three dimensions and zero beyond $\rho$.
+
+`RBF(kernel, degree, smoothing, solver)` solves, with $\mat{K}$ on the $N$ sources, the $N \times P$ tail $\mat{P}$ of monomials up to `degree` (in coordinates scaled to the sources' bounding box, as SciPy does) and $\lambda$ = `smoothing`,
+
+$$
+\begin{pmatrix} \mat{K} + \lambda \mat{I} & \mat{P} \\ \mat{P}^\top & \mat{0} \end{pmatrix} \begin{pmatrix} \vect{c} \\ \vect{b} \end{pmatrix} = \begin{pmatrix} \vect{y} \\ \vect{0} \end{pmatrix} \text{ and } \hat{\vect{f}}(\mat{X}_*) = \mat{K}_* \vect{c} + \mat{P}_* \vect{b}.
+$$
+
+Its plan has a `KernelSolve` fit, which projects onto the null space $\mat{Q}_2$ of $\mat{P}^\top$ (from the complete QR $\mat{P} = \mat{Q} \mat{R}$) and factorises $\mat{Q}_2^\top (\mat{K} + \lambda \mat{I}) \mat{Q}_2$ once with the lineax solver (Cholesky, or LU when `degree` is below the kernel's `min_degree`), and a dense `KernelReadout` $\mat{H} = [\mat{K}_* \mat{P}_*]$, whose adjoint is $\mat{H}^\top \vect{r}$. The fit maps $N$ samples to $N + P$ coefficients, and the saddle matrix is symmetric, so its adjoint $\mathcal{S}^\top$ is the same solve restricted to the data block. The [gridding guide](../gridding/) walks through gridding stations with it.
+
 ## Curvilinear grids
 
 A `CurvilinearGrid` (a swath) gives the coordinates $\vect{x}_{rc}$ of every node, so a target cannot be located axis by axis. Cell $(r, c)$ maps the unit square onto its four corners by the bilinear map

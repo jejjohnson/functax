@@ -26,10 +26,11 @@ from functax._src.interp._compose import compose
 from functax._src.interp._covariance import BrownianBridge, PosteriorCovariance
 from functax._src.interp._curvilinear import locate_curvilinear
 from functax._src.interp._derivative import LocalGeometry
-from functax._src.interp._fit import Fit, Identity
+from functax._src.interp._fit import Fit, Identity, KernelSolve
 from functax._src.interp._gaussian import GaussianPlan
 from functax._src.interp._hermite import HermiteFit
 from functax._src.interp._interpolant import Interpolant
+from functax._src.interp._kernels import Kernel, Polyharmonic, RadialKernel, Wendland
 from functax._src.interp._locate import (
     check_outside,
     index_positions,
@@ -40,6 +41,7 @@ from functax._src.interp._neighbourhood import InverseDistance
 from functax._src.interp._plan import ComposedPlan, DerivativePlan, Plan, WindowedPlan
 from functax._src.interp._policies import Policies
 from functax._src.interp._prefilter import BandedPrefilter, spline_poles
+from functax._src.interp._rbf import RBF, KernelReadout
 from functax._src.interp._schemes import (
     BSpline,
     Cubic,
@@ -63,7 +65,9 @@ from functax._src.interp._tensor import tensor_stencil
 from functax._src.interp._triangulation import Delaunay
 
 
-__all__ = [
+# plain sorted order (test_submodules_declare_all); ruff's isort-style order
+# would put the all-caps RBF first
+__all__ = [  # noqa: RUF022
     "Akima",
     "BSpline",
     "BSplineBasis",
@@ -84,6 +88,9 @@ __all__ = [
     "Identity",
     "Interpolant",
     "InverseDistance",
+    "Kernel",
+    "KernelReadout",
+    "KernelSolve",
     "Linear",
     "LinearBasis",
     "LocalGeometry",
@@ -94,7 +101,10 @@ __all__ = [
     "Pchip",
     "Plan",
     "Policies",
+    "Polyharmonic",
     "PosteriorCovariance",
+    "RBF",
+    "RadialKernel",
     "Readout",
     "Scheme",
     "SeriesInterpolant",
@@ -103,6 +113,7 @@ __all__ = [
     "Stencil",
     "Tensor",
     "TransposedStencil",
+    "Wendland",
     "WindowedPlan",
     "bspline",
     "check_outside",
