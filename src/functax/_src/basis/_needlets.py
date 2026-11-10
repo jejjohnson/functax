@@ -37,13 +37,13 @@ __all__ = [
 _BUMP_NODES, _BUMP_WEIGHTS = gauss_legendre(64)
 
 
-def _bump(t: Float[Array, ...]) -> Float[Array, ...]:
+def _bump(t: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
     inside = jnp.abs(t) < 1.0
     safe = jnp.where(inside, t, 0.0)
     return jnp.where(inside, jnp.exp(-1.0 / (1.0 - safe**2)), 0.0)
 
 
-def _smooth_step(u: Float[Array, ...]) -> Float[Array, ...]:
+def _smooth_step(u: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
     """ψ(u) = ∫₋₁ᵘ f / ∫₋₁¹ f for the C^∞ bump f(t) = exp(−1/(1 − t²))."""
     u = jnp.clip(u, -1.0, 1.0)
     nodes = jnp.asarray(_BUMP_NODES, dtype=u.dtype)
@@ -59,7 +59,7 @@ def _smooth_step(u: Float[Array, ...]) -> Float[Array, ...]:
 
 def needlet_window(
     B: float = 2.0,
-) -> Callable[[Float[Array, ...]], Float[Array, ...]]:
+) -> Callable[[Float[Array, "*batch"]], Float[Array, "*batch"]]:
     """The needlet window b: smooth, supported in [1/B, B], a partition of unity.
 
     With the C^∞ step ψ (the normalised integral of exp(−1/(1 − t²))) and
@@ -87,11 +87,11 @@ def needlet_window(
         msg = f"'B' must be above 1, got {B!r}"
         raise ValidationError(msg)
 
-    def phi(t: Float[Array, ...]) -> Float[Array, ...]:
+    def phi(t: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
         ramp = _smooth_step(1.0 - 2.0 * B / (B - 1.0) * (t - 1.0 / B))
         return jnp.where(t <= 1.0 / B, 1.0, jnp.where(t >= 1.0, 0.0, ramp))
 
-    def window(xi: Float[Array, ...]) -> Float[Array, ...]:
+    def window(xi: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
         xi = jnp.asarray(xi)
         if not jnp.issubdtype(xi.dtype, jnp.floating):
             xi = xi.astype(jnp.float32)
