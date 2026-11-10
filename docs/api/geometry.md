@@ -26,6 +26,22 @@ for every pair. The $\mathrm{atan2}$ form is accurate at every angle, where $\ar
 
 `pairwise_distance(sources, targets)` dispatches on the metric the two `Points` share: `"euclidean"` on `xy` as given, or `"chord"` and `"geodesic"` on `xy` read as $(\lambda, \varphi)$. A pair with a padding point gets $+\infty$, and large problems are processed in chunks of targets with `lax.map`. The radius is a plain argument; the WGS84 constants and the ellipsoid belong to geophysix.
 
+## Sphere grids and meshes
+
+`fibonacci_sphere`, `gauss_legendre_grid`, `latlon_grid` and `healpix_grid` return points on the unit sphere with quadrature weights $w_q$ for $\int_{S^2} f \mathrm{d}\Omega \approx \sum_q w_q f(\vect{u}_q)$, summing to $4\pi$. The Gauss–Legendre grid takes the sines of latitude from `gauss_legendre` and is exact for band-limited integrands of degree up to $\min(2 n_{\text{lat}} - 1, n_{\text{lon}} - 1)$; the lon/lat grid weights each cell by its exact area; HEALPix pixels have equal area and come in the ring or the nested order of healpy. Points come as unit vectors, or as $(\lambda, \varphi)$ with `output="lonlat"`, which needs an explicit `unit`.
+
+`icosphere` subdivides the icosahedron into a quasi-uniform triangle mesh with $V = 10 \cdot 4^{\ell} + 2$ vertices at level $\ell$, and `mesh_vertex_areas` gives any triangle mesh its lumped vertex areas $a_v = \sum_{t \ni v} |t| / 3$, the diagonal of its mass matrix. The grids and meshes are built on the host with NumPy, as static geometry.
+
+## Frames
+
+`lonlat_to_ecef` maps geodetic $(\lambda, \varphi)$ and height $h$ on the ellipsoid with semi-major axis $a$ and flattening $f$ to Earth-centred, Earth-fixed coordinates,
+
+$$
+(X, Y, Z) = ((N + h)\cos\varphi\cos\lambda, (N + h)\cos\varphi\sin\lambda, (N(1 - e^2) + h)\sin\varphi),
+$$
+
+with $e^2 = f(2 - f)$ and $N = a / \sqrt{1 - e^2 \sin^2\varphi}$; $f = 0$ is the sphere of radius $a$, and `ecef_to_lonlat` inverts it with Bowring's latitude and two fixed refinement steps. The caller passes $a$ and $f$: WGS84 is $a = 6378137$ m and $f = 1/298.257223563$, constants that belong to geophysix. `enu_basis` returns the east, north and up unit vectors at each point, `tangent_to_cartesian` and `cartesian_to_tangent` convert between $(u, v)$ components and 3-D tangent vectors, `local_tangent_plane` projects onto the plane at an origin (azimuthal equidistant or gnomonic), and `rotation_to_pole` takes a centre to the north pole. Every function that reads or writes $(\lambda, \varphi)$ takes `unit="degrees"` or `unit="radians"` with no default.
+
 ## Reference
 
 ::: functax.geometry

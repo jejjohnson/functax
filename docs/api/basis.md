@@ -13,3 +13,9 @@ $$
 whose inner products $\vect{\phi}(\vect{x})^\top \vect{\phi}(\vect{x}')$ approximate the stationary kernel that $\mat{W}$ was drawn from. Drawing $\mat{W}$ is sampling, so it stays with the library that owns the kernel (kernellib or geonnax); no function here takes a PRNG key. `rff_cosine_forward` is the single-cosine form with random phases, `fourier_features` the cosines and sines at dyadic frequencies $2\pi 2^d$, `seasonal_features` those at the harmonics of given periods, and `gaussian_window_features` Gaussian windows in time. The names and signatures are geonnax's, and the outputs equal geonnax `be5537d` to $10^{-12}$ relative in float64.
 
 ::: functax.basis.features
+
+## Eigenbases
+
+`functax.basis.eigen` holds the eigenbases of discrete operators. `cotangent_laplacian_eigpairs` solves $\mat{L} \vect{\phi} = \lambda \mat{M} \vect{\phi}$ for the cotangent Laplacian $\mat{L}$ of a triangle mesh and its lumped mass $\mat{M}$, so the eigenvectors are $\mat{M}$-orthonormal and converge to the surface's eigenfunctions under refinement ($\lambda \to \ell(\ell + 1)$ on the unit sphere).
+
+::: functax.basis.eigen
