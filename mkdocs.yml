@@ -74,6 +74,7 @@ nav:
   - Capability index: capabilities.md
   - Geometry: geometry.md
   - Bases: basis.md
+  - Quadrature: quad.md
   - Interpolation: interp.md
   - Type aliases: typing.md
   - Exceptions: exceptions.md
