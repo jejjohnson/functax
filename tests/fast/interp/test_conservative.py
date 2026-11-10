@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 
+import einx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -16,7 +17,13 @@ from functax.exceptions import (
     OutsideDomainError,
     ValidationError,
 )
-from functax.geometry import AffineGrid, Axis, Points, RectilinearGrid
+from functax.geometry import (
+    AffineGrid,
+    Axis,
+    CurvilinearGrid,
+    Points,
+    RectilinearGrid,
+)
 from functax.interp import Conservative, Policies, Scheme, overlap_weights_1d
 
 
@@ -213,3 +220,70 @@ class TestGeometries:
 def test_config_round_trips() -> None:
     text = json.dumps(Conservative().get_config(), allow_nan=False)
     assert Scheme.from_config(json.loads(text)) == Conservative()
+
+
+class TestPolygonPath:
+    @staticmethod
+    def swath(y: np.ndarray, x: np.ndarray) -> CurvilinearGrid:
+        rows, cols = np.meshgrid(y, x, indexing="ij")
+        return CurvilinearGrid(x=jnp.asarray(cols), y=jnp.asarray(rows))
+
+    def test_degenerate_cells_give_zero_weight(self) -> None:
+        # three equal node rows: the middle one's cells have no area
+        collapsed = self.swath(np.array([0.0, 1.0, 1.0, 1.0, 2.0]), np.arange(3.0))
+        grid = RectilinearGrid(
+            (
+                Axis(jnp.array([0.0, 2.0]), edges=jnp.array([-1.0, 1.0, 3.0])),
+                Axis(jnp.array([0.0, 2.0]), edges=jnp.array([-1.0, 1.0, 3.0])),
+            )
+        )
+        keep = Policies(outside="extrapolate")
+        plan = Conservative().plan(collapsed, grid, policies=keep)
+        weights = np.asarray(plan.read.to_dense())
+        middle = einx.id("(y x) -> y x", np.arange(15), y=5)[2]
+        assert np.all(weights[:, middle] == 0.0)
+        assert np.all(weights.sum(axis=0)[np.setdiff1d(np.arange(15), middle)] > 0)
+        # as a target, a cell of no area is invalid
+        plan = Conservative().plan(grid, collapsed, policies=Policies(outside="clamp"))
+        rows = einx.id("(y x) -> y x", plan.valid, y=5)
+        assert not np.any(np.asarray(rows[2]))
+        assert np.all(np.asarray(plan.read.weights)[middle] == 0.0)
+
+    def test_non_overlapping_cells_give_zero_weight(self) -> None:
+        near = self.swath(np.arange(3.0), np.arange(3.0))
+        far = self.swath(np.arange(3.0) + 10.0, np.arange(3.0))
+        plan = Conservative().plan(near, far, policies=Policies(outside="extrapolate"))
+        assert not bool(plan.valid.any())
+        assert bool(jnp.all(plan.read.weights == 0.0))
+
+    def test_rejects_unsupported_geometries(self) -> None:
+        swath = self.swath(np.arange(3.0), np.arange(3.0))
+        with pytest.raises(GeometryError, match="'source' must be a CurvilinearGrid"):
+            Conservative().plan(Axis(jnp.arange(3.0)), swath)
+
+    def test_rejects_a_concave_target_cell(self) -> None:
+        source = self.swath(np.arange(4.0), np.arange(4.0))
+        rows, cols = np.meshgrid(np.arange(4.0), np.arange(4.0), indexing="ij")
+        # pull one node far past its neighbours, so the corners around it dent
+        cols[1, 1] = 2.9
+        rows[1, 1] = 2.9
+        dented = CurvilinearGrid(x=jnp.asarray(cols), y=jnp.asarray(rows))
+        with pytest.raises(GeometryError, match="cells must be convex"):
+            Conservative().plan(source, dented)
+
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"unit": "degrees"}, "'unit' must be None without sphere=True"),
+            ({"sphere": True}, "'unit' must be 'degrees' or 'radians'"),
+            ({"sphere": True, "unit": "grad"}, "'unit' must be one of"),
+        ],
+    )
+    def test_rejects_bad_settings(self, kwargs: dict, match: str) -> None:
+        with pytest.raises(ValidationError, match=match):
+            Conservative(**kwargs)
+
+    def test_sphere_config_round_trips(self) -> None:
+        scheme = Conservative(sphere=True, unit="degrees")
+        text = json.dumps(scheme.get_config(), allow_nan=False)
+        assert Scheme.from_config(json.loads(text)) == scheme
