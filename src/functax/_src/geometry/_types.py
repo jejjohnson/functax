@@ -23,6 +23,7 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, ArrayLike, Bool, Float
 
+from functax._src._backend import is_tracer
 from functax._src._checks import check_values, require_floating
 from functax._src.geometry._transform import as_transform
 from functax.exceptions import GeometryError
@@ -94,11 +95,19 @@ class Axis(eqx.Module):
         epoch: The time origin of ``values`` (a ``datetime64`` or an ISO 8601
             string), or ``None`` for an axis that is not time. Stored as an
             ISO 8601 string at nanosecond resolution.
+        edges: e, the n + 1 cell edges, node k owning the cell [eₖ, eₖ₊₁]
+            (CF ``bounds``), strictly monotone in the direction of
+            ``values`` and spanning at most P on a periodic axis; ``None``
+            for the midpoints between nodes (`cell_edges`). Kept in the dtype
+            they arrive in. Conservative remapping reads them.
 
     Raises:
         GeometryError: If ``values`` is not 1-D, has fewer than two nodes, is
             not floating, is not strictly monotone, or spans P or more; if
-            ``period`` is not positive and finite; if ``epoch`` is not a time.
+            ``period`` is not positive and finite; if ``epoch`` is not a time;
+            if ``edges`` is not 1-D with n + 1 floating entries, or (when
+            concrete) is not strictly monotone in the direction of ``values``
+            or spans more than P.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -112,11 +121,18 @@ class Axis(eqx.Module):
         >>> Axis(jnp.array([0.0, 2.0, 1.0]))  # doctest: +IGNORE_EXCEPTION_DETAIL
         Traceback (most recent call last):
         functax.exceptions.GeometryError: 'values' must be strictly monotone, ...
+        >>> # CF bounds: cells of 1° centred on half degrees
+        >>> latitude = Axis(
+        ...     jnp.arange(-89.5, 90.0, 1.0), edges=jnp.arange(-90.0, 90.5, 1.0)
+        ... )
+        >>> latitude.edges.shape
+        (181,)
     """
 
     values: Float[Array, " node"]
     period: float | None = eqx.field(static=True)
     epoch: str | None = eqx.field(static=True)
+    edges: Float[Array, " edge"] | None
 
     def __init__(
         self,
@@ -124,6 +140,7 @@ class Axis(eqx.Module):
         *,
         period: float | int | None = None,
         epoch: Any = None,
+        edges: ArrayLike | Sequence[float] | None = None,
     ) -> None:
         values = jnp.asarray(values)
         if values.ndim != 1:
@@ -156,6 +173,74 @@ class Axis(eqx.Module):
         self.values = values
         self.period = period
         self.epoch = None if epoch is None else _as_epoch(epoch)
+        self.edges = None if edges is None else jnp.asarray(edges)
+
+    def __check_init__(self) -> None:
+        if self.edges is None:
+            return
+        n_edges = self.values.shape[0] + 1
+        if self.edges.ndim != 1 or self.edges.shape[0] != n_edges:
+            msg = (
+                f"'edges' must be 1-D with one more entry than 'values' "
+                f"({n_edges}), got shape {self.edges.shape}"
+            )
+            raise GeometryError(msg)
+        _require_floating(self.edges, "edges")
+        # the monotone check needs values, which a traced axis does not have;
+        # a conservative plan reads the edges on the host and sees them then
+        if is_tracer(self.edges) or is_tracer(self.values):
+            return
+        edges = np.asarray(self.edges)
+        values = np.asarray(self.values)
+        # eₖ₊₁ − eₖ, all of the sign of xₖ₊₁ − xₖ
+        direction = np.sign(values[1] - values[0])
+        if not np.all(np.sign(np.diff(edges)) == direction):
+            msg = (
+                "'edges' must be strictly monotone in the direction of 'values', "
+                f"got {edges!r}"
+            )
+            raise GeometryError(msg)
+        if self.period is not None and abs(edges[-1] - edges[0]) > self.period:
+            msg = f"'edges' must span at most {self.period}, got {edges!r}"
+            raise GeometryError(msg)
+
+    def cell_edges(self) -> Float[Array, " edge"]:
+        """The n + 1 cell edges: ``edges``, or the midpoints between nodes.
+
+        Without explicit edges, eₖ = ½ (xₖ₋₁ + xₖ) between nodes, and the end
+        cells are symmetric about their nodes, e₀ = x₀ − ½ (x₁ − x₀) (as
+        xrtoolz's ``_bounds_from_centres``). On a periodic axis the end edges
+        are instead the midpoint m of the wrap gap, between x_{n−1} and
+        x₀ ± P, so e₀ = m ∓ P and e_n = m, and the cells tile the circle.
+
+        Returns:
+            e, in the dtype of ``values`` (or of ``edges``).
+
+        Examples:
+            >>> import jax.numpy as jnp
+            >>> from functax.geometry import Axis
+            >>> Axis(jnp.array([0.0, 1.0, 3.0])).cell_edges().tolist()
+            [-0.5, 0.5, 2.0, 4.0]
+            >>> longitude = Axis(jnp.array([10.0, 20.0, 340.0]), period=360.0)
+            >>> longitude.cell_edges().tolist()
+            [-5.0, 15.0, 180.0, 355.0]
+        """
+        if self.edges is not None:
+            return self.edges
+        values = self.values
+        # ½ (xₖ₋₁ + xₖ) between nodes
+        midpoints = 0.5 * (values[:-1] + values[1:])
+        if self.period is None:
+            # x₀ − ½ (x₁ − x₀) and x_{n−1} + ½ (x_{n−1} − x_{n−2})
+            first = values[0] - 0.5 * (values[1] - values[0])
+            last = values[-1] + 0.5 * (values[-1] - values[-2])
+        else:
+            # the wrap gap runs from x_{n−1} to x₀ ± P, the sign of the axis
+            period = jnp.where(values[-1] > values[0], self.period, -self.period)
+            period = period.astype(values.dtype)
+            last = 0.5 * (values[-1] + values[0] + period)
+            first = last - period
+        return jnp.concatenate([jnp.atleast_1d(first), midpoints, jnp.atleast_1d(last)])
 
     @classmethod
     def from_datetimes(
