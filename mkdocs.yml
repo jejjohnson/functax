@@ -75,6 +75,7 @@ nav:
   - Geometry: geometry.md
   - Bases: basis.md
   - Quadrature: quad.md
+  - Derivatives: diffops.md
   - Interpolation: interp.md
   - Type aliases: typing.md
   - Exceptions: exceptions.md
