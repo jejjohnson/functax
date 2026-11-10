@@ -78,6 +78,7 @@ nav:
   - Derivatives: diffops.md
   - Transforms: transform.md
   - Interpolation: interp.md
+  - Projection: project.md
   - Type aliases: typing.md
   - Exceptions: exceptions.md
 

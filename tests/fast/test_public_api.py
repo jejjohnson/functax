@@ -18,6 +18,7 @@ SUBMODULES = [
     "diffops",
     "exceptions",
     "interp",
+    "project",
     "quad",
     "transform",
 ]
