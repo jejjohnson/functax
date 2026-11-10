@@ -1,9 +1,11 @@
-"""Tests for `functax.basis.polynomial`, copied from geonnax be5537d with functax
-imports. The fast tier: closed forms and validation, each well under a second.
+"""Tests for `functax.basis.polynomial`, copied from geonnax be5537d (and, for
+`legendre_series`, kernellib c2d1fce) with functax imports. The fast tier: closed
+forms and validation, each well under a second.
 """
 
 from __future__ import annotations
 
+import inspect
 import math
 
 import jax
@@ -16,7 +18,9 @@ from functax.basis.polynomial import (
     associated_legendre,
     associated_legendre_indices,
     legendre_polynomials,
+    legendre_series,
 )
+from functax.exceptions import ValidationError
 from functax.quad import gauss_legendre
 
 
@@ -113,3 +117,66 @@ def test_unknown_options_are_rejected() -> None:
         shell_basis(points, 1, 2, r_inner=1.0, r_outer=2.0, radial="bessel")
     with pytest.raises(ValidationError, match="'output' must be one of"):
         vector_spherical_harmonics(jnp.array([[0.0, 0.0, 1.0]]), 1, output="polar")
+
+
+# --- legendre_series (kernellib c2d1fce) --------------------------------------
+
+
+def test_legendre_series_matches_scipy() -> None:
+    # kernellib's test: L = 200 against scipy's P_l, summed term by term
+    degree = 200
+    rng = np.random.default_rng(0)
+    coeffs = rng.standard_normal(degree + 1)
+    x = np.concatenate([np.linspace(-1.0, 1.0, 401), [-1.0, 1.0, 0.0]])
+    expected = sum(c * sp.eval_legendre(ell, x) for ell, c in enumerate(coeffs))
+    got = np.asarray(legendre_series(jnp.asarray(x), jnp.asarray(coeffs)))
+    np.testing.assert_allclose(got, expected, rtol=0.0, atol=1e-12)
+
+
+@pytest.mark.parametrize("degree", [0, 1, 2, 3, 10, 50, 100, 200])
+def test_legendre_series_equals_numpy_legval(degree: int) -> None:
+    # gate of #47: 1e-13 relative to ∑ₗ |cₗ|, the bound on |f| since |Pₗ| ≤ 1;
+    # the two recurrences round differently, so a pointwise relative error is
+    # meaningless where the series crosses zero
+    rng = np.random.default_rng(degree)
+    coeffs = rng.standard_normal(degree + 1)
+    x = np.concatenate([np.linspace(-1.0, 1.0, 401), [-1.0, 1.0, 0.0]])
+    got = legendre_series(jnp.asarray(x), jnp.asarray(coeffs))
+    expected = np.polynomial.legendre.legval(x, coeffs)
+    scale = float(np.sum(np.abs(coeffs)))
+    np.testing.assert_allclose(np.asarray(got), expected, rtol=0.0, atol=1e-13 * scale)
+
+
+def test_legendre_series_low_degrees_and_shapes() -> None:
+    x = jnp.array([[-0.3, 0.2], [0.9, 1.0]])
+    assert legendre_series(x, jnp.array([2.0])).tolist() == [[2.0, 2.0], [2.0, 2.0]]
+    np.testing.assert_allclose(legendre_series(x, jnp.array([1.0, 3.0])), 1.0 + 3 * x)
+    # rounding outside [-1, 1] is clipped: P_l(1) = 1
+    assert float(legendre_series(jnp.array(1.0 + 1e-9), jnp.ones(5))) == 5.0
+
+
+@pytest.mark.parametrize("shape", [(2, 2), (0,)])
+def test_legendre_series_coefficients_must_be_one_non_empty_vector(
+    shape: tuple[int, ...],
+) -> None:
+    # unwrapped, so the module's own check runs rather than the type hook
+    with pytest.raises(ValidationError, match="'coeffs' must be 1-D and non-empty"):
+        inspect.unwrap(legendre_series)(jnp.zeros(3), jnp.ones(shape))
+
+
+def test_legendre_series_keeps_float32() -> None:
+    x = jnp.linspace(-1.0, 1.0, 5, dtype=jnp.float32)
+    assert legendre_series(x, jnp.ones(4, dtype=jnp.float32)).dtype == jnp.float32
+
+
+@pytest.mark.parametrize("end", [-1.0, 1.0])
+def test_legendre_series_gradient_is_finite_and_exact_at_the_ends(end: float) -> None:
+    # P_l′(±1) = (±1)^{l+1} l(l + 1)/2, so f′(±1) = ∑ₗ cₗ (±1)^{l+1} l(l + 1)/2;
+    # the clip passes the gradient straight through, so it is not halved there
+    degree = 30
+    coeffs = jnp.asarray(np.random.default_rng(1).standard_normal(degree + 1))
+    gradient = jax.grad(lambda x: legendre_series(x, coeffs))(jnp.asarray(end))
+    ells = np.arange(degree + 1)
+    expected = np.sum(np.asarray(coeffs) * end ** (ells + 1) * ells * (ells + 1) / 2)
+    assert bool(jnp.isfinite(gradient))
+    np.testing.assert_allclose(float(gradient), expected, rtol=1e-12)

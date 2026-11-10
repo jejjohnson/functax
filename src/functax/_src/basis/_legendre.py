@@ -1,10 +1,11 @@
-"""Legendre polynomials and the fully normalised associated Legendre functions.
+"""Legendre polynomials and series, and the normalised associated Legendre functions.
 
 The one-dimensional building blocks of the spherical bases. The associated
 functions run the orthonormal recurrences as one ``lax.scan`` over the degree,
 carried as a mantissa and a binary exponent per order, so they stay finite to
 high degree in float32 as well as float64. Moved from geonnax ``_legendre`` at
-``be5537d``; Gauss–Legendre nodes moved to `functax.quad`.
+``be5537d``; Gauss–Legendre nodes moved to `functax.quad`. `legendre_series`
+moved from kernellib ``functional._geo`` at ``c2d1fce``.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import einx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, ArrayLike, Float, Int
 
 from functax.exceptions import ValidationError
 
@@ -31,6 +32,7 @@ __all__ = [
     "associated_legendre",
     "associated_legendre_indices",
     "legendre_polynomials",
+    "legendre_series",
 ]
 
 
@@ -96,6 +98,86 @@ def legendre_polynomials(
     ells = jnp.arange(1, degree, dtype=t.dtype)
     _, rest = jax.lax.scan(step, (p0, t), ells)
     return einx.id("..., ..., degree ... -> ... (1 + 1 + degree)", p0, t, rest)
+
+
+def legendre_series(
+    x: Float[ArrayLike, "*batch"], coeffs: Float[ArrayLike, " degree"]
+) -> Float[Array, "*batch"]:
+    """The Legendre series f(x) = ∑ₗ cₗ Pₗ(x), l = 0, …, L, evaluated elementwise.
+
+    The polynomials come from the three-term recurrence P₀ = 1, P₁ = x and
+    (l + 1) P_{l+1} = (2l + 1) x P_l − l P_{l−1}, run as a ``lax.scan`` over l
+    that accumulates the sum as it goes: O(size(x) L) time and O(size(x))
+    memory, so the (…, L + 1) table of `legendre_polynomials` is never formed,
+    which matters for a Gram matrix of u · v. The value of x is clipped to
+    [−1, 1] first, so rounding in a dot product of unit vectors is harmless;
+    the gradient passes straight through the clip, so derivatives at
+    coincident points (u · u = 1 up to rounding) are exact. The signature and
+    the recurrence are kernellib's.
+
+    Algorithm:
+        1. Promote x and c to their common floating dtype, and clip the value
+           (not the gradient) of x to [−1, 1].
+        2. Start the sum at c₀ P₀ + c₁ P₁.
+        3. Scan l = 1, …, L − 1: P_{l+1} from P_l and P_{l−1}, and add c_{l+1} P_{l+1}.
+
+    Args:
+        x: The points x, any shape; typically cosines u · v of unit vectors.
+        coeffs: The L + 1 coefficients c₀, …, c_L, by degree.
+
+    Returns:
+        f(x) at every point, with the shape of ``x``.
+
+    Raises:
+        ValidationError: If ``coeffs`` is not 1-D and non-empty.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from functax.basis.polynomial import legendre_series
+        >>> # P₂(x) = (3x² − 1)/2
+        >>> legendre_series(
+        ...     jnp.array([0.0, 0.5, 1.0]), jnp.array([0.0, 0.0, 1.0])
+        ... ).tolist()
+        [-0.5, -0.125, 1.0]
+        >>> legendre_series(jnp.zeros((2, 3)), jnp.ones(4)).shape
+        (2, 3)
+        >>> # a single coefficient is the constant c₀
+        >>> legendre_series(jnp.array([0.3]), jnp.array([2.0])).tolist()
+        [2.0]
+    """
+    coeffs = jnp.asarray(coeffs)
+    if coeffs.ndim != 1 or coeffs.shape[0] == 0:
+        msg = f"'coeffs' must be 1-D and non-empty, got shape {coeffs.shape}"
+        raise ValidationError(msg)
+    x = jnp.asarray(x)
+    dtype = jnp.result_type(x, coeffs, 1.0)
+    x = x.astype(dtype)
+    # Clip the value only: ``jnp.clip`` has a zero (or half) gradient at the
+    # boundary, which would corrupt the derivatives of a kernel on coincident
+    # points, where u · u is 1 up to rounding.
+    x = x + jax.lax.stop_gradient(jnp.clip(x, -1.0, 1.0) - x)
+    coeffs = coeffs.astype(dtype)
+    p0 = jnp.ones_like(x)
+    # c₀ P₀
+    total = coeffs[0] * p0
+    if coeffs.shape[0] == 1:
+        return total
+    # + c₁ P₁
+    total = total + coeffs[1] * x
+
+    def step(
+        carry: tuple[jax.Array, jax.Array, jax.Array],
+        inputs: tuple[jax.Array, jax.Array],
+    ) -> tuple[tuple[jax.Array, jax.Array, jax.Array], None]:
+        p_prev, p_curr, accumulated = carry
+        ell, coefficient = inputs
+        # P_{l+1} = ((2l + 1) x P_l − l P_{l−1}) / (l + 1)
+        p_next = ((2.0 * ell + 1.0) * x * p_curr - ell * p_prev) / (ell + 1.0)
+        return (p_curr, p_next, accumulated + coefficient * p_next), None
+
+    ells = jnp.arange(1, coeffs.shape[0] - 1, dtype=dtype)
+    (_, _, total), _ = jax.lax.scan(step, (p0, x, total), (ells, coeffs[2:]))
+    return total
 
 
 def associated_legendre_indices(l_max: int) -> tuple[tuple[int, int], ...]:

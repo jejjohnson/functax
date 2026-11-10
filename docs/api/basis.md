@@ -32,6 +32,8 @@ whose inner products $\vect{\phi}(\vect{x})^\top \vect{\phi}(\vect{x}')$ approxi
 
 `functax.basis.polynomial` evaluates the Legendre polynomials $P_l$ by their three-term recurrence and the associated Legendre functions $P_l^m$ by the fully normalised recurrences, carried as a mantissa and a binary exponent per order so they stay finite to high degree in float32 as well as float64. `associated_legendre` comes in the orthonormal, Schmidt and classical normalisations.
 
+`legendre_series` evaluates the Legendre series $f(x) = \sum_{l=0}^{L} c_l P_l(x)$ at every point of an array of any shape, running the same recurrence as a scan that accumulates the sum, so the $(\ldots, L + 1)$ table of `legendre_polynomials` is never formed. It is kernellib's function with kernellib's signature, moved for its sphere-series and axial kernels: the value of $x$ is clipped to $[-1, 1]$ (rounding in a dot product of unit vectors is harmless) while the gradient passes straight through the clip, so derivatives at $x = \pm 1$ are exact. It equals kernellib `c2d1fce` to $10^{-13}$, and `numpy.polynomial.legendre.legval` to $10^{-13}$ relative to $\sum_l |c_l|$ for $L \le 200$.
+
 ::: functax.basis.polynomial
 
 ## The sphere

@@ -1,6 +1,7 @@
 """Tests for `functax.basis.polynomial`, copied from geonnax be5537d with functax
 imports. The slow tier: quadrature orthonormality, high-degree float32 checks,
-gradients and frame reconstructions, each a second or more.
+gradients and frame reconstructions, each a second or more; and the gradient and
+trace checks of `legendre_series` (#47).
 """
 
 from __future__ import annotations
@@ -12,11 +13,13 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import scipy.special as sp
+from _harness import assert_grad_matches_fd, assert_traces
 
 from functax.basis.polynomial import (
     associated_legendre,
     associated_legendre_indices,
     legendre_polynomials,
+    legendre_series,
 )
 from functax.quad import gauss_legendre
 
@@ -148,3 +151,19 @@ def test_gradient_finite_inside_interval():
         return jnp.sum(associated_legendre(t, 8)) + jnp.sum(legendre_polynomials(t, 8))
 
     assert jnp.isfinite(jax.grad(f)(t)).all()
+
+
+def test_legendre_series_gradient_matches_finite_differences() -> None:
+    rng = np.random.default_rng(2)
+    coeffs = jnp.asarray(rng.standard_normal(21))
+    x = jnp.asarray(rng.uniform(-0.95, 0.95, 6))
+    assert_grad_matches_fd(lambda points: legendre_series(points, coeffs), x)
+    # linear in the coefficients: ∂f/∂cₗ = Pₗ(x)
+    assert_grad_matches_fd(lambda c: legendre_series(x, c), coeffs)
+
+
+def test_legendre_series_traces() -> None:
+    rng = np.random.default_rng(3)
+    x = jnp.asarray(rng.uniform(-1.0, 1.0, (4, 9)))
+    coeffs = jnp.asarray(rng.standard_normal((4, 12)))
+    assert_traces(legendre_series, x, coeffs)
