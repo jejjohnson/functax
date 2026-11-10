@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.0.4](https://github.com/jejjohnson/functax/compare/v0.0.3...v0.0.4) (2026-11-10)
+
+
+### Features
+
+* **basis:** move geonnax's EOF and graph-Laplacian bases into functax.basis.eigen ([#78](https://github.com/jejjohnson/functax/issues/78)) ([8d42db4](https://github.com/jejjohnson/functax/commit/8d42db4e1b00d1784cc5ceca9acb22a329a305f3)), closes [#19](https://github.com/jejjohnson/functax/issues/19)
+* **basis:** move geonnax's radial, Gabor and wavelet bases into functax.basis.local ([#77](https://github.com/jejjohnson/functax/issues/77)) ([f6c05aa](https://github.com/jejjohnson/functax/commit/f6c05aabf63659f312050020c89943c61972b577))
+* **diffops:** move geonnax's field derivatives into functax.diffops ([#80](https://github.com/jejjohnson/functax/issues/80)) ([24a8248](https://github.com/jejjohnson/functax/commit/24a82484ae8c14f481c2c44e899f0d794284943d)), closes [#22](https://github.com/jejjohnson/functax/issues/22)
+* **transform:** move geonnax's spherical-harmonic transform and NUFFT into functax.transform ([#82](https://github.com/jejjohnson/functax/issues/82)) ([a83b571](https://github.com/jejjohnson/functax/commit/a83b5711406a5a809ead6a5cbf53880266c07d31)), closes [#23](https://github.com/jejjohnson/functax/issues/23)
+
 ## [0.0.3](https://github.com/jejjohnson/functax/compare/v0.0.2...v0.0.3) (2026-11-10)
 
 
