@@ -16,4 +16,6 @@ Four constructors cover the 1-D rules. `gauss_legendre(n, interval)` is the $n$-
 
 `polyline(vertices, n, rule=…)` is a rule along a polyline with vertices $\vect{v}_0, \dots, \vect{v}_{V-1}$: each segment gets $n$ nodes from the midpoint rule (`rule="midpoint"`, the default) or the Gauss–Legendre rule (`rule="gauss_legendre"`, exact for polynomials along the segment up to degree $2n - 1$), with arc-length weights $\Delta s_k$ that sum to the polyline's length. It returns a `CurveRule`, a `Rule` with one more field, `normals`: in 2-D the unit tangent of each node's segment rotated by $+90°$, so a flux across a transect is $\Phi = \sum_k \Delta s_k c(\vect{x}_k) (\vect{u}_k \cdot \vect{n}_k)$ and reversing the vertices flips its sign; in any other dimension a curve has no single normal and `normals` is `None`. The node count $K = n (V - 1)$ is static, so the rule traces under `jit` and `vmap` and differentiates in the vertices.
 
+The [quadrature guide](../quadrature/) walks through the four families.
+
 ::: functax.quad

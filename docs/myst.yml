@@ -39,6 +39,7 @@ project:
         - file: guide/interpolation.md
         - file: guide/gridding.md
         - file: guide/regridding.md
+        - file: guide/quadrature.md
     - title: Project
       children:
         - file: contributing.md
