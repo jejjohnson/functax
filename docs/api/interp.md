@@ -151,6 +151,18 @@ $$
 
 at the simplex's vertices, so the read-out is a `Stencil` of $D + 1$ taps (three on a plane) that reproduces affine functions inside the hull and equals `LinearNDInterpolator`. A target outside the hull is invalid, with zero weights and its taps at vertex 0. A fresh triangulation is located by `find_simplex`; a given mesh by brute force over chunks of targets on the host, the first simplex whose barycentric coordinates are all at least $-10^{-12}$. The plan is built on the host from concrete coordinates; applying it traces.
 
+## Aggregation
+
+`Binning(statistic, weights)` runs sampling backwards: with $\mat{H}$ the sampling stencil from the $M$ cells of a grid to $N$ sample positions (one tap with `weights="nearest"`, $2^D$ with `"linear"`), the sums are $\mat{H}^\top \vect{y}$, the counts $\vect{n} = \mat{H}^\top \vect{1}$ and the means
+
+$$
+\bar{\vect{y}} = \mathrm{diag}(\vect{n})^{-1} \mat{H}^\top \vect{y},
+$$
+
+all through the stencil's scatter-add. Nearest weights bin each sample into the cell of its nearest node, with the cell boundaries half-way between nodes and half a cell past the end nodes, as `scipy.stats.binned_statistic_dd` does with those edges; linear weights give cloud-in-cell deposition, which conserves the total of the samples inside the hull of the nodes and is differentiable in the positions. Samples off the grid get zero weights and drop out of every cell; they are never clamped onto the edge.
+
+The counts depend only on the positions, so for fixed positions the sum and the mean are linear in $\vect{y}$, and `plan()` returns a `BinningPlan` that is an ordinary plan from samples to cells: its read-out is a `TransposedStencil`, $\mathrm{diag}(\vect{s}) \mat{H}^\top$ with $s_j = 1$ for sums and $1 / n_j$ for means, its `adjoint` is $\mat{H} \mathrm{diag}(\vect{s})$, and an empty cell under the mean is an invalid row that reads `fill_value` (NaN by default) and has a zero row in `operator()`, just as a target outside the domain does for sampling. A count does not depend on the data at all, so under `statistic="count"` the plan returns $\vect{n}$ for every field, and its `operator`, `adjoint` and `linearize` raise `NonlinearSchemeError`; `plan.counts` holds $\vect{n}$ for every statistic.
+
 ## Reference
 
 ::: functax.interp

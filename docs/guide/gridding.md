@@ -45,3 +45,23 @@ plan.valid.tolist()  # [True, False]
 ```
 
 A mesh that already has its triangles (an icosphere patch, a finite-element mesh) passes them in instead, `Delaunay(simplices=triangles)`, and the plan locates each target in those triangles rather than in a fresh triangulation; that path does not need SciPy. The same scheme works in three dimensions with tetrahedra, four taps per target.
+
+## Binning and cloud-in-cell
+
+When there are many samples per cell, aggregate them instead of interpolating. [`Binning`](xref:api#functax.interp.Binning) is sampling run backwards: the stencil $\mat{H}$ that would read the grid at the sample positions, applied as $\mat{H}^\top$, sends each sample to its cells. With `weights="nearest"` a sample lands in the cell of its nearest node, so the sums are a histogram and the means divide by the counts $\vect{n} = \mat{H}^\top \vect{1}$; with `weights="linear"` a sample spreads over the $2^D$ nodes around it, which is cloud-in-cell deposition:
+
+```python
+from functax.interp import Binning
+
+particles = Points(jnp.asarray(rng.uniform(0.0, 10.0, (1000, 2))))
+masses = jnp.asarray(rng.uniform(0.5, 2.0, 1000))
+
+cic = Binning("sum", weights="linear").plan(particles, grid)
+deposited = cic(masses)
+bool(jnp.allclose(deposited.sum(), masses.sum()))  # True: the mass is conserved
+
+means = Binning("mean").plan(particles, grid)
+int(jnp.isnan(means(masses)).sum())  # 155 empty cells read NaN
+```
+
+Samples off the grid are dropped from every cell rather than clamped onto the edge. The counts depend only on the positions, so for fixed positions the sum and the mean are linear in the data, and `plan.adjoint` sends a residual on the cells back to the samples. The plan also traces in the positions, so `jax.grad` of a loss on the deposited field reaches the particle positions through the linear weights; with nearest weights that gradient is zero, as it is for any histogram.
