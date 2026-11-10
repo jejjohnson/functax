@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from _harness import assert_grad_matches_fd, assert_traces
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
 
 from functax.basis.features import (
     fourier_features,
@@ -20,6 +20,8 @@ from functax.basis.features import (
 
 
 W = jnp.array([[1.0, -0.5, 2.0], [0.3, 1.0, 0.5]])
+
+
 PHASES = jnp.array([0.1, 2.0, 4.0])
 
 
@@ -97,3 +99,27 @@ class TestTraces:
     def test_coordinate_features_over_batches(self, fn: object) -> None:
         batches = jax.random.uniform(jax.random.key(3), (3, 5), maxval=10.0)
         assert_traces(fn, batches)
+
+
+class TestDtypes:
+    @staticmethod
+    def _fourier(x: jax.Array) -> jax.Array:
+        return fourier_features(x, 4, rescale=True)
+
+    @staticmethod
+    def _seasonal(x: jax.Array) -> jax.Array:
+        return seasonal_features(x, (7.0, 365.25), (2, 3), rescale=True)
+
+    @pytest.mark.parametrize("name", ["_fourier", "_seasonal"])
+    @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+    def test_floating_inputs_keep_their_dtype(self, name: str, dtype: type) -> None:
+        x = jnp.linspace(0.0, 3.0, 5, dtype=dtype)
+        assert getattr(self, name)(x).dtype == dtype
+
+    @pytest.mark.parametrize("name", ["_fourier", "_seasonal"])
+    def test_integers_become_float32(self, name: str) -> None:
+        fn = getattr(self, name)
+        features = fn(jnp.arange(5))
+        assert features.dtype == jnp.float32
+        expected = fn(jnp.arange(5, dtype=jnp.float32))
+        assert_matches_oracle(features, expected, rtol=0.0, atol=1e-6)

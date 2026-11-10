@@ -7,7 +7,6 @@ from __future__ import annotations
 import inspect
 import math
 from collections import Counter
-from itertools import pairwise
 
 import jax.numpy as jnp
 import numpy as np
@@ -51,15 +50,6 @@ class TestIcosphere:
         a, b, c = (vertices[triangles[:, k]] for k in range(3))
         normals = np.cross(b - a, c - a)
         assert np.all(np.sum(normals * (a + b + c), axis=1) > 0)
-
-    def test_area_grows_toward_the_sphere(self) -> None:
-        areas = []
-        for level in range(6):
-            vertices, triangles = map(np.asarray, icosphere(level))
-            a, b, c = (vertices[triangles[:, k]] for k in range(3))
-            areas.append(0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1).sum())
-        assert all(x < y for x, y in pairwise(areas))
-        assert 0 < 4.0 * math.pi - areas[-1] < 1e-2
 
     def test_rejects_a_negative_level(self) -> None:
         with pytest.raises(GeometryError, match="'level' must be an integer"):

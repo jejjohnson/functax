@@ -51,6 +51,15 @@ def _fit(plan: Plan, precision: jax.Array, weight: float = 0.7) -> Variational:
     )
 
 
+def _parts() -> tuple[lx.AbstractLinearOperator, lx.AbstractLinearOperator, jax.Array]:
+    grid = Axis(jnp.linspace(0.0, 1.0, 10))
+    rng = np.random.default_rng(0)
+    sites = Points(jnp.asarray(rng.uniform(0.0, 1.0, (6, 1))))
+    observation = Linear().plan(grid, sites).operator()
+    roughness = lx.MatrixLinearOperator(jnp.asarray(np.diff(np.eye(10), axis=0)))
+    return observation, roughness, jnp.asarray(rng.normal(size=6))
+
+
 def test_the_fit_solves_the_normal_equations() -> None:
     plan, precision, y = _problem()
     fit = _fit(plan, precision)
@@ -102,15 +111,6 @@ def test_a_variational_fit_sits_in_a_plan() -> None:
     assert analysis.operator().in_structure().shape == (7,)
 
 
-def _parts() -> tuple[lx.AbstractLinearOperator, lx.AbstractLinearOperator, jax.Array]:
-    grid = Axis(jnp.linspace(0.0, 1.0, 10))
-    rng = np.random.default_rng(0)
-    sites = Points(jnp.asarray(rng.uniform(0.0, 1.0, (6, 1))))
-    observation = Linear().plan(grid, sites).operator()
-    roughness = lx.MatrixLinearOperator(jnp.asarray(np.diff(np.eye(10), axis=0)))
-    return observation, roughness, jnp.asarray(rng.normal(size=6))
-
-
 def test_gradient_in_y_matches_finite_differences() -> None:
     # gate of #42: implicit gradients through the solve to 1e-6
     observation, roughness, y = _parts()
@@ -140,3 +140,17 @@ def test_the_default_solver_works_under_jit() -> None:
     fit = Variational(observation, roughness, smoothing_weight=0.3)
     jitted = jax.jit(lambda data: fit(data))
     assert_matches_oracle(jitted(y), fit(y), rtol=1e-12, atol=1e-14)
+
+
+def test_identity_observation_without_smoothing_returns_y() -> None:
+    y = jnp.asarray(np.random.default_rng(3).normal(size=9))
+    identity = lx.IdentityLinearOperator(jax.ShapeDtypeStruct((9,), y.dtype))
+    roughness = lx.MatrixLinearOperator(_first_differences(9))
+    fit = Variational(identity, roughness, smoothing_weight=0.0, solver=TIGHT)
+    assert_matches_oracle(fit(y), y, rtol=1e-12)
+
+
+def test_the_smoothing_weight_is_a_leaf() -> None:
+    plan, precision, _ = _problem()
+    fit = _fit(plan, precision)
+    assert isinstance(fit.smoothing_weight, jax.Array)

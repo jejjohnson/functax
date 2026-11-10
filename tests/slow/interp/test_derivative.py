@@ -275,3 +275,17 @@ class TestPolicies:
             policies=Policies(outside="clamp"),
         )
         assert plan.derivative(axis=0)(jnp.arange(5.0) ** 2).tolist() == [0.0]
+
+    def test_outside_rows_stay_invalid(self) -> None:
+        plan = Linear().plan(Axis(jnp.arange(5.0)), Points(jnp.array([[1.5], [9.0]])))
+        derivative = plan.derivative(axis=0)
+        assert derivative.valid.tolist() == [True, False]
+        assert bool(jnp.isnan(derivative(jnp.arange(5.0))[1]))
+
+    def test_raise_is_enforced_once(self) -> None:
+        plan = Linear().plan(
+            Axis(jnp.arange(5.0)),
+            Points(jnp.array([[1.5]])),
+            policies=Policies(outside="raise"),
+        )
+        assert plan.derivative(axis=0)(jnp.arange(5.0) ** 2).tolist() == [3.0]

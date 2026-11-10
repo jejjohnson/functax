@@ -4,12 +4,9 @@ behaviour, validation and small closed-form checks, each well under a second.
 
 from __future__ import annotations
 
-import inspect
-
 import jax
 import jax.numpy as jnp
 import pytest
-from _harness import assert_matches_oracle
 
 from functax import PolicyError, ValidationError
 from functax.geometry import AffineGrid
@@ -21,7 +18,6 @@ from functax.interp import (
     Policies,
     Readout,
     Stencil,
-    WindowedPlan,
 )
 
 
@@ -36,17 +32,6 @@ def _warp(policies: Policies | None = None) -> Plan:
 
 
 class TestWindow:
-    def test_rejects_bad_windows(self) -> None:
-        warp = _warp()
-        with pytest.raises(ValidationError, match=r"one slice per target axis \(2\)"):
-            warp[0:2]
-        with pytest.raises(ValidationError, match="selects no targets"):
-            warp[3:3, :]
-        # the type hook would reject a non-slice first, so skip it
-        init = inspect.unwrap(WindowedPlan.__init__)
-        with pytest.raises(ValidationError, match="one slice per target axis"):
-            init(object.__new__(WindowedPlan), warp, (0, slice(None)))
-
     def test_needs_a_stencil_read_out(self) -> None:
         class Dense(Readout):
             valid: jax.Array
@@ -66,9 +51,6 @@ class TestWindow:
 
 
 class TestTargetShape:
-    def test_grid_targets_keep_their_shape(self) -> None:
-        assert _warp().target_shape == (8, 9)
-
     def test_rejects_a_shape_that_does_not_hold_the_rows(self) -> None:
         stencil = Stencil(
             jnp.zeros((6, 1), dtype=jnp.int32), jnp.ones((6, 1)), n_source=2
@@ -89,13 +71,6 @@ class TestToGaussx:
         indices, weights = Plan(Identity(), stencil).to_gaussx()
         assert indices.tolist() == [[1, 2], [0, 0]]
         assert weights.tolist() == [[0.5, 0.5], [0.0, 0.0]]
-
-    def test_a_composed_plan_exports_its_product(self) -> None:
-        warp = _warp(Policies(outside="clamp"))
-        smooth = Linear().plan(DESTINATION, DESTINATION)
-        indices, weights = (smooth @ warp).to_gaussx()
-        assert indices.shape == (72, 16)
-        assert_matches_oracle(weights, (smooth @ warp).read.weights, rtol=0.0)
 
     def test_rejects_plans_without_fixed_stencil_weights(self) -> None:
         with pytest.raises(PolicyError, match="depend on the data"):

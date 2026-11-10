@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from _harness import assert_matches_oracle, assert_traces
+from _harness import assert_matches_oracle
 
 from functax import GeometryError
 from functax.geometry import AffineGrid, from_pixel, pixel_centres, to_pixel, window
@@ -94,25 +94,10 @@ class TestRoundTrip:
 
 
 class TestTraces:
-    def test_from_pixel_under_jit_and_vmap(self) -> None:
-        transforms = jnp.asarray(_random_transforms(4, seed=8))
-        rowcol = jnp.asarray(
-            np.random.default_rng(9).uniform(0.0, 100.0, size=(4, 5, 2))
-        )
-        assert_traces(from_pixel, transforms, rowcol)
-
     def test_a_concrete_transform_closed_over_under_jit(self) -> None:
         transform = jnp.asarray(NORTH_UP)
         rowcol = jax.jit(lambda p: to_pixel(transform, p))(jnp.zeros((1, 2)))
         assert rowcol.shape == (1, 2)
-
-    def test_grad_matches_the_inverse_matrix(self) -> None:
-        transform = jnp.asarray(NORTH_UP)
-        # row = (−d·Δx + a·Δy) / det A and col = (e·Δx − b·Δy) / det A; for
-        # north-up (a = 20, e = −20, det A = −400) ∂(row, col)/∂(x, y) is
-        # [[0, −1/20], [1/20, 0]]
-        jacobian = jax.jacrev(lambda p: to_pixel(transform, p))(jnp.zeros(2))
-        np.testing.assert_allclose(jacobian, [[0.0, -0.05], [0.05, 0.0]], rtol=1e-15)
 
 
 class TestPixelCentres:

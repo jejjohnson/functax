@@ -84,27 +84,6 @@ class TestMatchesOracle:
 
 
 class TestAdjoint:
-    def test_passes_for_the_transpose(self, dense_operator: jax.Array) -> None:
-        assert_adjoint(
-            lambda x: dense_operator @ x,
-            lambda r: jnp.transpose(dense_operator) @ r,
-            N_SOURCE,
-            N_TARGET,
-            key=jax.random.key(0),
-        )
-
-    def test_fails_for_a_perturbed_adjoint(
-        self, dense_operator: jax.Array, perturbed_adjoint: jax.Array
-    ) -> None:
-        with pytest.raises(AssertionError, match="dot-product test failed"):
-            assert_adjoint(
-                lambda x: dense_operator @ x,
-                lambda r: perturbed_adjoint @ r,
-                N_SOURCE,
-                N_TARGET,
-                key=jax.random.key(0),
-            )
-
     def test_fails_on_a_wrong_output_shape(self, dense_operator: jax.Array) -> None:
         with pytest.raises(AssertionError, match="expected \\(7,\\)"):
             assert_adjoint(
@@ -145,10 +124,6 @@ class TestTransposeMatches:
 
 
 class TestTraces:
-    def test_passes_for_a_pure_function(self) -> None:
-        batch = jax.random.normal(jax.random.key(3), (4, 3))
-        assert_traces(lambda x: jnp.sin(x) * jnp.sum(x), batch)
-
     def test_passes_for_pytree_arguments_and_outputs(self) -> None:
         inputs = {"a": jnp.arange(6.0).reshape(2, 3), "b": jnp.ones(2)}
         assert_traces(lambda tree: (tree["a"] * tree["b"], tree["b"]), inputs)

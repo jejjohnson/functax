@@ -16,6 +16,7 @@ from hypothesis import given, settings
 from functax.geometry import Axis
 from functax.interp import (
     index_positions,
+    locate,
 )
 
 
@@ -73,3 +74,52 @@ class TestIndexPositions:
         slopes = jax.vmap(jax.grad(lambda x: index_positions(axis, x)))(targets)
         assert_matches_oracle(slopes, jnp.array([0.5, 1.0, 0.25]), rtol=1e-15)
         assert_grad_matches_fd(lambda x: index_positions(axis, x), targets)
+
+    def test_regular_arithmetic_equals_the_search(self) -> None:
+        axis = Axis(jnp.linspace(-90.0, 90.0, 37))
+        assert axis.is_regular
+        targets = jnp.linspace(-100.0, 100.0, 41)
+        searched = jax.jit(index_positions)(axis, targets)
+        assert_matches_oracle(
+            index_positions(axis, targets), searched, rtol=1e-13, atol=1e-13
+        )
+
+
+class TestPeriodic:
+    def test_a_period_apart_locates_identically(self) -> None:
+        longitude = Axis(jnp.arange(0.0, 360.0, 2.5), period=360.0)
+        targets = jnp.linspace(-170.0, 170.0, 23)
+        for shift in (-720.0, -360.0, 360.0, 1080.0):
+            assert_matches_oracle(
+                index_positions(longitude, targets + shift),
+                index_positions(longitude, targets),
+                rtol=1e-12,
+                atol=1e-12,
+            )
+
+    def test_the_wrap_cell(self) -> None:
+        longitude = Axis(jnp.arange(0.0, 360.0, 90.0), period=360.0)
+        # 315° lies halfway between the last node (270°) and 360° ≡ 0°
+        assert index_positions(longitude, jnp.array([315.0, -45.0])).tolist() == [
+            3.5,
+            3.5,
+        ]
+        cell, offset, inside = locate(longitude, jnp.array([315.0, 1e6]))
+        assert cell.tolist()[0] == 3
+        assert offset.tolist()[0] == 0.5
+        assert inside.tolist() == [True, True]
+
+    def test_an_irregular_periodic_axis(self) -> None:
+        longitude = Axis(jnp.array([0.0, 100.0, 300.0]), period=360.0)
+        # the wrap cell runs from 300° to 360°
+        assert index_positions(longitude, jnp.array([330.0])).tolist() == [2.5]
+
+
+class TestLocate:
+    def test_descending_cells_and_offsets(self) -> None:
+        # wavelength from wavenumber: decreasing nodes
+        axis = Axis(jnp.array([2.5, 2.0, 1.0]))
+        cell, offset, inside = locate(axis, jnp.array([2.25, 1.5]))
+        assert cell.tolist() == [0, 1]
+        assert offset.tolist() == [0.5, 0.5]
+        assert inside.tolist() == [True, True]

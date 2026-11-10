@@ -5,11 +5,15 @@ second or more (mostly einx compiling new shapes).
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from _harness import assert_grad_matches_fd, assert_traces
 
-from functax.geometry import to_pixel
+from functax.geometry import from_pixel, to_pixel
+
+
+NORTH_UP = np.array([20.0, 0.0, 600000.0, 0.0, -20.0, 3550000.0])
 
 
 def _random_transforms(count: int, seed: int) -> np.ndarray:
@@ -40,3 +44,18 @@ class TestTraces:
         xy = jnp.asarray([[12.0, -7.0], [3.0, 4.0]])
         assert_grad_matches_fd(lambda p: to_pixel(transform, p), xy)
         assert_grad_matches_fd(lambda t: to_pixel(t, xy), transform)
+
+    def test_from_pixel_under_jit_and_vmap(self) -> None:
+        transforms = jnp.asarray(_random_transforms(4, seed=8))
+        rowcol = jnp.asarray(
+            np.random.default_rng(9).uniform(0.0, 100.0, size=(4, 5, 2))
+        )
+        assert_traces(from_pixel, transforms, rowcol)
+
+    def test_grad_matches_the_inverse_matrix(self) -> None:
+        transform = jnp.asarray(NORTH_UP)
+        # row = (−d·Δx + a·Δy) / det A and col = (e·Δx − b·Δy) / det A; for
+        # north-up (a = 20, e = −20, det A = −400) ∂(row, col)/∂(x, y) is
+        # [[0, −1/20], [1/20, 0]]
+        jacobian = jax.jacrev(lambda p: to_pixel(transform, p))(jnp.zeros(2))
+        np.testing.assert_allclose(jacobian, [[0.0, -0.05], [0.05, 0.0]], rtol=1e-15)

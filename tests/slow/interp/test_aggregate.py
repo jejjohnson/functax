@@ -18,14 +18,31 @@ from _harness import (
 )
 from scipy.stats import binned_statistic_dd
 
+from functax import (
+    OutsideDomainError,
+)
 from functax.geometry import Axis, Points, RectilinearGrid
-from functax.interp import Binning
+from functax.interp import Binning, BinningPlan, Policies, TransposedStencil
+
+
+CELLS = Axis(jnp.arange(4.0))
+
+
+SAMPLES = Points(jnp.array([[0.1], [0.4], [2.2], [9.0], [-0.6]]))
+
+
+VALUES = jnp.array([1.0, 3.0, 5.0, 7.0, 11.0])
 
 
 RNG = np.random.default_rng(39)
-# an irregular and a regular axis
+
+
 NODES = (np.sort(RNG.uniform(0.0, 10.0, 7)), np.linspace(-2.0, 2.0, 5))
+
+
 GRID = RectilinearGrid(tuple(Axis(jnp.asarray(nodes)) for nodes in NODES))
+
+
 N_SAMPLES = 400
 
 
@@ -118,3 +135,39 @@ def test_jit_and_vmap_agree_with_a_loop() -> None:
         )
     )
     assert_traces(deposit, batched)
+
+
+def test_empty_cells_give_nan_means_and_zero_sums() -> None:
+    means = Binning("mean").plan(SAMPLES, CELLS)
+    assert means(VALUES).tolist()[:1] == [2.0]
+    assert np.isnan(np.asarray(means(VALUES))[[1, 3]]).all()
+    assert means.valid.tolist() == [True, False, True, False]
+    sums = Binning("sum").plan(SAMPLES, CELLS)
+    assert sums(VALUES).tolist() == [4.0, 0.0, 5.0, 0.0]
+    assert bool(sums.valid.all())
+
+
+def test_the_fill_value_marks_empty_means() -> None:
+    plan = Binning("mean").plan(SAMPLES, CELLS, policies=Policies(fill_value=-1.0))
+    assert plan(VALUES).tolist() == [2.0, -1.0, 5.0, -1.0]
+    # the linear map has a zero row there, and the adjoint ignores it
+    assert plan.operator().mv(VALUES).tolist() == [2.0, 0.0, 5.0, 0.0]
+    assert plan.adjoint(jnp.ones(4)).tolist() == [0.5, 0.5, 1.0, 0.0, 0.0]
+
+
+def test_batches_and_grid_shape() -> None:
+    grid = RectilinearGrid((Axis(jnp.arange(2.0)), Axis(jnp.arange(3.0))))
+    samples = Points(jnp.array([[0.1, 0.2], [0.9, 1.8], [1.2, 2.1]]))
+    plan = Binning("sum", weights="linear").plan(samples, grid)
+    assert isinstance(plan, BinningPlan)
+    assert isinstance(plan.read, TransposedStencil)
+    assert plan.grid_shape == (2, 3)
+    assert plan(jnp.ones((4, 3))).shape == (4, 6)
+
+
+def test_samples_off_the_grid_are_dropped_not_clamped() -> None:
+    counts = Binning("count").plan(SAMPLES, CELLS)
+    assert counts(VALUES).tolist() == [2.0, 0.0, 1.0, 0.0]
+    assert counts.counts.tolist() == [2.0, 0.0, 1.0, 0.0]
+    with pytest.raises(OutsideDomainError, match="2 of 5 targets"):
+        Binning().plan(SAMPLES, CELLS, policies=Policies(outside="raise"))

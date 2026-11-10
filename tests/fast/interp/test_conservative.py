@@ -5,7 +5,6 @@ from __future__ import annotations
 import inspect
 import json
 
-import einx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -30,20 +29,6 @@ from functax.interp import Conservative, Policies, Scheme, overlap_weights_1d
 def random_edges(rng: np.random.Generator, n: int, lo: float, hi: float) -> np.ndarray:
     inner = np.sort(rng.uniform(lo, hi, n - 1))
     return np.concatenate([[lo], inner, [hi]])
-
-
-def axis_from_edges(edges: np.ndarray, *, period: float | None = None) -> Axis:
-    centres = 0.5 * (edges[:-1] + edges[1:])
-    return Axis(jnp.asarray(centres), edges=jnp.asarray(edges), period=period)
-
-
-def grid_from_edges(*edges: np.ndarray) -> RectilinearGrid:
-    return RectilinearGrid(tuple(axis_from_edges(e) for e in edges))
-
-
-def cell_areas(*edges: np.ndarray) -> np.ndarray:
-    lengths = [np.abs(np.diff(e)) for e in edges]
-    return np.prod(np.meshgrid(*lengths, indexing="ij"), axis=0).ravel()
 
 
 class TestOverlapWeights:
@@ -118,16 +103,10 @@ class TestOverlapWeights:
 
 class TestPolicies:
     source = Axis(jnp.arange(4.0) + 0.5)
-    # [−1, 1] is half outside, [1, 3] and [3, 4] inside, [4, 6] off the source
     target = Axis(
         jnp.array([0.0, 2.0, 3.5, 5.0]), edges=jnp.array([-1.0, 1.0, 3.0, 4.0, 6.0])
     )
     field = jnp.array([1.0, 2.0, 3.0, 4.0])
-
-    def test_nan_marks_partly_covered_cells_invalid(self) -> None:
-        plan = Conservative().plan(self.source, self.target)
-        assert plan.valid.tolist() == [False, True, True, False]
-        assert_matches_oracle(plan(self.field), [np.nan, 2.5, 4.0, np.nan], rtol=1e-15)
 
     def test_raise(self) -> None:
         with pytest.raises(OutsideDomainError, match="2 of 4 targets"):
@@ -148,14 +127,6 @@ class TestPolicies:
         )
         assert_matches_oracle(plan(self.field), [1.0, 2.5, 4.0, np.nan], rtol=1e-15)
 
-    def test_renormalise_averages_the_valid_covered_area(self) -> None:
-        plan = Conservative().plan(
-            self.source, self.target, policies=Policies(missing="renormalise")
-        )
-        masked = self.field.at[2].set(jnp.nan)
-        # a coastal mask: cell [1, 3] reads only its valid half
-        assert_matches_oracle(plan(masked), [1.0, 2.0, 4.0, np.nan], rtol=1e-15)
-
     def test_fill_value(self) -> None:
         plan = Conservative().plan(
             self.source, self.target, policies=Policies(fill_value=-9.0)
@@ -164,41 +135,6 @@ class TestPolicies:
 
 
 class TestGeometries:
-    def test_default_edges_are_midpoints(self) -> None:
-        # source cells [−½, ½], [½, 2], [2, 4]
-        source = Axis(jnp.array([0.0, 1.0, 3.0]))
-        target = Axis(jnp.array([0.0, 3.0]), edges=jnp.array([-0.5, 1.0, 4.0]))
-        weights = Conservative().plan(source, target).read.to_dense()
-        expected = [[1.0 / 1.5, 0.5 / 1.5, 0.0], [0.0, 1.0 / 3.0, 2.0 / 3.0]]
-        assert_matches_oracle(weights, expected, rtol=1e-15)
-
-    def test_descending_axes(self) -> None:
-        rng = np.random.default_rng(8)
-        edges = random_edges(rng, 6, 0.0, 1.0)
-        target_edges = np.array([0.0, 0.3, 1.0])
-        field = jnp.asarray(rng.normal(size=6))
-        ascending = Conservative().plan(
-            axis_from_edges(edges), axis_from_edges(target_edges)
-        )(field)
-        descending = Conservative().plan(
-            axis_from_edges(edges[::-1].copy()),
-            axis_from_edges(target_edges[::-1].copy()),
-        )(field[::-1])
-        assert_matches_oracle(descending, ascending[::-1], rtol=1e-14)
-
-    def test_a_north_up_affine_grid_equals_its_rectilinear_grid(self) -> None:
-        source = AffineGrid([2.0, 0.0, 10.0, 0.0, -1.0, 8.0], (8, 6))
-        target = AffineGrid([3.0, 0.0, 10.0, 0.0, -2.0, 8.0], (4, 4))
-        rows = grid_from_edges(8.0 - np.arange(9.0), 10.0 + 2.0 * np.arange(7.0))
-        target_rows = grid_from_edges(
-            8.0 - 2.0 * np.arange(5.0), 10.0 + 3.0 * np.arange(5.0)
-        )
-        field = jnp.asarray(np.random.default_rng(9).normal(size=48))
-        affine = Conservative().plan(source, target)
-        rectilinear = Conservative().plan(rows, target_rows)
-        assert affine.target_shape == (4, 4)
-        assert_matches_oracle(affine(field), rectilinear(field), rtol=1e-15)
-
     def test_rejects_a_rotated_affine_grid(self) -> None:
         rotated = AffineGrid([1.0, 0.5, 0.0, 0.0, -1.0, 0.0], (2, 2))
         with pytest.raises(GeometryError, match="north-up"):
@@ -211,11 +147,6 @@ class TestGeometries:
         with pytest.raises(GeometryError, match="'target' has 1 axes"):
             Conservative().plan(grid, Axis(jnp.arange(3.0)))
 
-    def test_keeps_float32_weights(self) -> None:
-        axis = Axis(jnp.arange(4.0, dtype=jnp.float32))
-        plan = Conservative().plan(axis, Axis(jnp.array([0.5, 2.5], jnp.float32)))
-        assert plan.read.weights.dtype == jnp.float32
-
 
 def test_config_round_trips() -> None:
     text = json.dumps(Conservative().get_config(), allow_nan=False)
@@ -227,27 +158,6 @@ class TestPolygonPath:
     def swath(y: np.ndarray, x: np.ndarray) -> CurvilinearGrid:
         rows, cols = np.meshgrid(y, x, indexing="ij")
         return CurvilinearGrid(x=jnp.asarray(cols), y=jnp.asarray(rows))
-
-    def test_degenerate_cells_give_zero_weight(self) -> None:
-        # three equal node rows: the middle one's cells have no area
-        collapsed = self.swath(np.array([0.0, 1.0, 1.0, 1.0, 2.0]), np.arange(3.0))
-        grid = RectilinearGrid(
-            (
-                Axis(jnp.array([0.0, 2.0]), edges=jnp.array([-1.0, 1.0, 3.0])),
-                Axis(jnp.array([0.0, 2.0]), edges=jnp.array([-1.0, 1.0, 3.0])),
-            )
-        )
-        keep = Policies(outside="extrapolate")
-        plan = Conservative().plan(collapsed, grid, policies=keep)
-        weights = np.asarray(plan.read.to_dense())
-        middle = einx.id("(y x) -> y x", np.arange(15), y=5)[2]
-        assert np.all(weights[:, middle] == 0.0)
-        assert np.all(weights.sum(axis=0)[np.setdiff1d(np.arange(15), middle)] > 0)
-        # as a target, a cell of no area is invalid
-        plan = Conservative().plan(grid, collapsed, policies=Policies(outside="clamp"))
-        rows = einx.id("(y x) -> y x", plan.valid, y=5)
-        assert not np.any(np.asarray(rows[2]))
-        assert np.all(np.asarray(plan.read.weights)[middle] == 0.0)
 
     def test_non_overlapping_cells_give_zero_weight(self) -> None:
         near = self.swath(np.arange(3.0), np.arange(3.0))

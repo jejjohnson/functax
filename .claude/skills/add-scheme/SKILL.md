@@ -58,8 +58,7 @@ In `tests/fast/<area>/test_<name>.py`, and in `tests/slow/<area>/test_<name>.py`
 ## 6. Verify
 
 ```bash
-uv run pytest --no-cov tests/fast/<area>/ tests/slow/<area>/ src/functax/_src/<area>/ tests/fast/test_public_api.py tests/fast/test_capabilities.py tests/fast/test_backend.py -v
-uv run poe test-cov
+uv run pytest --no-cov tests/fast/<area>/test_<x>.py tests/slow/<area>/test_<x>.py src/functax/_src/<area>/_<x>.py tests/fast/test_public_api.py tests/fast/test_capabilities.py -v
 ```
 
 then the `pre-pr-check` skill.

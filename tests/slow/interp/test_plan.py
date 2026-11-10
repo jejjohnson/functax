@@ -14,12 +14,15 @@ import numpy as np
 import pytest
 from _harness import (
     assert_adjoint,
+    assert_grad_matches_fd,
     assert_matches_oracle,
     assert_traces,
+    assert_transpose_matches,
 )
 from scipy.interpolate import RegularGridInterpolator
+from scipy.ndimage import map_coordinates
 
-from functax.geometry import Axis, Points, RectilinearGrid
+from functax.geometry import AffineGrid, Axis, Points, RectilinearGrid
 from functax.interp import Linear, Nearest, Policies, Tensor
 
 
@@ -78,6 +81,25 @@ class TestOracle:
         flat = einx.id("... -> (...)", jnp.asarray(field))
         assert_matches_oracle(plan(flat), targets @ slope + 4.0, rtol=1e-12, atol=1e-12)
 
+    @pytest.mark.parametrize(
+        ("scheme", "order"), [(Linear(), 1), (Nearest(), 0)], ids=["linear", "nearest"]
+    )
+    @pytest.mark.parametrize(
+        "shape", [(9,), (6, 7), (5, 4, 6), (4, 3, 5, 3)], ids=["1d", "2d", "3d", "4d"]
+    )
+    def test_equals_map_coordinates(
+        self, scheme, order: int, shape: tuple[int, ...]
+    ) -> None:  # type: ignore[no-untyped-def]
+        # integer node coordinates, so grid coordinates are index positions
+        grid = RectilinearGrid(tuple(Axis(jnp.arange(float(n))) for n in shape))
+        field = np.random.default_rng(30 + len(shape)).normal(size=shape)
+        rng = np.random.default_rng(40 + len(shape))
+        targets = np.column_stack([rng.uniform(0.0, n - 1.0, size=200) for n in shape])
+        plan = scheme.plan(grid, Points(jnp.asarray(targets)))
+        expected = map_coordinates(field, targets.T, order=order)
+        flat = einx.id("... -> (...)", jnp.asarray(field))
+        assert_matches_oracle(plan(flat), expected, rtol=1e-12, atol=1e-14)
+
 
 class TestAdjoint:
     @pytest.mark.parametrize("scheme", [Linear(), Nearest()], ids=["linear", "nearest"])
@@ -96,6 +118,19 @@ class TestAdjoint:
         assert_adjoint(
             lambda y: operator.mv(y), plan.adjoint, 30, 40, key=jax.random.key(62)
         )
+
+    def test_adjoint_equals_the_lineax_transpose(self) -> None:
+        grid, nodes = _rectilinear((4, 5), seed=63)
+        plan = Linear().plan(grid, Points(jnp.asarray(_interior(nodes, 12, seed=64))))
+        operator = plan.operator()
+        assert_transpose_matches(lambda y: operator.mv(y), plan.adjoint, jnp.zeros(20))
+
+    def test_invalid_rows_ignore_their_residual(self) -> None:
+        plan = Linear().plan(Axis(jnp.arange(4.0)), Points(jnp.array([[1.5], [9.0]])))
+        assert plan.valid.tolist() == [True, False]
+        # the NaN the forward pass wrote at the invalid row does not spread
+        gradient = plan.adjoint(jnp.array([1.0, jnp.nan]))
+        assert gradient.tolist() == [0.0, 0.5, 0.5, 0.0]
 
 
 class TestTraces:
@@ -125,6 +160,16 @@ class TestTraces:
         )
         assert bool(jnp.all(gradient == 0))
 
+    def test_grad_in_the_target_positions(self) -> None:
+        grid, nodes = _rectilinear((4, 5), seed=76)
+        field = jax.random.normal(jax.random.key(77), (20,))
+        xy = jnp.asarray(_interior(nodes, 6, seed=78))
+
+        def read(positions: jax.Array) -> jax.Array:
+            return Linear().plan(grid, Points(positions))(field)
+
+        assert_grad_matches_fd(read, xy)
+
 
 class TestSchemes:
     def test_tensor_is_nearest_in_time_then_bilinear_in_space(self) -> None:
@@ -147,3 +192,81 @@ class TestSchemes:
             bilinear(einx.id("y x -> (y x)", field[f]))[k] for k, f in enumerate(frame)
         ]
         assert_matches_oracle(values, jnp.stack(expected), rtol=1e-12, atol=1e-14)
+
+    def test_periodic_longitude_reads_across_the_dateline(self) -> None:
+        longitude = Axis(jnp.arange(0.0, 360.0, 10.0), period=360.0)
+        field = jnp.arange(36.0)
+        plan = Linear().plan(longitude, Points(jnp.array([[355.0], [-5.0], [715.0]])))
+        # halfway between node 35 (350°) and node 0 (360° ≡ 0°)
+        assert plan(field).tolist() == [17.5, 17.5, 17.5]
+
+    def test_targets_on_grids_and_axes(self) -> None:
+        grid, nodes = _rectilinear((3, 4), seed=95)
+        field = jax.random.normal(jax.random.key(96), (12,))
+        # a grid read at its own nodes is the field itself
+        assert_matches_oracle(
+            Linear().plan(grid, grid)(field), field, rtol=1e-14, atol=1e-15
+        )
+        axis = Axis(jnp.asarray(nodes[0]))
+        assert_matches_oracle(
+            Linear().plan(axis, axis)(field[:3]), field[:3], rtol=1e-14, atol=1e-15
+        )
+        affine = AffineGrid([2.0, 0.0, 10.0, 0.0, -2.0, 30.0], (3, 4))
+        assert_matches_oracle(
+            Linear().plan(affine, affine)(field), field, rtol=1e-14, atol=1e-15
+        )
+
+
+class TestMissing:
+    axis = Axis(jnp.arange(4.0))
+    field = jnp.array([1.0, jnp.nan, 4.0, 8.0])
+    targets = Points(jnp.array([[0.25], [2.5], [1.0]]))
+
+    def test_renormalise(self) -> None:
+        plan = Linear().plan(
+            self.axis, self.targets, policies=Policies(missing="renormalise")
+        )
+        values = plan(self.field)
+        # 0.25: the NaN tap is dropped and the row divided by the weight left
+        assert values[:2].tolist() == [1.0, 6.0]
+        # 1.0 sits on the missing node, so no weight is left: the fill value
+        assert bool(jnp.isnan(values[2]))
+
+    def test_renormalise_with_every_tap_missing_is_invalid(self) -> None:
+        field = jnp.array([jnp.nan, jnp.nan, 4.0, 8.0])
+        plan = Linear().plan(
+            self.axis,
+            Points(jnp.array([[0.5], [2.5]])),
+            policies=Policies(missing="renormalise", fill_value=-1.0),
+        )
+        assert plan(field).tolist() == [-1.0, 6.0]
+
+    def test_renormalise_over_a_batch(self) -> None:
+        plan = Linear().plan(
+            self.axis, self.targets, policies=Policies(missing="renormalise")
+        )
+        batch = jnp.stack([self.field, jnp.array([1.0, 2.0, 4.0, 8.0])])
+        values = plan(batch)
+        assert values.shape == (2, 3)
+        assert values[1].tolist() == [1.25, 6.0, 2.0]
+
+
+class TestOutside:
+    axis = Axis(jnp.arange(4.0))
+    field = jnp.array([1.0, 2.0, 4.0, 8.0])
+    targets = Points(jnp.array([[-1.0], [1.5], [5.0]]))
+
+    def test_nan_writes_the_fill_value(self) -> None:
+        plan = Linear().plan(self.axis, self.targets)
+        values = plan(self.field)
+        assert bool(jnp.isnan(values[0])) and bool(jnp.isnan(values[2]))
+        filled = Linear().plan(
+            self.axis, self.targets, policies=Policies(fill_value=-9.0)
+        )
+        assert filled(self.field).tolist() == [-9.0, 3.0, -9.0]
+
+    def test_non_finite_targets_are_invalid_under_every_policy(self) -> None:
+        targets = Points(jnp.array([[jnp.nan], [1.0]]))
+        for outside in ("nan", "clamp", "extrapolate"):
+            plan = Linear().plan(self.axis, targets, policies=Policies(outside=outside))
+            assert plan.valid.tolist() == [False, True]

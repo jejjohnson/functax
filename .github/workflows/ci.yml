@@ -24,8 +24,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: uv sync --group dev
-      - name: Run the fast tier and the doctests
-        run: uv run pytest --no-cov tests/fast src/functax
+      - name: Run the fast tier (tests/fast and the fast doctests)
+        run: uv run pytest --no-cov -m fast tests/fast src/functax
 
   # Every tier, with coverage and the 90 % gate.
   test:

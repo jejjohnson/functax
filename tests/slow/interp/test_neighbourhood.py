@@ -18,13 +18,20 @@ from _harness import (
 )
 
 import functax._src.interp._neighbourhood as neighbourhood
+from functax import OutsideDomainError
 from functax.geometry import AffineGrid, Axis, Points, RectilinearGrid
-from functax.interp import InverseDistance
+from functax.interp import InverseDistance, Policies
 
 
 RNG = np.random.default_rng(35)
+
+
 SOURCE_XY = RNG.uniform(0.0, 10.0, (60, 2))
+
+
 TARGET_XY = RNG.uniform(-1.0, 11.0, (25, 2))
+
+
 VALUES = RNG.normal(size=60)
 
 
@@ -170,3 +177,66 @@ def test_jit_and_vmap_agree_with_a_loop() -> None:
 
     batched = jnp.asarray(TARGET_XY[:24]).reshape(3, 8, 2)
     assert_traces(read, batched)
+
+
+def test_a_radius_with_no_neighbours_is_invalid() -> None:
+    far = np.array([[50.0, 50.0], SOURCE_XY[0] + 0.1])
+    plan = InverseDistance(k=3, radius=1.0).plan(Points(SOURCE_XY), Points(far))
+    assert plan.valid.tolist() == [False, True]
+    values = plan(jnp.asarray(VALUES))
+    assert np.isnan(values[0]) and np.isfinite(values[1])
+    # the empty row reads nothing
+    assert plan.read.weights[0].tolist() == [0.0, 0.0, 0.0]
+    assert plan.read.indices[0].tolist() == [0, 0, 0]
+    with pytest.raises(OutsideDomainError, match="1 of 2 targets"):
+        InverseDistance(k=3, radius=1.0).plan(
+            Points(SOURCE_XY), Points(far), policies=Policies(outside="raise")
+        )
+
+
+def test_a_coincident_target_takes_the_source_value() -> None:
+    plan = InverseDistance(k=4).plan(Points(SOURCE_XY), Points(SOURCE_XY[[3, 17]]))
+    assert_matches_oracle(plan(jnp.asarray(VALUES)), VALUES[[3, 17]], rtol=1e-12)
+
+
+def test_a_high_power_does_not_overflow_in_float32() -> None:
+    source = Points(jnp.asarray(SOURCE_XY, dtype=jnp.float32))
+    target = Points(jnp.asarray(SOURCE_XY[:2], dtype=jnp.float32))
+    plan = InverseDistance(k=4, power=6.0).plan(source, target)
+    assert plan.read.weights.dtype == jnp.float32
+    assert np.isfinite(np.asarray(plan.read.weights)).all()
+    values = plan(jnp.asarray(VALUES, dtype=jnp.float32))
+    np.testing.assert_allclose(values, VALUES[:2], rtol=1e-6)
+
+
+def test_renormalise_drops_a_missing_source() -> None:
+    values = VALUES.copy()
+    plan = InverseDistance(k=4).plan(
+        Points(SOURCE_XY), Points(TARGET_XY), policies=Policies(missing="renormalise")
+    )
+    nearest = int(plan.read.indices[0, 0])
+    values[nearest] = np.nan
+    result = plan(jnp.asarray(values))
+    assert np.isfinite(result).all()
+
+
+def test_missing_taps_repeat_the_nearest_index() -> None:
+    plan = InverseDistance(k=8, radius=1.5).plan(Points(SOURCE_XY), Points(TARGET_XY))
+    indices = np.asarray(plan.read.indices)
+    weights = np.asarray(plan.read.weights)
+    rows = np.asarray(plan.valid)
+    padding = (weights == 0) & rows[:, None]
+    assert padding.any()
+    assert (
+        indices[padding] == np.broadcast_to(indices[:, :1], indices.shape)[padding]
+    ).all()
+
+
+def test_more_neighbours_than_sources_reads_them_all() -> None:
+    plan = InverseDistance(k=10, power=0.0).plan(
+        Points(SOURCE_XY[:3]), Points(TARGET_XY[:2])
+    )
+    assert plan.read.n_taps == 3
+    assert_matches_oracle(
+        plan(jnp.asarray(VALUES[:3])), np.full(2, VALUES[:3].mean()), rtol=1e-12
+    )

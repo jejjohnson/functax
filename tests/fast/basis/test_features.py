@@ -22,6 +22,8 @@ from functax.basis.features import (
 
 
 W = jnp.array([[1.0, -0.5, 2.0], [0.3, 1.0, 0.5]])
+
+
 POINT = jnp.array([0.4, -1.1])
 
 
@@ -124,27 +126,3 @@ class TestGaussianWindowFeatures:
         expected = np.exp(-0.5 * ((np.asarray(t) - 5.0) / 2.0) ** 2)
         assert_matches_oracle(windows[:, 0], expected, rtol=1e-12)
         assert float(windows[5, 0]) == 1.0
-
-
-class TestDtypes:
-    @staticmethod
-    def _fourier(x: jax.Array) -> jax.Array:
-        return fourier_features(x, 4, rescale=True)
-
-    @staticmethod
-    def _seasonal(x: jax.Array) -> jax.Array:
-        return seasonal_features(x, (7.0, 365.25), (2, 3), rescale=True)
-
-    @pytest.mark.parametrize("name", ["_fourier", "_seasonal"])
-    @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-    def test_floating_inputs_keep_their_dtype(self, name: str, dtype: type) -> None:
-        x = jnp.linspace(0.0, 3.0, 5, dtype=dtype)
-        assert getattr(self, name)(x).dtype == dtype
-
-    @pytest.mark.parametrize("name", ["_fourier", "_seasonal"])
-    def test_integers_become_float32(self, name: str) -> None:
-        fn = getattr(self, name)
-        features = fn(jnp.arange(5))
-        assert features.dtype == jnp.float32
-        expected = fn(jnp.arange(5, dtype=jnp.float32))
-        assert_matches_oracle(features, expected, rtol=0.0, atol=1e-6)

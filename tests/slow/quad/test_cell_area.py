@@ -79,3 +79,27 @@ def test_rectilinear_keeps_float32() -> None:
     )
     on_sphere = cell_area(globe32, sphere_radius=1.0, unit="degrees")
     assert on_sphere.weights.dtype == jnp.float32
+
+
+def test_rectilinear_areas_sum_to_the_domain_area() -> None:
+    rng = np.random.default_rng(0)
+    x_edges = np.cumsum(rng.uniform(0.1, 1.0, 8)) - 2.0
+    y_edges = np.cumsum(rng.uniform(0.1, 1.0, 6)) + 3.0
+    axes = tuple(
+        Axis(jnp.asarray(0.5 * (edges[:-1] + edges[1:])), edges=jnp.asarray(edges))
+        for edges in (x_edges, y_edges)
+    )
+    rule = cell_area(RectilinearGrid(axes))
+    domain = (x_edges[-1] - x_edges[0]) * (y_edges[-1] - y_edges[0])
+    assert abs(float(rule.weights.sum()) - domain) < 1e-14 * domain
+    # each cell is the product of its two widths, the first axis outer
+    expected = np.outer(np.diff(x_edges), np.diff(y_edges)).ravel()
+    np.testing.assert_allclose(rule.weights, expected, rtol=1e-15)
+
+
+@pytest.mark.parametrize("count", [1, 3])
+def test_rectilinear_grid_of_any_dimension(count: int) -> None:
+    axes = tuple(Axis(jnp.array([0.5, 1.5, 2.5])) for _ in range(count))
+    rule = cell_area(RectilinearGrid(axes))
+    assert rule.nodes.shape == (3**count, count)
+    assert abs(float(rule.weights.sum()) - 3.0**count) < 1e-13
