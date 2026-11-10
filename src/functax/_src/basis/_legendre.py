@@ -52,7 +52,7 @@ def _check_degree(value: Any, name: str, *, minimum: int = 0) -> int:
 
 
 def legendre_polynomials(
-    t: Float[Array, ...], l_max: int
+    t: Float[Array, "*batch"], l_max: int
 ) -> Float[Array, "... degree"]:
     """The Legendre polynomials P₀(t), …, P_{l_max}(t).
 
@@ -125,7 +125,7 @@ def associated_legendre_indices(l_max: int) -> tuple[tuple[int, int], ...]:
 
 
 def associated_legendre(
-    t: Float[Array, ...],
+    t: Float[Array, "*batch"],
     l_max: int,
     *,
     normalization: str = "orthonormal",
@@ -232,7 +232,9 @@ def _sectoral_scale(l_max: int) -> np.ndarray:
     return np.cumprod(factor) / math.sqrt(2.0)
 
 
-def _ldexp(x: Float[Array, ...], e: Int[Array, ...]) -> Float[Array, ...]:
+def _ldexp(
+    x: Float[Array, "*batch"], e: Int[Array, "*batch"]
+) -> Float[Array, "*batch"]:
     """x · 2^e, with the exact derivative 2^e everywhere.
 
     ``jnp.ldexp`` passes x = 0 through a ``where``, so its derivative there is
@@ -251,7 +253,7 @@ def _ldexp(x: Float[Array, ...], e: Int[Array, ...]) -> Float[Array, ...]:
 
 
 def _sectoral_carry(
-    s: Float[Array, ...], l_max: int
+    s: Float[Array, "*batch"], l_max: int
 ) -> tuple[Float[Array, "... order"], Int[Array, "... order"]]:
     """The sectoral P̄_m^m = c_m s^m as a mantissa and a binary exponent.
 
@@ -285,7 +287,7 @@ def _sectoral_carry(
 
 
 def _legendre_table_carry(
-    t: Float[Array, ...],
+    t: Float[Array, "*batch"],
     sectoral: Float[Array, "... order"],
     sectoral_exp: Int[Array, "... order"],
     l_max: int,
