@@ -40,7 +40,7 @@ def _check_kernel(kernel: str) -> None:
         raise ValidationError(msg)
 
 
-def wendland_c2(r: Float[Array, ...]) -> Float[Array, ...]:
+def wendland_c2(r: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
     """The Wendland C² kernel K(r) = (1 − r)₊⁴ (4r + 1).
 
     Positive definite in dimensions d ≤ 3.
@@ -64,7 +64,7 @@ def wendland_c2(r: Float[Array, ...]) -> Float[Array, ...]:
     return jnp.where(r < 1.0, (1.0 - r) ** 4 * (4.0 * r + 1.0), 0.0)
 
 
-def wendland_c4(r: Float[Array, ...]) -> Float[Array, ...]:
+def wendland_c4(r: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
     """The Wendland C⁴ kernel K(r) = (1 − r)₊⁶ (35r² + 18r + 3)/3.
 
     Positive definite in dimensions d ≤ 3.
