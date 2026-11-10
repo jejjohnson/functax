@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.0.6](https://github.com/jejjohnson/functax/compare/v0.0.5...v0.0.6) (2026-11-10)
+
+
+### Features
+
+* **basis:** add legendre_series from kernellib ([#100](https://github.com/jejjohnson/functax/issues/100)) ([14aa90c](https://github.com/jejjohnson/functax/commit/14aa90cc11c5c96bf362fa4598ccfd76b96ed268)), closes [#47](https://github.com/jejjohnson/functax/issues/47)
+* **interp:** add the Chebyshev read-out and clenshaw ([#102](https://github.com/jejjohnson/functax/issues/102)) ([a8936ce](https://github.com/jejjohnson/functax/commit/a8936ce8301bea154059bc240ce277706dc8a3ee)), closes [#43](https://github.com/jejjohnson/functax/issues/43)
+* **quad:** add cell_area, the cell-area rule of a grid ([#98](https://github.com/jejjohnson/functax/issues/98)) ([09ea2ff](https://github.com/jejjohnson/functax/commit/09ea2ffcc4080f26897d69529d474a14e148273f)), closes [#59](https://github.com/jejjohnson/functax/issues/59)
+* **quad:** add Gauss–Legendre, Clenshaw–Curtis, trapezoid and Simpson rules as data ([#96](https://github.com/jejjohnson/functax/issues/96)) ([e47353c](https://github.com/jejjohnson/functax/commit/e47353c82e5af961fcbaa366f8717bb9828f11f3))
+* **quad:** add polyline, a curve rule with arc-length weights and normals ([#99](https://github.com/jejjohnson/functax/issues/99)) ([08450fa](https://github.com/jejjohnson/functax/commit/08450fae8fcafb57aef9f142a253bb89b5c8c94b))
+* **quad:** add sphere rules wrapping the geometry grids ([#97](https://github.com/jejjohnson/functax/issues/97)) ([7616ead](https://github.com/jejjohnson/functax/commit/7616ead56e2683d4f9c06ab57980c2f1c8c92d4d)), closes [#45](https://github.com/jejjohnson/functax/issues/45)
+* **transform:** add Chebyshev nodes and transforms from spectraldiffx ([#101](https://github.com/jejjohnson/functax/issues/101)) ([1196ec0](https://github.com/jejjohnson/functax/commit/1196ec000897c4437d9b6d554046ced41594b81c)), closes [#46](https://github.com/jejjohnson/functax/issues/46)
+
 ## [0.0.5](https://github.com/jejjohnson/functax/compare/v0.0.4...v0.0.5) (2026-11-10)
 
 
