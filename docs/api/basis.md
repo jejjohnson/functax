@@ -22,6 +22,12 @@ whose inner products $\vect{\phi}(\vect{x})^\top \vect{\phi}(\vect{x}')$ approxi
 
 ::: functax.basis.vector
 
+## Local and multiscale bases
+
+`functax.basis.local` holds bases whose columns are placed where the caller wants them. `rbf_basis` evaluates $\varphi_a(\vect{x}) = K(\lVert \vect{x} - \vect{c}_a \rVert / \ell_a)$ with a Gaussian or a compactly supported Wendland kernel, and `spherical_rbf_basis` does the same in geodesic distance on the sphere. `gabor_frame` multiplies a Gaussian envelope by an oscillation, radial or directional, and `gabor_frame_grid` lays out a dyadic, redundant frame over a box. `wavelet_basis_1d` and `wavelet_basis_2d` are the orthonormal, critically sampled counterpart: the periodic Haar, db2 or db4 DWT, with $\mat{\Phi}^\top \mat{\Phi} = \mat{I}$.
+
+::: functax.basis.local
+
 ## Polynomials
 
 `functax.basis.polynomial` evaluates the Legendre polynomials $P_l$ by their three-term recurrence and the associated Legendre functions $P_l^m$ by the fully normalised recurrences, carried as a mantissa and a binary exponent per order so they stay finite to high degree in float32 as well as float64. `associated_legendre` comes in the orthonormal, Schmidt and classical normalisations.
