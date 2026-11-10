@@ -37,6 +37,7 @@ project:
       children:
         - file: guide/quickstart.md
         - file: guide/interpolation.md
+        - file: guide/gridding.md
     - title: Project
       children:
         - file: contributing.md

@@ -26,6 +26,9 @@ dependencies = ["numpy>=1.26"]
 
 [project.optional-dependencies]
 jax = ["jax>=0.4.35", "equinox", "lineax", "einx", "jaxtyping"]
+# SciPy builds the host-side fits of the scattered-data schemes (k-d trees,
+# Delaunay triangulations); their plans raise MissingExtraError without it.
+scipy = ["scipy>=1.14"]
 
 [project.urls]
 Repository = "https://github.com/jejjohnson/functax"

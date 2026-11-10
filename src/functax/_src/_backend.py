@@ -1,11 +1,14 @@
-"""Checks for the optional ``functax[jax]`` extra, and the array namespace of an input.
+"""Checks for the optional ``functax[jax]`` and ``functax[scipy]`` extras.
 
 The base install depends on NumPy alone. A module that needs JAX calls
 [`require_jax`][functax._src._backend.require_jax] before its first JAX import,
 so a NumPy-only install fails with a message that names the extra rather than
-with a bare ``ModuleNotFoundError: No module named 'jax'``. The NumPy-only
+with a bare ``ModuleNotFoundError: No module named 'jax'``. A scheme whose fit
+needs SciPy calls [`import_scipy`][functax._src._backend.import_scipy] when it
+builds a plan, so functax itself imports without SciPy. The NumPy-only
 kernels call [`namespace`][functax._src._backend.namespace] instead, which
-imports JAX only when a JAX array has already arrived.
+imports JAX only when a JAX array has already arrived (the array namespace of
+an input).
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from functax.exceptions import MissingExtraError
 
 __all__ = [
     "JAX_EXTRA",
+    "import_scipy",
     "is_jax_array",
     "is_tracer",
     "namespace",
@@ -56,6 +60,39 @@ def require_jax(module: str) -> None:
                 f"be imported; install it with: pip install 'functax[jax]'"
             )
             raise MissingExtraError(msg) from err
+
+
+def import_scipy(submodule: str, *, needed_by: str) -> ModuleType:
+    """``scipy.<submodule>``, imported when a plan is built, or an error naming it.
+
+    SciPy is the ``functax[scipy]`` extra: only the host-side fits of some
+    schemes (k-d trees, triangulations) need it, so it is imported at fit
+    time rather than when functax is.
+
+    Args:
+        submodule: The SciPy submodule, such as ``"spatial"``.
+        needed_by: What needs it, used in the message (``"InverseDistance.plan"``).
+
+    Returns:
+        The imported submodule.
+
+    Raises:
+        MissingExtraError: If SciPy cannot be imported; the message names
+            ``needed_by`` and the extra.
+
+    Examples:
+        >>> from functax._src._backend import import_scipy
+        >>> import_scipy("spatial", needed_by="InverseDistance.plan").__name__
+        'scipy.spatial'
+    """
+    try:
+        return importlib.import_module(f"scipy.{submodule}")
+    except ImportError as err:
+        msg = (
+            f"{needed_by} needs the functax[scipy] extra, but 'scipy.{submodule}' "
+            "could not be imported; install it with: pip install 'functax[scipy]'"
+        )
+        raise MissingExtraError(msg) from err
 
 
 def is_jax_array(x: Any) -> bool:
