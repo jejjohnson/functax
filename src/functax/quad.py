@@ -13,12 +13,24 @@ from functax._src.quad._rules import (
     simpson,
     trapezoid,
 )
+from functax._src.quad._sphere import (
+    SphereRule,
+    sphere_fibonacci,
+    sphere_gauss_legendre,
+    sphere_healpix,
+    sphere_latlon,
+)
 
 
 __all__ = [
     "Rule",
+    "SphereRule",
     "clenshaw_curtis",
     "gauss_legendre",
     "simpson",
+    "sphere_fibonacci",
+    "sphere_gauss_legendre",
+    "sphere_healpix",
+    "sphere_latlon",
     "trapezoid",
 ]
