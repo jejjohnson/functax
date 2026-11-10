@@ -29,6 +29,7 @@ __all__ = [
     "chord_distance",
     "geodesic_distance",
     "lonlat_to_unit",
+    "spherical_polygon_area",
     "unit_to_lonlat",
 ]
 
@@ -278,3 +279,80 @@ def geodesic_distance(
     dot = einx.dot("source c, target c -> source target", u, v)
     # d = a · atan2(‖u × v‖, u · v)
     return radius * jnp.arctan2(cross_norm, dot)
+
+
+def spherical_polygon_area(
+    vertices: Float[Array, "*batch vertex 3"],
+    *,
+    radius: float | Float[Array, ""] = 1.0,
+) -> Float[Array, "*batch"]:
+    """The signed area of a spherical polygon with great-circle edges.
+
+    A = a² E with the spherical excess E = ∑ₖ αₖ − (n − 2)π of an n-gon with
+    interior angles αₖ. The angle sum loses all but a few digits on small
+    cells (E is the difference of numbers near (n − 2)π), so E is summed over
+    the fan of triangles (u₀, uₖ, uₖ₊₁) instead, each by the formula of Van
+    Oosterom and Strackee,
+
+        tan(Eₖ / 2) = u₀ · (uₖ × uₖ₊₁) / (1 + u₀ · uₖ + uₖ · uₖ₊₁ + uₖ₊₁ · u₀),
+
+    which is exact to rounding at every size. Eₖ carries the sign of the
+    triple product, so A is positive for vertices counter-clockwise seen from
+    outside the sphere, negative for clockwise ones, and exact for any simple
+    polygon in an open hemisphere. A repeated vertex adds a triangle of zero
+    area, so polygons with fewer vertices pad to a common count by repeating
+    their last vertex.
+
+    Args:
+        vertices: u, the n ≥ 3 vertices as unit vectors, in order, with any
+            leading batch dims.
+        radius: a, positive.
+
+    Returns:
+        A, one area per polygon, in the units of ``radius`` squared.
+
+    Raises:
+        GeometryError: If ``vertices`` is not floating with a last axis of 3
+            and at least three vertices, or a concrete ``radius`` is not
+            positive and finite.
+
+    References:
+        Van Oosterom, A., Strackee, J. (1983). The solid angle of a plane
+        triangle. IEEE Transactions on Biomedical Engineering, BME-30(2),
+        125–126.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import icosphere, spherical_polygon_area
+        >>> # the octant x, y, z ≥ 0 is an eighth of the sphere
+        >>> octant = jnp.eye(3)
+        >>> bool(jnp.isclose(spherical_polygon_area(octant), jnp.pi / 2))
+        True
+        >>> vertices, triangles = icosphere(2)
+        >>> areas = spherical_polygon_area(vertices[triangles])
+        >>> areas.shape, bool(jnp.isclose(areas.sum(), 4 * jnp.pi))
+        ((320,), True)
+    """
+    vertices = jnp.asarray(vertices)
+    _check_last_axis(vertices, 3, "vertices")
+    if vertices.ndim < 2 or vertices.shape[-2] < 3:
+        msg = (
+            "'vertices' must hold at least three vertices (..., vertex, 3), got "
+            f"shape {vertices.shape}"
+        )
+        raise GeometryError(msg)
+    _check_radius(radius)
+    # the fan (u₀, uₖ, uₖ₊₁) for k = 1, …, n − 2
+    apex = vertices[..., 0, :]
+    left = vertices[..., 1:-1, :]
+    right = vertices[..., 2:, :]
+    # u₀ · (uₖ × uₖ₊₁)
+    triple = einx.dot("... c, ... fan c -> ... fan", apex, jnp.cross(left, right))
+    # 1 + u₀ · uₖ + uₖ · uₖ₊₁ + uₖ₊₁ · u₀
+    apex_left = einx.dot("... c, ... fan c -> ... fan", apex, left)
+    left_right = einx.dot("... fan c, ... fan c -> ... fan", left, right)
+    right_apex = einx.dot("... fan c, ... c -> ... fan", right, apex)
+    denominator = 1 + apex_left + left_right + right_apex
+    # Eₖ = 2 atan2(triple, denominator)
+    excess = 2 * einx.sum("... [fan]", jnp.arctan2(triple, denominator))
+    return radius**2 * excess

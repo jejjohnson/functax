@@ -1,4 +1,4 @@
-"""Conservative remapping on tensor grids (#40): conservation, block means, adjoint.
+"""Conservative remapping (#40, #41): conservation, block means, adjoint, oracles.
 
 Over a second each, mostly einx compiling each new shape in an eager call.
 """
@@ -18,7 +18,16 @@ from _harness import (
     assert_transpose_matches,
 )
 
-from functax.geometry import Axis, RectilinearGrid
+from functax._src.interp._clip import planar_polygon_area
+from functax._src.interp._conservative import _node_corners, _polygon_cells
+from functax.geometry import (
+    Axis,
+    CurvilinearGrid,
+    RectilinearGrid,
+    lonlat_to_unit,
+    spherical_polygon_area,
+    unit_to_lonlat,
+)
 from functax.interp import Conservative, Policies
 
 
@@ -179,3 +188,159 @@ def test_gradient_matches_finite_differences() -> None:
     )
     plan = Conservative().plan(source, target)
     assert_grad_matches_fd(plan, jnp.asarray(rng.normal(size=20)))
+
+
+# --- curvilinear and spherical cells (#41) ---
+
+
+def source_cell_areas(source: object, *, sphere: bool, unit: str | None) -> np.ndarray:
+    """|cⱼ| of the plan's own source cells, for the conservation checks."""
+    cells = _polygon_cells(source, "source", unit if sphere else None)
+    if sphere:
+        return np.abs(np.asarray(spherical_polygon_area(jnp.asarray(cells))))
+    counts = np.full(len(cells), 4)
+    return np.abs(planar_polygon_area(cells, counts))
+
+
+def warped_swath(
+    n_rows: int, n_cols: int, *, scale: float, shift: tuple
+) -> CurvilinearGrid:
+    rows, cols = np.meshgrid(np.arange(n_rows), np.arange(n_cols), indexing="ij")
+    x = shift[0] + scale * (cols + 0.15 * rows + 0.02 * rows**2)
+    y = shift[1] + scale * (rows + 0.1 * np.sin(cols))
+    return CurvilinearGrid(x=jnp.asarray(x), y=jnp.asarray(y))
+
+
+class TestCurvilinear:
+    def test_curvilinear_to_regular_conserves_the_integral(self) -> None:
+        # DoD of #41: 1e-10 relative; the target covers the swath, and
+        # extrapolate keeps every source cell's area in some target cell
+        swath = warped_swath(9, 12, scale=1.0, shift=(0.0, 0.0))
+        grid = RectilinearGrid(
+            (
+                Axis(jnp.linspace(-2.0, 18.0, 11)),
+                Axis(jnp.linspace(-2.0, 11.0, 8)),
+            )
+        )
+        keep = Policies(outside="extrapolate", fill_value=0.0)
+        plan = Conservative().plan(swath, grid, policies=keep)
+        field = np.random.default_rng(12).normal(size=9 * 12)
+        remapped = np.asarray(plan(jnp.asarray(field)))
+        target_areas = cell_areas(
+            *(np.asarray(axis.cell_edges()) for axis in grid.axes)
+        )
+        source_areas = source_cell_areas(swath, sphere=False, unit=None)
+        assert_matches_oracle(remapped @ target_areas, field @ source_areas, rtol=1e-10)
+
+    def test_the_polygon_path_equals_the_tensor_path(self) -> None:
+        rng = np.random.default_rng(13)
+        target = grid_from_edges(
+            random_edges(rng, 4, -0.5, 3.5), random_edges(rng, 3, -0.5, 2.5)
+        )
+        # a uniform grid, so its midpoint corners are the tensor grid's edges
+        x_nodes = np.linspace(0.25, 2.75, 6)
+        y_nodes = np.linspace(0.25, 1.75, 4)
+        tensor = RectilinearGrid(
+            (Axis(jnp.asarray(x_nodes)), Axis(jnp.asarray(y_nodes)))
+        )
+        x, y = np.meshgrid(x_nodes, y_nodes, indexing="ij")
+        swath = CurvilinearGrid(x=jnp.asarray(x), y=jnp.asarray(y))
+        policies = Policies(outside="extrapolate")
+        field = jnp.asarray(rng.normal(size=24))
+        expected = Conservative().plan(tensor, target, policies=policies)(field)
+        actual = Conservative().plan(swath, target, policies=policies)(field)
+        assert_matches_oracle(actual, expected, rtol=1e-12, atol=1e-15)
+
+    def test_dot_product(self) -> None:
+        swath = warped_swath(5, 6, scale=1.0, shift=(0.0, 0.0))
+        grid = RectilinearGrid(
+            (Axis(jnp.linspace(0.0, 8.0, 5)), Axis(jnp.linspace(0.0, 5.0, 4)))
+        )
+        plan = Conservative().plan(swath, grid, policies=Policies(outside="clamp"))
+        assert_adjoint(plan, plan.adjoint, 30, 20, key=jax.random.key(1))
+        assert_transpose_matches(plan, plan.adjoint, jnp.zeros(30))
+
+
+class TestSphere:
+    def test_a_lonlat_swath_conserves_on_the_sphere(self) -> None:
+        # a rotated, warped 0.5° swath over Europe onto a 2° lon/lat grid
+        swath = warped_swath(20, 24, scale=0.5, shift=(-5.0, 40.0))
+        grid = RectilinearGrid(
+            (Axis(jnp.arange(-9.0, 18.0, 2.0)), Axis(jnp.arange(37.0, 56.0, 2.0)))
+        )
+        scheme = Conservative(sphere=True, unit="degrees")
+        keep = Policies(outside="extrapolate", fill_value=0.0)
+        plan = scheme.plan(swath, grid, policies=keep)
+        field = np.random.default_rng(14).normal(size=20 * 24)
+        remapped = np.asarray(plan(jnp.asarray(field)))
+        target_cells = _polygon_cells(grid, "target", "degrees")
+        target_areas = np.abs(
+            np.asarray(spherical_polygon_area(jnp.asarray(target_cells)))
+        )
+        source_areas = source_cell_areas(swath, sphere=True, unit="degrees")
+        assert_matches_oracle(remapped @ target_areas, field @ source_areas, rtol=1e-10)
+
+    def test_global_lonlat_grids_tile_the_sphere(self) -> None:
+        source = RectilinearGrid(
+            (Axis(jnp.arange(5.0, 360.0, 10.0)), Axis(jnp.arange(-85.0, 90.0, 10.0)))
+        )
+        target = RectilinearGrid(
+            (
+                Axis(jnp.arange(-172.5, 180.0, 15.0), period=360.0),
+                Axis(jnp.arange(-82.5, 90.0, 15.0)),
+            )
+        )
+        plan = Conservative(sphere=True, unit="degrees").plan(source, target)
+        assert bool(plan.valid.all())
+        target_cells = _polygon_cells(target, "target", "degrees")
+        target_areas = np.abs(
+            np.asarray(spherical_polygon_area(jnp.asarray(target_cells)))
+        )
+        assert_matches_oracle(target_areas.sum(), 4 * np.pi, rtol=1e-12)
+        field = np.random.default_rng(15).normal(size=36 * 18)
+        remapped = np.asarray(plan(jnp.asarray(field)))
+        source_areas = source_cell_areas(source, sphere=True, unit="degrees")
+        assert_matches_oracle(remapped @ target_areas, field @ source_areas, rtol=1e-10)
+        assert_matches_oracle(plan(jnp.ones(36 * 18)), np.ones(24 * 12), rtol=1e-10)
+
+
+def test_matches_xesmf_on_a_curvilinear_grid() -> None:
+    # DoD of #41: xESMF's conservative remap (great-circle cells, destarea) to
+    # 1e-8 on target cells inside the swath; skipped where xESMF is not installed
+    xesmf = pytest.importorskip("xesmf")
+    xarray = pytest.importorskip("xarray")
+    swath = warped_swath(16, 20, scale=0.5, shift=(-5.0, 40.0))
+    grid = RectilinearGrid(
+        (Axis(jnp.arange(-3.0, 8.0, 1.0)), Axis(jnp.arange(42.0, 48.0, 1.0)))
+    )
+    # the same corners as the plan, handed to ESMF as lon_b and lat_b
+    nodes = np.stack([np.asarray(swath.x), np.asarray(swath.y)], axis=-1)
+    unit_nodes = np.asarray(lonlat_to_unit(jnp.asarray(nodes), unit="degrees"))
+    corners = unit_to_lonlat(
+        jnp.asarray(_node_corners(unit_nodes, True)), unit="degrees"
+    )
+    lon_edges, lat_edges = (np.asarray(axis.cell_edges()) for axis in grid.axes)
+    source_ds = xarray.Dataset(
+        coords={
+            "lon": (("y", "x"), nodes[..., 0]),
+            "lat": (("y", "x"), nodes[..., 1]),
+            "lon_b": (("y_b", "x_b"), np.asarray(corners[..., 0])),
+            "lat_b": (("y_b", "x_b"), np.asarray(corners[..., 1])),
+        }
+    )
+    target_ds = xarray.Dataset(
+        coords={
+            "lon": ("lon", np.asarray(grid.axes[0].values)),
+            "lat": ("lat", np.asarray(grid.axes[1].values)),
+            "lon_b": ("lon_b", lon_edges),
+            "lat_b": ("lat_b", lat_edges),
+        }
+    )
+    regridder = xesmf.Regridder(source_ds, target_ds, "conservative")
+    field = np.random.default_rng(16).normal(size=(16, 20))
+    expected = np.asarray(regridder(xarray.DataArray(field, dims=("y", "x"))))
+    plan = Conservative(sphere=True, unit="degrees").plan(swath, grid)
+    actual = einx.id("(x y) -> y x", plan(jnp.asarray(field.ravel())), x=11)
+    inside = np.asarray(einx.id("(x y) -> y x", plan.valid, x=11))
+    assert inside.any()
+    assert_matches_oracle(actual, expected, rtol=1e-8, where=inside)

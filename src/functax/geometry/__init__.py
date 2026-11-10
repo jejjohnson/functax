@@ -37,6 +37,7 @@ if TYPE_CHECKING:
         chord_distance,
         geodesic_distance,
         lonlat_to_unit,
+        spherical_polygon_area,
         unit_to_lonlat,
     )
     from functax._src.geometry._sphere_grids import (
@@ -80,6 +81,7 @@ __all__ = [
     "pairwise_distance",
     "pixel_centres",
     "rotation_to_pole",
+    "spherical_polygon_area",
     "tangent_to_cartesian",
     "to_pixel",
     "unit_to_lonlat",
@@ -110,6 +112,7 @@ _LAZY: dict[str, str] = {
     "mesh_vertex_areas": "functax._src.geometry._mesh",
     "pairwise_distance": "functax._src.geometry._metric",
     "rotation_to_pole": "functax._src.geometry._frames",
+    "spherical_polygon_area": "functax._src.geometry._sphere",
     "tangent_to_cartesian": "functax._src.geometry._frames",
     "unit_to_lonlat": "functax._src.geometry._sphere",
 }
