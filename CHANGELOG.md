@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.8](https://github.com/jejjohnson/functax/compare/v0.0.7...v0.0.8) (2026-11-11)
+
+
+### Features
+
+* **interp:** a local RBF over each target's neighbours ([#132](https://github.com/jejjohnson/functax/issues/132)) ([77f4725](https://github.com/jejjohnson/functax/commit/77f4725b0d80c059ee3e0afe9f6a804366322322)), closes [#121](https://github.com/jejjohnson/functax/issues/121)
+* **interp:** great-circle weights in InverseDistance ([#131](https://github.com/jejjohnson/functax/issues/131)) ([7dcafe1](https://github.com/jejjohnson/functax/commit/7dcafe1bcd97239510a15431a8372182affa63ec)), closes [#120](https://github.com/jejjohnson/functax/issues/120)
+
 ## [0.0.7](https://github.com/jejjohnson/functax/compare/v0.0.6...v0.0.7) (2026-11-11)
 
 
