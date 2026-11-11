@@ -87,7 +87,7 @@ class TestAxis:
         ("values", "match"),
         [
             (jnp.zeros((2, 2)), r"'values' must be 1-D, got shape \(2, 2\)"),
-            (jnp.array([1.0]), "'values' must have at least two nodes, got 1"),
+            (jnp.zeros(0), "'values' must have at least one node, got none"),
             (jnp.array([0, 1, 2]), "'values' must have a floating dtype, got int"),
             (jnp.array([0.0, 2.0, 1.0]), "'values' must be strictly monotone"),
             (jnp.array([0.0, 1.0, 1.0]), "'values' must be strictly monotone"),
@@ -97,6 +97,25 @@ class TestAxis:
     def test_rejects_bad_values(self, values: jax.Array, match: str) -> None:
         with pytest.raises(GeometryError, match=match):
             Axis(values)
+
+    def test_one_node(self) -> None:
+        axis = Axis(jnp.array([2.0]))
+        assert axis.values.tolist() == [2.0]
+        assert not axis.is_regular
+        assert not axis.is_descending
+
+    def test_one_node_has_no_cell_without_edges(self) -> None:
+        with pytest.raises(GeometryError, match="one-node Axis has no spacing"):
+            Axis(jnp.array([2.0])).cell_edges()
+
+    @pytest.mark.parametrize("edges", [[1.0, 4.0], [4.0, 1.0]])
+    def test_one_node_takes_edges_in_either_order(self, edges: list[float]) -> None:
+        axis = Axis(jnp.array([2.0]), edges=jnp.array(edges))
+        assert axis.cell_edges().tolist() == edges
+
+    def test_one_node_rejects_a_cell_of_zero_width(self) -> None:
+        with pytest.raises(GeometryError, match="'edges' must be strictly monotone"):
+            Axis(jnp.array([2.0]), edges=jnp.array([2.0, 2.0]))
 
     def test_the_message_shows_the_bad_values(self) -> None:
         with pytest.raises(GeometryError, match=r"got array\(\[0\., 2\., 1\.\]\)"):

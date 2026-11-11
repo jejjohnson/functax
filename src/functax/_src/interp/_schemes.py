@@ -36,6 +36,7 @@ from functax._src.interp._fit import Identity
 from functax._src.interp._gaussian import GaussianPlan
 from functax._src.interp._interpolant import Interpolant, fit_interpolant
 from functax._src.interp._kernels import RadialKernel
+from functax._src.interp._locate import require_cell_widths
 from functax._src.interp._plan import Plan
 from functax._src.interp._policies import Policies
 from functax._src.interp._prefilter import prefilter_for
@@ -160,6 +161,7 @@ class LocalScheme(Scheme):
         """
         policies = Policies() if policies is None else policies
         shape, periodic = source_layout(source)
+        require_cell_widths(source, policies.extent)
         bases = self.bases(len(shape))
         coordinates = target_coordinates(source, target)
         positions = coordinates_to_positions(source, coordinates)

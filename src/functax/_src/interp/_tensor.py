@@ -37,6 +37,7 @@ from functax._src.interp._locate import (
     domain_bounds,
     index_positions,
     remap_taps,
+    require_cell_widths,
 )
 from functax._src.interp._policies import Policies
 from functax._src.interp._stencil import Stencil
@@ -157,10 +158,14 @@ def _axis_stencil(
     inside = finite if periodic else finite & (position >= lower) & (position <= upper)
     # non-finite positions read node 0 and are masked; nothing else can read
     position = jnp.where(finite, position, 0.0)
-    if policies.outside == "clamp" and not periodic:
+    # a one-node axis is constant along itself, so extrapolating it is clamping
+    clamps = policies.outside == "clamp" or (
+        policies.outside == "extrapolate" and n_nodes == 1
+    )
+    if clamps and not periodic:
         position = jnp.clip(position, lower, upper)
     cell = jnp.floor(position)
-    if policies.outside == "extrapolate" and not periodic:
+    if policies.outside == "extrapolate" and not periodic and n_nodes > 1:
         # keep every tap on the axis, so the edge cell's weights continue
         low_tap, high_tap = basis.support
         first = -low_tap
@@ -280,5 +285,6 @@ def tensor_stencil(
             f"got {len(bases)}"
         )
         raise GeometryError(msg)
+    require_cell_widths(source, policies.extent)
     positions = target_positions(source, target)
     return stencil_from_positions(positions, shape, periodic, bases, policies=policies)

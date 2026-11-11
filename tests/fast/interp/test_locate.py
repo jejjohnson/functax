@@ -12,7 +12,8 @@ import numpy as np
 import pytest
 from scipy.ndimage import map_coordinates
 
-from functax import OutsideDomainError, PolicyError
+from functax import GeometryError, OutsideDomainError, PolicyError
+from functax._src.interp._locate import require_cell_widths
 from functax.geometry import Axis
 from functax.interp import (
     Policies,
@@ -27,6 +28,41 @@ class TestIndexPositions:
     def test_any_target_shape(self) -> None:
         located = index_positions(Axis(jnp.arange(5.0)), jnp.full((2, 3), 1.5))
         assert located.shape == (2, 3)
+
+
+class TestOneNode:
+    def test_positions_without_edges_are_the_sign(self) -> None:
+        located = index_positions(
+            Axis(jnp.array([2.0])), jnp.array([1.0, 2.0, 5.0, jnp.nan])
+        )
+        assert located[:3].tolist() == [-1.0, 0.0, 1.0]
+        assert math.isnan(float(located[3]))
+
+    def test_positions_put_the_edges_at_minus_and_plus_a_half(self) -> None:
+        axis = Axis(jnp.array([1.0]), edges=jnp.array([0.0, 4.0]))
+        targets = jnp.array([-1.0, 0.0, 0.5, 1.0, 2.5, 4.0, jnp.nan])
+        located = index_positions(axis, targets)
+        assert located[:6].tolist() == [-1.0, -0.5, -0.25, 0.0, 0.25, 0.5]
+        assert math.isnan(float(located[6]))
+
+    def test_a_node_on_its_own_edge(self) -> None:
+        axis = Axis(jnp.array([0.0]), edges=jnp.array([0.0, 2.0]))
+        located = index_positions(axis, jnp.array([-0.5, 0.0, 1.0]))
+        assert located.tolist() == [-1.0, 0.0, 0.25]
+
+    def test_inside_under_both_extents(self) -> None:
+        axis = Axis(jnp.array([1.0]), edges=jnp.array([0.0, 4.0]))
+        targets = jnp.array([-0.5, 0.0, 1.0, 3.0, 4.5])
+        _, _, nodes = locate(axis, targets)
+        _, _, cells = locate(axis, targets, extent="cells")
+        assert nodes.tolist() == [False, False, True, False, False]
+        assert cells.tolist() == [False, True, True, True, False]
+
+    def test_cells_need_edges(self) -> None:
+        require_cell_widths(Axis(jnp.array([1.0])), "nodes")
+        require_cell_widths(Axis(jnp.array([1.0]), edges=[0.0, 2.0]), "cells")
+        with pytest.raises(GeometryError, match="axis 0 has one node and no 'edges'"):
+            require_cell_widths(Axis(jnp.array([1.0])), "cells")
 
 
 class TestLocate:

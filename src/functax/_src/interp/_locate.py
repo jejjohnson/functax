@@ -6,7 +6,9 @@ origin x₀ and spacing Δ, u = (x − x₀)/Δ; on a rectilinear axis, u = i + 
 with cell i from ``searchsorted`` and t = (x − xᵢ)/(xᵢ₊₁ − xᵢ), extended
 linearly past the end cells. A descending axis is located on its reversed
 values; a periodic axis of period P first maps x into one period and gains a
-wrap cell between its last node and the first one plus P.
+wrap cell between its last node and the first one plus P. An axis of one node
+x₀ has no spacing: u = 0 at x₀, and its edges, when it has them, sit at
+u = ∓½.
 """
 
 from __future__ import annotations
@@ -16,6 +18,8 @@ from functax._src._backend import require_jax
 
 require_jax(__name__)
 
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -24,7 +28,7 @@ from jaxtyping import Array, ArrayLike, Bool, Float, Int
 from functax._src._backend import is_tracer
 from functax._src.geometry._types import Axis
 from functax._src.interp._policies import BOUNDARY, EXTENT, Policies
-from functax.exceptions import OutsideDomainError, PolicyError
+from functax.exceptions import GeometryError, OutsideDomainError, PolicyError
 
 
 __all__ = [
@@ -33,6 +37,7 @@ __all__ = [
     "index_positions",
     "locate",
     "remap_taps",
+    "require_cell_widths",
 ]
 
 
@@ -66,6 +71,60 @@ def _rectilinear_positions(
     return cell + offset
 
 
+def _one_node_positions(
+    axis: Axis, positions: Float[Array, "*target"]
+) -> Float[Array, "*target"]:
+    """u on an axis of one node x₀: 0 at x₀, ∓½ at its edges, linear in between.
+
+    Without edges, u = sign(x − x₀), so only x₀ lies in the domain [0, 0] of
+    ``extent="nodes"``. With edges [e₀, e₁] in either order, u = ±½ |x − x₀|/w
+    on the side of x, w being the distance from x₀ to that side's edge, and
+    u = ±1 past a side of zero width. NaN stays NaN.
+    """
+    node = axis.values[0]
+    offset = positions - node
+    if axis.edges is None:
+        return jnp.sign(offset)
+    lower = jnp.minimum(axis.edges[0], axis.edges[1])
+    upper = jnp.maximum(axis.edges[0], axis.edges[1])
+    below = offset < 0
+    # w, from x₀ to the edge on the side of x
+    width = jnp.where(below, node - lower, upper - node)
+    has_width = width > 0
+    safe_width = jnp.where(has_width, width, jnp.ones((), width.dtype))
+    distance = jnp.abs(offset)
+    # ½ |x − x₀|/w, or sign |x − x₀| (0 or 1, NaN kept) past a zero width
+    magnitude = jnp.where(has_width, 0.5 * distance / safe_width, jnp.sign(distance))
+    return jnp.where(below, -magnitude, magnitude)
+
+
+def require_cell_widths(source: Any, extent: str) -> None:
+    """Raise when ``extent="cells"`` meets a one-node axis without edges.
+
+    A single node has no spacing, so the width of its cell must come from
+    ``edges``; every other axis has its cells from its nodes.
+
+    Args:
+        source: The source geometry; only an `Axis` or the axes of a
+            `RectilinearGrid` can have one node.
+        extent: The plan's ``extent``.
+
+    Raises:
+        GeometryError: If ``extent`` is ``"cells"`` and an axis of ``source``
+            has one node and no ``edges``.
+    """
+    if extent != "cells":
+        return
+    axes = (source,) if isinstance(source, Axis) else getattr(source, "axes", ())
+    for index, axis in enumerate(axes):
+        if axis.values.shape[0] == 1 and axis.edges is None:
+            msg = (
+                f"axis {index} has one node and no 'edges', so its cell has no "
+                "width under extent='cells'; pass Axis(..., edges=[e0, e1])"
+            )
+            raise GeometryError(msg)
+
+
 def index_positions(
     axis: Axis, positions: Float[Array, "*target"]
 ) -> Float[Array, "*target"]:
@@ -75,7 +134,8 @@ def index_positions(
     rectilinear one, continued linearly past the end cells, so u < 0 or
     u > N − 1 outside. On a periodic axis x first maps into one period, and u
     lies in [0, N) on an increasing axis, the cell (N − 1, N) being the wrap
-    cell between the last node and the first one plus P.
+    cell between the last node and the first one plus P. On an axis of one
+    node x₀, u = 0 at x₀ and ∓½ at its edges (``sign(x − x₀)`` without edges).
 
     Args:
         axis: The source axis, increasing or decreasing, maybe periodic.
@@ -106,6 +166,8 @@ def index_positions(
         wrapped = origin + jnp.mod(positions - origin, axis.period)
         extended = jnp.append(nodes, origin + axis.period)
         positions_ascending = _rectilinear_positions(extended, wrapped)
+    elif n_nodes == 1:
+        return _one_node_positions(axis, positions)
     elif not is_tracer(axis.values) and axis.is_regular:
         # u = (x − x₀)/Δ, with Δ from the end nodes
         spacing = (nodes[-1] - nodes[0]) / (n_nodes - 1)

@@ -23,7 +23,7 @@ from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import map_coordinates
 
 from functax.geometry import AffineGrid, Axis, Points, RectilinearGrid
-from functax.interp import Linear, Nearest, Policies, Tensor
+from functax.interp import BSpline, Cubic, Linear, Nearest, Policies, Tensor
 
 
 def _rectilinear(
@@ -270,3 +270,56 @@ class TestOutside:
         for outside in ("nan", "clamp", "extrapolate"):
             plan = Linear().plan(self.axis, targets, policies=Policies(outside=outside))
             assert plan.valid.tolist() == [False, True]
+
+
+class TestOneNodeAxis:
+    """A grid one node thick reads as the grid without that axis (#118)."""
+
+    @staticmethod
+    def _grids() -> tuple[RectilinearGrid, RectilinearGrid, np.ndarray, np.ndarray]:
+        grid, nodes = _rectilinear((5, 6), seed=80)
+        thick = RectilinearGrid((Axis(jnp.array([3.0])), *grid.axes))
+        rng = np.random.default_rng(81)
+        # targets inside, in the half-cell border and outside
+        flat = np.column_stack(
+            [rng.uniform(n[0] - 1.0, n[-1] + 1.0, size=30) for n in nodes]
+        )
+        return grid, thick, flat, np.column_stack([np.full(30, 3.0), flat])
+
+    @pytest.mark.parametrize(
+        "scheme",
+        [Nearest(), Linear(), Cubic(), BSpline(3)],
+        ids=["nearest", "linear", "cubic", "bspline3"],
+    )
+    @pytest.mark.parametrize("outside", ["nan", "clamp", "extrapolate"])
+    def test_equals_the_plan_without_the_axis(self, scheme, outside: str) -> None:  # type: ignore[no-untyped-def]
+        grid, thick, flat, targets = self._grids()
+        policies = Policies(outside=outside)
+        field = jax.random.normal(jax.random.key(82), (30,))
+        expected = scheme.plan(grid, Points(jnp.asarray(flat)), policies=policies)
+        actual = scheme.plan(thick, Points(jnp.asarray(targets)), policies=policies)
+        assert_matches_oracle(actual(field), expected(field), rtol=1e-14, atol=1e-14)
+
+    @pytest.mark.parametrize("scheme", [Nearest(), Linear(), Cubic()])
+    def test_dot_product_and_to_gaussx(self, scheme) -> None:  # type: ignore[no-untyped-def]
+        grid, thick, flat, targets = self._grids()
+        plan = scheme.plan(thick, Points(jnp.asarray(targets)))
+        operator = plan.operator()
+        assert_adjoint(
+            lambda y: operator.mv(y), plan.adjoint, 30, 30, key=jax.random.key(83)
+        )
+        # the same sparse matrix as the plan without the axis
+        indices, weights = plan.to_gaussx()
+        dense = jnp.zeros((30, 30)).at[jnp.arange(30)[:, None], indices].add(weights)
+        expected = scheme.plan(grid, Points(jnp.asarray(flat))).operator().as_matrix()
+        assert_matches_oracle(dense, expected, rtol=1e-14, atol=1e-14)
+
+    def test_cells_extent_with_edges(self) -> None:
+        grid, nodes = _rectilinear((5, 6), seed=84)
+        thick = RectilinearGrid(
+            (Axis(jnp.array([3.0]), edges=jnp.array([2.0, 5.0])), *grid.axes)
+        )
+        middle = [0.5 * (n[0] + n[-1]) for n in nodes]
+        targets = jnp.array([[2.0, *middle], [4.9, *middle], [5.1, *middle]])
+        plan = Linear().plan(thick, Points(targets), policies=Policies(extent="cells"))
+        assert plan.valid.tolist() == [True, True, False]
