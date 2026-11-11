@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import einx
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
@@ -85,7 +86,7 @@ def example_figure() -> None:
 
     def image(values: jnp.ndarray) -> np.ndarray:
         # (λ, φ) row-major → rows of φ, for imshow
-        return np.asarray(values).reshape(100, 100).T
+        return einx.id("(lon lat) -> lat lon", np.asarray(values), lon=100)
 
     lo, hi = 1875.0, 1925.0
     fig, axes = plt.subplots(1, 4, figsize=(13, 3.3))
@@ -146,7 +147,7 @@ def mollweide(ax: plt.Axes, field: np.ndarray, title: str) -> None:
     ax.pcolormesh(
         np.deg2rad(LON),
         np.deg2rad(LAT),
-        np.asarray(field).reshape(LAT.shape),
+        einx.id("(lat lon) -> lat lon", np.asarray(field), lat=LAT.shape[0]),
         cmap="RdBu_r",
         vmin=-bound,
         vmax=bound,
@@ -160,7 +161,7 @@ def mollweide(ax: plt.Axes, field: np.ndarray, title: str) -> None:
 
 
 def gallery_figures() -> None:
-    lonlat = jnp.stack([LON.ravel(), LAT.ravel()], -1)
+    lonlat = jnp.asarray(einx.id("lat lon, lat lon -> (lat lon) (1 + 1)", LON, LAT))
     xyz = lonlat_to_unit(lonlat, unit="degrees")
     moll = {"projection": "mollweide"}
 
@@ -181,7 +182,8 @@ def gallery_figures() -> None:
     slepian = np.asarray(basis.evaluate(xyz))
     concentration = np.asarray(basis.eigenvalues)
     pole = np.asarray(lonlat_to_unit(centre[None]))[0]
-    angle = np.arccos(np.clip(np.asarray(xyz) @ pole, -1, 1)).reshape(LAT.shape)
+    cosine = np.clip(np.asarray(xyz) @ pole, -1, 1)
+    angle = einx.id("(lat lon) -> lat lon", np.arccos(cosine), lat=LAT.shape[0])
     fig, axes = plt.subplots(2, 3, figsize=(9, 3.6), subplot_kw=moll)
     for ax, mode in zip(axes.flat, [0, 3, 15, 40, 52, 70], strict=True):
         title = f"mode {mode + 1},  λ = {concentration[mode]:.2f}"
