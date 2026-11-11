@@ -24,25 +24,15 @@
 
 **Function approximation for JAX: bases, interpolation plans with adjoints, quadrature and transforms.**
 
-functax treats a field as a function, which is also where the name comes from (see [The name](#the-name)).
-A field $`x(\mathbf{s})`$ over the coordinates $`\mathbf{s} \in \Omega`$ is written as one expansion,
+functax treats a field as a function, which is also where the name comes from (see [The name](#the-name)). A field $`x(\mathbf{s})`$ over the coordinates $`\mathbf{s} \in \Omega`$ is written as one expansion,
 
 ```math
 x(\mathbf{s}) \approx \sum_{d=1}^{D_z} z_d \phi_d(\mathbf{s}; \boldsymbol{\theta})
 ```
 
-where $`\phi_d`$ are the basis functions with parameters $`\boldsymbol{\theta}`$ and $`\mathbf{z} \in \mathbb{R}^{D_z}`$ are the coefficients.
-On a set of $`N`$ points $`\mathbf{s}_n`$ this becomes $`\mathbf{x} = \boldsymbol{\Phi} \mathbf{z}`$, with $`\mathbf{x} \in \mathbb{R}^N`$ and the basis matrix $`\boldsymbol{\Phi} \in \mathbb{R}^{N \times D_z}`$, $`[\boldsymbol{\Phi}]_{nd} = \phi_d(\mathbf{s}_n)`$.
-Almost everything in the library is one of five operations on this expansion.
-We interpolate it, differentiate it, integrate it, project data onto it and transform between its values and its coefficients.
-For interpolation, a plan gives us its read-out $`\mathbf{H}`$, the adjoint $`\mathbf{H}^\top`$ and its derivative.
-So the same object samples a field at the observations and sends the residuals back to the grid.
+where $`\phi_d`$ are the basis functions with parameters $`\boldsymbol{\theta}`$ and $`\mathbf{z} \in \mathbb{R}^{D_z}`$ are the coefficients. On a set of $`N`$ points $`\mathbf{s}_n`$ this becomes $`\mathbf{x} = \boldsymbol{\Phi} \mathbf{z}`$, with $`\mathbf{x} \in \mathbb{R}^N`$ and the basis matrix $`\boldsymbol{\Phi} \in \mathbb{R}^{N \times D_z}`$, $`[\boldsymbol{\Phi}]_{nd} = \phi_d(\mathbf{s}_n)`$. Almost everything in the library is one of five operations on this expansion. We interpolate it, differentiate it, integrate it, project data onto it and transform between its values and its coefficients. For interpolation, a plan gives us its read-out $`\mathbf{H}`$, the adjoint $`\mathbf{H}^\top`$ and its derivative. So the same object samples a field at the observations and sends the residuals back to the grid.
 
-We keep functax small and functional.
-Building a plan or a rule may run on the host with NumPy, but applying it is pure JAX.
-So `jit`, `vmap` and `grad` go through every plan, rule and transform.
-We also leave models out of functax, so that it can sit at the bottom of the stack.
-A kernel comes in as a callable, a solver as a lineax operator and a difference operator as an argument.
+We keep functax small and functional. Building a plan or a rule may run on the host with NumPy, but applying it is pure JAX. So `jit`, `vmap` and `grad` go through every plan, rule and transform. We also leave models out of functax, so that it can sit at the bottom of the stack. A kernel comes in as a callable, a solver as a lineax operator and a difference operator as an argument.
 
 <p align="center">
   <picture>
@@ -59,10 +49,7 @@ functax is not on PyPI yet, so install it from GitHub with [uv](https://docs.ast
 uv add "functax[jax] @ git+https://github.com/jejjohnson/functax.git"
 ```
 
-The base install, without `[jax]`, depends on NumPy alone and holds the affine raster kernels in `functax.geometry.affine`.
-We did this so that NumPy-only libraries such as geoarray can use them without pulling in JAX.
-Everything else needs the `jax` extra (JAX, Equinox, lineax, einx and jaxtyping).
-If you import a module that needs it without it, you get a `MissingExtraError` that names `functax[jax]`.
+The base install, without `[jax]`, depends on NumPy alone and holds the affine raster kernels in `functax.geometry.affine`. We did this so that NumPy-only libraries such as geoarray can use them without pulling in JAX. Everything else needs the `jax` extra (JAX, Equinox, lineax, einx and jaxtyping). If you import a module that needs it without it, you get a `MissingExtraError` that names `functax[jax]`.
 
 ## What's inside
 
@@ -78,8 +65,7 @@ Each module links to its API page, and [`docs/api/capabilities.md`](docs/api/cap
 | [`project`](https://jejjohnson.github.io/functax/reference/project/) | project | `least_squares`, `galerkin`, `Variational`, `fill_gaps` |
 | [`transform`](https://jejjohnson.github.io/functax/reference/transform/) | transform | `SphericalHarmonicTransform`, `nonuniform_rfft`, `nonuniform_irfft`, `ChebyshevTransform1D`, `ChebyshevTransform2D` |
 
-A quadrature rule is only data (the nodes and the weights), and [integrix](https://github.com/jejjohnson/integrix) does the summing, the scanning and the adapting.
-The [guides](https://jejjohnson.github.io/functax/) go through interpolation, gridding scattered data, regridding and quadrature in more detail.
+A quadrature rule is only data (the nodes and the weights), and [integrix](https://github.com/jejjohnson/integrix) does the summing, the scanning and the adapting. The [guides](https://jejjohnson.github.io/functax/) go through interpolation, gridding scattered data, regridding and quadrature in more detail.
 
 ## Where it sits
 
@@ -90,21 +76,13 @@ The [guides](https://jejjohnson.github.io/functax/) go through interpolation, gr
   </picture>
 </p>
 
-functax sits at Core tier 0 of the [GeoStack](https://github.com/jejjohnson/geostack), which means it imports no other library of the stack and any of them may import it.
-Today [geonnax](https://github.com/jejjohnson/geonnax) builds its encoders and operators on functax's bases and transforms, and [integrix](https://github.com/jejjohnson/integrix) sums with its rules.
-The rest of the stack swaps its own samplers, bases and rules for functax in Wave 5 ([#13](https://github.com/jejjohnson/functax/issues/13)).
-We wrote down the design behind all of this on the GeoStack [functax design page](https://github.com/jejjohnson/geostack/blob/main/docs/design/libraries/functax.md).
+functax sits at Core tier 0 of the [GeoStack](https://github.com/jejjohnson/geostack), which means it imports no other library of the stack and any of them may import it. Today [geonnax](https://github.com/jejjohnson/geonnax) builds its encoders and operators on functax's bases and transforms, and [integrix](https://github.com/jejjohnson/integrix) sums with its rules. The rest of the stack swaps its own samplers, bases and rules for functax in Wave 5 ([#13](https://github.com/jejjohnson/functax/issues/13)). We wrote down the design behind all of this on the GeoStack [functax design page](https://github.com/jejjohnson/geostack/blob/main/docs/design/libraries/functax.md).
 
 ## The name
 
-functax is named after *functa*.
-In "From data to functa", Dupont et al. (2022) proposed that a data point can be treated as a function, stored as the parameters of a neural field.
-We can then do deep learning on those functions directly, and in their words, "we refer to the data as functa".
-Bauer et al. (2023) then arranged the latent representations spatially (*spatial functa*) and scaled the idea up to ImageNet classification and generation.
+functax is named after *functa*. In "From data to functa", Dupont et al. (2022) proposed that a data point can be treated as a function, stored as the parameters of a neural field. We can then do deep learning on those functions directly, and in their words, "we refer to the data as functa". Bauer et al. (2023) then arranged the latent representations spatially (*spatial functa*) and scaled the idea up to ImageNet classification and generation.
 
-We really liked that way of thinking, and functax takes the first half of it.
-A field is a function, so we should be able to work with it as one, reading it anywhere, differentiating it, integrating it and projecting onto it.
-The neural-field half lives next door in [geonnax](https://github.com/jejjohnson/geonnax), whose coordinate networks are functa in the original sense.
+We really liked that way of thinking, and functax takes the first half of it. A field is a function, so we should be able to work with it as one, reading it anywhere, differentiating it, integrating it and projecting onto it. The neural-field half lives next door in [geonnax](https://github.com/jejjohnson/geonnax), whose coordinate networks are functa in the original sense.
 
 - E. Dupont, H. Kim, S. M. A. Eslami, D. Rezende and D. Rosenbaum. From data to functa: your data point is a function and you can treat it like one. [arXiv:2201.12204](https://arxiv.org/abs/2201.12204), 2022.
 - M. Bauer, E. Dupont, A. Brock, D. Rosenbaum, J. R. Schwarz and H. Kim. Spatial functa: scaling functa to ImageNet classification and generation. [arXiv:2302.03130](https://arxiv.org/abs/2302.03130), 2023.
@@ -117,8 +95,7 @@ The real spherical harmonics $`Y_\ell^m`$ are global functions on the sphere; he
 
 <p align="center"><img src="docs/assets/readme/sh_basis.png" alt="Six real spherical harmonics up to degree 4 on Mollweide maps" width="100%"></p>
 
-Slepian functions are regional instead: these are for a 40° cap, ranked by their concentration $`\lambda`$, the share of their energy that sits inside the cap (`basis.slepian.slepian_cap_basis`).
-The first few live inside the cap, and past the Shannon number (about 52 here) they leak out of it.
+Slepian functions are regional instead: these are for a 40° cap, ranked by their concentration $`\lambda`$, the share of their energy that sits inside the cap (`basis.slepian.slepian_cap_basis`). The first few live inside the cap, and past the Shannon number (about 52 here) they leak out of it.
 
 <p align="center"><img src="docs/assets/readme/slepian.png" alt="Six Slepian functions for a 40 degree cap; concentration falls as the modes leak outside the dashed cap boundary" width="100%"></p>
 
@@ -145,10 +122,7 @@ uv run poe check       # lint, format check, typecheck, tests with the 90 % cove
 uv run poe docs        # the MyST prose and the Zensical API reference, assembled into public/
 ```
 
-`uv run poe` lists every task.
-[`AGENTS.md`](AGENTS.md) holds the rules for contributors and coding agents, from the module map and the contracts to the tests that enforce them and the house style.
-[`docs/contributing.md`](docs/contributing.md) has the label taxonomy and the epic model.
-The icon and the diagrams come from [`docs/assets/render.py`](docs/assets/render.py) (`uv run --no-project python docs/assets/render.py`), and the figures from [`docs/assets/readme/figures.py`](docs/assets/readme/figures.py), which runs the code blocks of the quickstart and the [methane example](https://jejjohnson.github.io/functax/methane/) as written.
+`uv run poe` lists every task. [`AGENTS.md`](AGENTS.md) holds the rules for contributors and coding agents, from the module map and the contracts to the tests that enforce them and the house style. [`docs/contributing.md`](docs/contributing.md) has the label taxonomy and the epic model. The icon and the diagrams come from [`docs/assets/render.py`](docs/assets/render.py) (`uv run --no-project python docs/assets/render.py`), and the figures from [`docs/assets/readme/figures.py`](docs/assets/readme/figures.py), which runs the code blocks of the quickstart and the [methane example](https://jejjohnson.github.io/functax/methane/) as written.
 
 ## License
 

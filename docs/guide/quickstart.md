@@ -30,12 +30,10 @@ not be imported; install it with: pip install 'functax[jax]'
 
 ## Three operations on one expansion
 
-functax writes a field $x(\vect{s})$ over the coordinates $\vect{s}$ as one expansion, $x(\vect{s}) \approx \sum_{d=1}^{D_z} z_d \phi_d(\vect{s}; \gvect{\theta})$, with basis functions $\phi_d$ and coefficients $\vect{z} \in \mathbb{R}^{D_z}$.
-Here are three of the five operations on it, on one small problem.
-We fit the coefficients of a field on the sphere from scattered points with [`least_squares`](xref:api#functax.project.least_squares).
-Then we read a grid at two points with a [`Linear`](xref:api#functax.interp.Linear) plan and its adjoint, and integrate the fitted field over the sphere with [`sphere_gauss_legendre`](xref:api#functax.quad.sphere_gauss_legendre).
+functax writes a field $x(\vect{s})$ over the coordinates $\vect{s}$ as one expansion, $x(\vect{s}) \approx \sum_{d=1}^{D_z} z_d \phi_d(\vect{s}; \gvect{\theta})$, with basis functions $\phi_d$ and coefficients $\vect{z} \in \mathbb{R}^{D_z}$. Here are three of the five operations on it, on one small problem. We fit the coefficients of a field on the sphere from scattered points with [`least_squares`](xref:api#functax.project.least_squares). Then we read a grid at two points with a [`Linear`](xref:api#functax.interp.Linear) plan and its adjoint, and integrate the fitted field over the sphere with [`sphere_gauss_legendre`](xref:api#functax.quad.sphere_gauss_legendre).
 
 ```python
+import einx
 import jax
 import jax.numpy as jnp
 from functax.basis.sphere import real_spherical_harmonics
@@ -83,13 +81,11 @@ rule = sphere_gauss_legendre(8)                         # → (N_q, 3), (N_q,)
 # today (functax)
 design_nodes = real_spherical_harmonics(rule.nodes, 4)  # (N_q, 3) → (N_q, D_z)
 # x̂(s_q) = [Φ_q ẑ]_q
-fitted = design_nodes @ coefficients                    # → (N_q,)
+fitted = einx.dot(                                      # → (N_q,)
+    "node feature, feature -> node", design_nodes, coefficients
+)
 # ∫ x̂ ds ≈ ∑_q w_q x̂(s_q)
-integral = rule.weights @ fitted                        # → ()
+integral = einx.dot("node, node ->", rule.weights, fitted)  # → ()
 ```
 
-The field $x(\vect{s}) = s_3^2 + s_1 / 2$ only has harmonics up to degree 2, so the 25 coefficients $\hat{\vect{z}}$ fit the 500 points to machine precision.
-The plan reads `values = [6.0, 16.0]`, and the integral agrees with the exact $\int_{S^2} x(\vect{s}) \mathrm{d}\vect{s} = 4\pi/3$ to 15 significant digits.
-The basis, the plan and the rule are built once.
-The lines that apply them, the plan call, its adjoint and the contractions, all trace under `jit` and differentiate under `grad`.
-The [interpolation](./interpolation.md) and [quadrature](./quadrature.md) guides go further into each of these.
+The field $x(\vect{s}) = s_3^2 + s_1 / 2$ only has harmonics up to degree 2, so the 25 coefficients $\hat{\vect{z}}$ fit the 500 points to machine precision. The plan reads `values = [6.0, 16.0]`, and the integral agrees with the exact $\int_{S^2} x(\vect{s}) \mathrm{d}\vect{s} = 4\pi/3$ to 15 significant digits. The basis, the plan and the rule are built once. The lines that apply them, the plan call, its adjoint and the contractions, all trace under `jit` and differentiate under `grad`. The [interpolation](./interpolation.md) and [quadrature](./quadrature.md) guides go further into each of these.
