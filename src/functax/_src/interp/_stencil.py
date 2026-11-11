@@ -185,6 +185,10 @@ class Stencil(Readout):
             ValidationError: If the last axis of ``coefficients`` is not N.
         """
         self._check_last_axis(coefficients, self.n_source, "coefficients")
+        if self.n_target == 0:
+            # einx rejects zero-length axes; no rows read nothing
+            dtype = jnp.result_type(coefficients, self.weights)
+            return jnp.zeros((*coefficients.shape[:-1], 0), dtype=dtype)
         # c[iₖₛ]
         gathered = coefficients[..., self.indices]
         # f̂ₖ = ∑ₛ wₖₛ c[iₖₛ]
@@ -207,6 +211,10 @@ class Stencil(Readout):
             ValidationError: If the last axis of ``residual`` is not M.
         """
         self._check_last_axis(residual, self.n_target, "residual")
+        if self.n_target == 0:
+            # einx rejects zero-length axes; no rows send nothing back
+            dtype = jnp.result_type(residual, self.weights)
+            return jnp.zeros((*residual.shape[:-1], self.n_source), dtype=dtype)
         # wₖₛ rₖ, one contribution per tap
         contributions = einx.multiply(
             "... target, target tap -> ... target tap", residual, self.weights
@@ -257,6 +265,8 @@ class Stencil(Readout):
             ... ).to_dense().tolist()
             [[0.0, 0.75, 0.0]]
         """
+        if self.n_target == 0:
+            return jnp.zeros((0, self.n_source), self.weights.dtype)
         rows = einx.id(
             "target -> target tap", jnp.arange(self.n_target), tap=self.n_taps
         )

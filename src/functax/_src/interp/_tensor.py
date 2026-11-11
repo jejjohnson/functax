@@ -195,6 +195,17 @@ def stencil_from_positions(
         OutsideDomainError: Under ``outside="raise"`` when a target is outside.
         PolicyError: Under ``outside="raise"`` on traced positions.
     """
+    if positions.shape[0] == 0:
+        # einx rejects zero-length axes, so an empty target set skips the
+        # per-axis stencils and gets the empty (0, S) stencil directly
+        n_taps = math.prod(basis.taps for basis in bases)
+        return Stencil(
+            jnp.zeros((0, n_taps), dtype=jnp.int32),
+            jnp.zeros((0, n_taps), dtype=positions.dtype),
+            n_source=math.prod(shape),
+            valid=jnp.zeros(0, dtype=bool),
+            check=False,
+        )
     per_axis = [
         _axis_stencil(positions[:, d], n_nodes, is_periodic, basis, policies)
         for d, (n_nodes, is_periodic, basis) in enumerate(

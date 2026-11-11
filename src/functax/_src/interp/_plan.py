@@ -149,6 +149,8 @@ class Plan(eqx.Module):
                 "they depend on the data"
             )
             raise PolicyError(msg)
+        if stencil.n_target == 0:
+            return stencil.indices, stencil.weights
         valid = self.valid
         zero_index = jnp.zeros((), stencil.indices.dtype)
         zero_weight = jnp.zeros((), stencil.weights.dtype)
@@ -179,6 +181,9 @@ class Plan(eqx.Module):
         data = jnp.asarray(data)
         if self.policies.missing == "fill":
             data = self._fill(data)
+        if self.valid.shape[0] == 0:
+            # no targets: nothing to mask, and einx rejects zero-length axes
+            return self.read.apply(self.fit.apply(data))
         if self.policies.missing == "renormalise":
             values, supported = self._renormalised(data)
         else:
@@ -235,10 +240,11 @@ class Plan(eqx.Module):
             g on the flat source.
         """
         residual = jnp.asarray(residual)
-        zero = jnp.zeros((), residual.dtype)
-        residual = einx.where(
-            "target, ... target, -> ... target", self.valid, residual, zero
-        )
+        if self.valid.shape[0] > 0:
+            zero = jnp.zeros((), residual.dtype)
+            residual = einx.where(
+                "target, ... target, -> ... target", self.valid, residual, zero
+            )
         return self.fit.apply_adjoint(self.read.apply_adjoint(residual))
 
     def operator(self) -> lx.FunctionLinearOperator:
