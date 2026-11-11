@@ -29,6 +29,7 @@ from jaxtyping import Array, Float
 
 from functax._src._backend import is_tracer
 from functax._src.geometry._types import Axis
+from functax._src.interp._derivative import ReadGeometry
 from functax._src.interp._fit import Fit
 from functax._src.interp._locate import check_outside, domain_bounds, index_positions
 from functax._src.interp._policies import Policies
@@ -38,6 +39,7 @@ from functax.exceptions import NonlinearSchemeError, ValidationError
 
 __all__ = [
     "HermiteFit",
+    "HermiteGeometry",
     "ascending_axis",
     "hermite_stencil",
 ]
@@ -106,6 +108,38 @@ class HermiteFit(Fit):
 
     def data_size(self, n_coefficients: int) -> int:
         return n_coefficients // 2
+
+
+class HermiteGeometry(ReadGeometry):
+    """What a 1-D series plan's Hermite read-out was built from.
+
+    Kept on the plan, so `Plan.derivative` rebuilds the read-out weights at
+    the targets and differentiates them: on cell i, d/dx = (1/hᵢ) d/dt, so
+    order 1 reads h₀₀′/hᵢ, h₀₁′/hᵢ on the values and h₁₀′, h₁₁′ on the
+    slopes, f̂′(xₖ) = mₖ at a knot, and orders 4 and above are zero.
+
+    Args:
+        axis: The increasing source axis.
+        coordinates: x, the (M, 1) target coordinates, before any wrap.
+        periodic: Whether the spline is periodic, so the targets wrap into
+            one period P = x_{N−1} − x₀.
+    """
+
+    axis: Axis
+    coordinates: Float[Array, "target 1"]
+    periodic: bool = eqx.field(static=True, default=False)
+
+    def weights(
+        self, coordinates: Float[Array, "target 1"], policies: Policies
+    ) -> Float[Array, "target tap"]:
+        """The four Hermite weights of each target, on [y; m]."""
+        positions = coordinates[:, 0]
+        if self.periodic:
+            # x ↦ x₀ + ((x − x₀) mod P), as the plan wraps its targets
+            first = self.axis.values[0]
+            period = self.axis.values[-1] - first
+            positions = first + jnp.mod(positions - first, period)
+        return hermite_stencil(self.axis, positions, policies).weights
 
 
 def hermite_stencil(

@@ -30,10 +30,10 @@ from functax._src.interp._covariance import (
     PosteriorCovariance,
 )
 from functax._src.interp._curvilinear import locate_curvilinear
-from functax._src.interp._derivative import LocalGeometry
+from functax._src.interp._derivative import LocalGeometry, ReadGeometry
 from functax._src.interp._fit import Fit, Identity, KernelSolve
 from functax._src.interp._gaussian import GaussianPlan
-from functax._src.interp._hermite import HermiteFit
+from functax._src.interp._hermite import HermiteFit, HermiteGeometry
 from functax._src.interp._interpolant import Interpolant
 from functax._src.interp._kernels import Kernel, Polyharmonic, RadialKernel, Wendland
 from functax._src.interp._kriging import Kriging
@@ -61,6 +61,7 @@ from functax._src.interp._schemes import (
 from functax._src.interp._series import (
     Akima,
     CubicSpline,
+    NonlinearDerivativePlan,
     NonlinearPlan,
     Pchip,
     SeriesInterpolant,
@@ -106,6 +107,7 @@ __all__ = [  # noqa: RUF022
     "FourierReadout",
     "GaussianPlan",
     "HermiteFit",
+    "HermiteGeometry",
     "Identity",
     "Interpolant",
     "InverseDistance",
@@ -120,6 +122,7 @@ __all__ = [  # noqa: RUF022
     "LocalScheme",
     "Nearest",
     "NearestBasis",
+    "NonlinearDerivativePlan",
     "NonlinearPlan",
     "Pchip",
     "Plan",
@@ -128,6 +131,7 @@ __all__ = [  # noqa: RUF022
     "PosteriorCovariance",
     "RBF",
     "RadialKernel",
+    "ReadGeometry",
     "Readout",
     "Scheme",
     "SeriesInterpolant",

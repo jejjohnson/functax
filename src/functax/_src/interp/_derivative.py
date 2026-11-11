@@ -16,6 +16,7 @@ from functax._src._backend import require_jax
 
 require_jax(__name__)
 
+import abc
 import dataclasses
 from collections.abc import Callable
 from typing import Any
@@ -38,11 +39,29 @@ from functax.exceptions import ValidationError
 
 __all__ = [
     "LocalGeometry",
+    "ReadGeometry",
     "derivative_stencil",
 ]
 
 
-class LocalGeometry(eqx.Module):
+class ReadGeometry(eqx.Module):
+    """What a plan's stencil was built from, so `Plan.derivative` can rebuild it.
+
+    The stencil weights are a function of the target coordinates, and their
+    forward-mode derivative in one coordinate is the derivative read-out.
+    Each subclass holds the (M, D) target coordinates as ``coordinates``
+    (declared there rather than here, which keeps each subclass's field
+    order, and so its positional constructor).
+    """
+
+    @abc.abstractmethod
+    def weights(
+        self, coordinates: Float[Array, "target dim"], policies: Policies
+    ) -> Float[Array, "target tap"]:
+        """The stencil weights at ``coordinates``, with the plan's taps."""
+
+
+class LocalGeometry(ReadGeometry):
     """What a local plan was built from: the source, the target coordinates, the bases.
 
     Kept on the `Plan`, so `Plan.derivative` can rebuild the weights.
@@ -52,9 +71,23 @@ class LocalGeometry(eqx.Module):
     coordinates: Float[Array, "target dim"]
     bases: tuple[Basis, ...]
 
+    def weights(
+        self, coordinates: Float[Array, "target dim"], policies: Policies
+    ) -> Float[Array, "target tap"]:
+        """The tensor stencil's weights at ``coordinates``."""
+        shape, periodic = source_layout(self.source)
+        extrapolate = policies.outside == "extrapolate"
+        positions = coordinates_to_positions(
+            self.source, coordinates, extrapolate=extrapolate
+        )
+        rebuilt = stencil_from_positions(
+            positions, shape, periodic, self.bases, policies=policies
+        )
+        return rebuilt.weights
+
 
 def derivative_stencil(
-    geometry: LocalGeometry,
+    geometry: ReadGeometry,
     stencil: Stencil,
     policies: Policies,
     *,
@@ -64,7 +97,7 @@ def derivative_stencil(
     """The stencil of ∂ᵐ/∂x_cᵐ, with c = ``axis`` and m = ``order``.
 
     Args:
-        geometry: The plan's source, target coordinates and bases.
+        geometry: What the plan's stencil was built from.
         stencil: The plan's own stencil, whose taps and validity are kept.
         policies: The plan's policies.
         axis: c, the target coordinate to differentiate along (a column of
@@ -78,7 +111,9 @@ def derivative_stencil(
         ValidationError: If ``axis`` is out of range or ``order`` is not a
             positive integer.
     """
-    n_coordinates = geometry.coordinates.shape[1]
+    # every subclass declares the field; ReadGeometry itself does not (see it)
+    coordinates: jax.Array = geometry.coordinates  # ty: ignore[unresolved-attribute]
+    n_coordinates = coordinates.shape[1]
     if isinstance(axis, bool) or not isinstance(axis, int):
         msg = f"'axis' must be an integer, got {axis!r}"
         raise ValidationError(msg)
@@ -89,29 +124,20 @@ def derivative_stencil(
         msg = f"'order' must be a positive integer, got {order!r}"
         raise ValidationError(msg)
     column = axis % n_coordinates
-    shape, periodic = source_layout(geometry.source)
     # the plan already enforced outside="raise"; the derivative re-traces
     # its targets, which "raise" would refuse
     if policies.outside == "raise":
         policies = dataclasses.replace(policies, outside="nan")
 
-    extrapolate = policies.outside == "extrapolate"
-
     def weights(coordinates: jax.Array) -> jax.Array:
-        positions = coordinates_to_positions(
-            geometry.source, coordinates, extrapolate=extrapolate
-        )
-        rebuilt = stencil_from_positions(
-            positions, shape, periodic, geometry.bases, policies=policies
-        )
-        return rebuilt.weights
+        return geometry.weights(coordinates, policies)
 
     # ẋ = e_c for every target: one coordinate moves, the others stay
-    tangent = jnp.zeros_like(geometry.coordinates).at[:, column].set(1.0)
+    tangent = jnp.zeros_like(coordinates).at[:, column].set(1.0)
     derivative: Callable[[jax.Array], jax.Array] = weights
     for _ in range(order):
         derivative = _directional(derivative, tangent)
-    derivative_weights = derivative(geometry.coordinates)
+    derivative_weights = derivative(coordinates)
     return Stencil(
         stencil.indices,
         derivative_weights,
