@@ -1,14 +1,17 @@
 """functax's affine kernels against geoarray's, pinned at geotoolz 1e7308b: to_pixel
-bit for bit and window exactly (tests/_geoarray_reference.py).
+bit for bit and window exactly, and slice_transform bit for bit against
+shift_scale_transform at 48da364 (tests/_geoarray_reference.py).
 """
 
 from __future__ import annotations
 
 import _geoarray_reference as geoarray
+import jax.numpy as jnp
 import numpy as np
+import pytest
 from _harness import assert_matches_oracle
 
-from functax.geometry import AffineGrid, to_pixel, window
+from functax.geometry import AffineGrid, slice_transform, to_pixel, window
 
 
 NORTH_UP = np.array([20.0, 0.0, 600000.0, 0.0, -20.0, 3550000.0])
@@ -73,3 +76,22 @@ class TestWindow:
                 col_off,
                 col_off + width,
             )
+
+
+class TestSliceTransform:
+    @pytest.mark.parametrize("backend", [np, jnp], ids=["numpy", "jax"])
+    def test_equals_shift_scale_transform_on_a_batch_bit_for_bit(
+        self, backend: object
+    ) -> None:
+        rng = np.random.default_rng(30)
+        transforms = backend.asarray(_random_transforms(12, seed=31).reshape(3, 4, 6))
+        row0 = backend.asarray(rng.integers(0, 500, size=(3, 4)))
+        col0 = backend.asarray(rng.integers(0, 500, size=(3, 4)))
+        row_step = backend.asarray(rng.integers(1, 5, size=(3, 4)))
+        col_step = backend.asarray(rng.integers(1, 5, size=(3, 4)))
+        actual = slice_transform(transforms, row0, col0, row_step, col_step)
+        expected = geoarray.shift_scale_transform(
+            transforms, row0, col0, row_step, col_step
+        )
+        assert type(actual) is type(expected)
+        np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))

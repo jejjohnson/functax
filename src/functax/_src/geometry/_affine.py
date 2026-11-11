@@ -27,9 +27,18 @@ from functax.exceptions import GeometryError
 __all__ = [
     "from_pixel",
     "pixel_centres",
+    "slice_transform",
     "to_pixel",
     "window",
 ]
+
+
+def _require_six(transform: Any) -> None:
+    """Raise unless the last axis of an array transform has the six (a, … f)."""
+    shape = getattr(transform, "shape", None)
+    if shape is not None and (len(shape) == 0 or shape[-1] != 6):
+        msg = f"'transform' must have shape (*batch, 6), got {tuple(shape)}"
+        raise GeometryError(msg)
 
 
 def _require_invertible(transform: Any) -> None:
@@ -89,19 +98,38 @@ def to_pixel(transform: Any, xy: Any) -> Any:
     return xp.stack([row, col], axis=-1)
 
 
+def _batched_coefficients(transform: Any, ndim: int) -> tuple[Any, ...]:
+    """(a, b, c, d, e, f) of a (*batch, 6) transform, each shaped (*batch, 1, …, 1).
+
+    The ``ndim`` − len(batch) trailing ones let each coefficient broadcast
+    against an array of ``ndim`` dims whose leading dims are the batch.
+    """
+    trailing = (None,) * (ndim - (transform.ndim - 1))
+    return tuple(transform[(..., k, *trailing)] for k in range(6))
+
+
 def from_pixel(transform: Any, rowcol: Any) -> Any:
     """Map fractional pixel (row, col) to coordinates (x, y): the inverse of `to_pixel`.
 
     x = a·(col + ½) + b·(row + ½) + c and y = d·(col + ½) + e·(row + ½) + f.
 
+    A batch of transforms reads a batch of pixel sets: transform t of the
+    batch maps the pixels ``rowcol[t]``, as for the transforms of a batch of
+    chips.
+
     Args:
-        transform: T = (a, b, c, d, e, f), six numbers, NumPy or JAX.
-        rowcol: The fractional (row, col), shape ``(..., 2)``, centres at
-            integers.
+        transform: T = (a, b, c, d, e, f): six numbers, or an array of shape
+            ``(*batch, 6)``, NumPy or JAX.
+        rowcol: The fractional (row, col), shape ``(*batch, ..., 2)``, centres
+            at integers; its leading dims are the transform's batch.
 
     Returns:
-        The positions (x, y), shape ``(..., 2)``, in the namespace of the
-        inputs.
+        The positions (x, y), shape ``(*batch, ..., 2)``, in the namespace of
+        the inputs.
+
+    Raises:
+        GeometryError: If an array ``transform`` does not end in six, or
+            ``rowcol`` has fewer leading dims than its batch.
 
     Examples:
         >>> import numpy as np
@@ -112,9 +140,25 @@ def from_pixel(transform: Any, rowcol: Any) -> Any:
         >>> xy = np.array([[600123.0, 3549876.0]])
         >>> bool(np.allclose(from_pixel(north_up, to_pixel(north_up, xy)), xy))
         True
+        >>> # two chips, three pixels each: (2, 6) transforms, (2, 3, 2) pixels
+        >>> chips = np.stack([north_up, north_up + [0, 0, 100.0, 0, 0, 0]])
+        >>> from_pixel(chips, np.zeros((2, 3, 2)))[:, 0].tolist()
+        [[600010.0, 3549990.0], [600110.0, 3549990.0]]
     """
     xp = namespace(transform, rowcol)
-    a, b, c, d, e, f = (transform[k] for k in range(6))
+    _require_six(transform)
+    batch_ndim = getattr(transform, "ndim", 1) - 1
+    if batch_ndim == 0:
+        a, b, c, d, e, f = (transform[k] for k in range(6))
+    else:
+        ndim = rowcol.ndim - 1
+        if ndim < batch_ndim:
+            msg = (
+                f"'rowcol' must lead with the transform's batch dims "
+                f"{tuple(transform.shape[:-1])}, got shape {tuple(rowcol.shape)}"
+            )
+            raise GeometryError(msg)
+        a, b, c, d, e, f = _batched_coefficients(transform, ndim)
     # the corner-convention (col, row) of the area-convention (row, col)
     col = rowcol[..., 1] + 0.5
     row = rowcol[..., 0] + 0.5
@@ -122,6 +166,94 @@ def from_pixel(transform: Any, rowcol: Any) -> Any:
     x = a * col + b * row + c
     y = d * col + e * row + f
     return xp.stack([x, y], axis=-1)
+
+
+def _to_dtype(xp: Any, value: Any, dtype: Any) -> Any:
+    """``value`` in ``dtype`` when it is an integer array; anything else unchanged."""
+    value_dtype = getattr(value, "dtype", None)
+    if value_dtype is not None and np.issubdtype(value_dtype, np.integer):
+        return xp.asarray(value, dtype=dtype)
+    return value
+
+
+def slice_transform(
+    transform: Any,
+    row0: Any,
+    col0: Any,
+    row_step: Any = 1,
+    col_step: Any = 1,
+) -> Any:
+    """The transform of the slice ``[row0::row_step, col0::col_step]`` of a raster.
+
+    The corner (i, j) of the slice's pixels is the corner (r₀ + sᵣ i,
+    c₀ + s_c j) of the raster's, so T′ = (a′, b′, c′, d′, e′, f′) is
+
+        a′ = a s_c,  b′ = b sᵣ,  c′ = c + a c₀ + b r₀,
+        d′ = d s_c,  e′ = e sᵣ,  f′ = f + d c₀ + e r₀.
+
+    With unit steps the slice's pixels are the raster's. With a step s > 1
+    each pixel of the slice covers a block of s raster pixels, and its centre
+    is the block's centre, (s − 1)/2 raster pixels past the centre of the
+    pixel the slice samples. This is geoarray's ``shift_scale_transform``,
+    with the same arithmetic, so the two agree bit for bit. Every operation is
+    elementwise, so a batch of transforms takes a batch of offsets and steps,
+    and the offsets may be traced.
+
+    Args:
+        transform: T = (a, b, c, d, e, f), shape ``(*batch, 6)``, NumPy or
+            JAX (a sequence of six numbers counts as NumPy).
+        row0: r₀, the first row of the slice; a number or ``(*batch,)``.
+        col0: c₀, the first column of the slice; a number or ``(*batch,)``.
+        row_step: sᵣ, the row step; a number or ``(*batch,)``.
+        col_step: s_c, the column step; a number or ``(*batch,)``.
+
+    Returns:
+        T′, shape ``(*batch, 6)``, in the namespace of the inputs.
+
+    Raises:
+        GeometryError: If ``transform`` does not end in six.
+
+    Integer arrays of offsets or steps are cast to the transform's dtype
+    first, so a float32 transform stays float32.
+
+    Examples:
+        >>> import numpy as np
+        >>> from functax.geometry import from_pixel, slice_transform
+        >>> north_up = np.array([20.0, 0.0, 600000.0, 0.0, -20.0, 3550000.0])
+        >>> chip = slice_transform(north_up, 5, 10, row_step=2, col_step=2)
+        >>> chip.tolist()
+        [40.0, 0.0, 600200.0, 0.0, -40.0, 3549900.0]
+        >>> # the corner of chip pixel (1, 1) is the corner of raster pixel (7, 12)
+        >>> bool(
+        ...     np.array_equal(
+        ...         from_pixel(chip, np.array([0.5, 0.5])),
+        ...         from_pixel(north_up, np.array([6.5, 11.5])),
+        ...     )
+        ... )
+        True
+        >>> # a batch of two transforms, one offset each
+        >>> slice_transform(np.stack([north_up] * 2), np.array([0, 1]), 0).shape
+        (2, 6)
+    """
+    xp = namespace(transform, row0, col0, row_step, col_step)
+    transform = xp.asarray(transform)
+    _require_six(transform)
+    # integer arrays of offsets or steps take the transform's dtype, so they
+    # cannot promote a float32 transform (Python ints are weak already)
+    row0, col0, row_step, col_step = (
+        _to_dtype(xp, value, transform.dtype)
+        for value in (row0, col0, row_step, col_step)
+    )
+    a, b, c, d, e, f = (transform[..., k] for k in range(6))
+    coefficients = (
+        a * col_step,
+        b * row_step,
+        c + a * col0 + b * row0,
+        d * col_step,
+        e * row_step,
+        f + d * col0 + e * row0,
+    )
+    return xp.stack(coefficients, axis=-1)
 
 
 def pixel_centres(grid: Any) -> tuple[Any, Any]:

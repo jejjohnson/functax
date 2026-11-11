@@ -4,10 +4,10 @@ Coordinates arrive already in one coordinate reference system; the CRS itself
 stays a carrier concern. The types are Equinox modules and need the
 ``functax[jax]`` extra, but this package must import without it, because
 ``functax.geometry.affine`` is part of the NumPy-only base install. So the
-affine kernels (`to_pixel`, `from_pixel`, `pixel_centres`, `window`) are
-imported eagerly, and the types are re-exported lazily: the first access to
-``functax.geometry.Axis`` imports them, and raises `MissingExtraError` when
-JAX is missing.
+affine kernels (`to_pixel`, `from_pixel`, `slice_transform`, `pixel_centres`,
+`window`) are imported eagerly, and the types are re-exported lazily: the
+first access to ``functax.geometry.Axis`` imports them, and raises
+`MissingExtraError` when JAX is missing.
 """
 
 from __future__ import annotations
@@ -15,7 +15,13 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING, Any
 
-from functax.geometry.affine import from_pixel, pixel_centres, to_pixel, window
+from functax.geometry.affine import (
+    from_pixel,
+    pixel_centres,
+    slice_transform,
+    to_pixel,
+    window,
+)
 
 
 if TYPE_CHECKING:
@@ -83,6 +89,7 @@ __all__ = [
     "pairwise_distance",
     "pixel_centres",
     "rotation_to_pole",
+    "slice_transform",
     "spherical_polygon_area",
     "tangent_to_cartesian",
     "to_pixel",

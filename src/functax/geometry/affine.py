@@ -7,12 +7,19 @@ so (0, 0) is the centre of the top-left pixel (geoarray's area convention).
 
 from __future__ import annotations
 
-from functax._src.geometry._affine import from_pixel, pixel_centres, to_pixel, window
+from functax._src.geometry._affine import (
+    from_pixel,
+    pixel_centres,
+    slice_transform,
+    to_pixel,
+    window,
+)
 
 
 __all__ = [
     "from_pixel",
     "pixel_centres",
+    "slice_transform",
     "to_pixel",
     "window",
 ]
