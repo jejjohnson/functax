@@ -17,6 +17,7 @@
 <p align="center">
   <a href="https://jejjohnson.github.io/functax/"><b>Docs</b></a> ·
   <a href="https://jejjohnson.github.io/functax/reference/"><b>API</b></a> ·
+  <a href="https://jejjohnson.github.io/functax/quickstart/"><b>Quickstart</b></a> ·
   <a href="#example-map-methane-from-one-overpass"><b>Example</b></a> ·
   <a href="#gallery"><b>Gallery</b></a>
 </p>
@@ -62,12 +63,6 @@ The base install, without `[jax]`, depends on NumPy alone and holds the affine r
 We did this so that NumPy-only libraries such as geoarray can use them without pulling in JAX.
 Everything else needs the `jax` extra (JAX, Equinox, lineax, einx and jaxtyping).
 If you import a module that needs it without it, you get a `MissingExtraError` that names `functax[jax]`.
-
-## Quick start
-
-The [quickstart](https://jejjohnson.github.io/functax/quickstart/) runs three of the five operations on one small problem.
-We fit the coefficients of a field on the sphere from scattered points, read a grid with a plan and its adjoint, and integrate the fitted field over the sphere.
-The example below takes the same operations through the stack's methane overpass.
 
 ## Example: map methane from one overpass
 
