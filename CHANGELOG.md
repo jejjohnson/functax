@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.9](https://github.com/jejjohnson/functax/compare/v0.0.8...v0.0.9) (2026-11-11)
+
+
+### Bug Fixes
+
+* **interp:** read a derivative at an end node from inside the axis ([#135](https://github.com/jejjohnson/functax/issues/135)) ([9dffc97](https://github.com/jejjohnson/functax/commit/9dffc97c5ca45ccc0dda6c34bc68b7cb67184f60)), closes [#128](https://github.com/jejjohnson/functax/issues/128)
+* **interp:** send a nearest tie to the lower coordinate on a decreasing axis ([#136](https://github.com/jejjohnson/functax/issues/136)) ([131bc60](https://github.com/jejjohnson/functax/commit/131bc603cab7d27de770c10d6cea3016abbc5fc5)), closes [#129](https://github.com/jejjohnson/functax/issues/129)
+
 ## [0.0.8](https://github.com/jejjohnson/functax/compare/v0.0.7...v0.0.8) (2026-11-11)
 
 
