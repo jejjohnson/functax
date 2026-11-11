@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
 
-from functax._src.project._fill import mirror_laplacian
+from functax._src.project._fill import mirror_laplacian, periodic_laplacian
 from functax.project import fill_gaps
 
 
@@ -121,4 +121,62 @@ def test_float32_is_kept() -> None:
     assert filled.dtype == jnp.float32
     assert_matches_oracle(
         filled[0, 2:4], np.array([2.0 / 3.0, 1.0 / 3.0]), rtol=0, atol=1e-5
+    )
+
+
+@pytest.mark.parametrize("method", ["laplace", "biharmonic"])
+def test_a_ring_of_four_fills_across_the_seam(method: str) -> None:
+    # [0, ?, 3, ?] on a ring: each hole sits between 0 and 3
+    ring = jnp.array([[0.0, jnp.nan, 3.0, jnp.nan]])
+    observed = jnp.isfinite(ring)
+    wrapped = fill_gaps(ring, mask=observed, method=method, periodic=(False, True))
+    assert_matches_oracle(wrapped, np.array([[0.0, 1.5, 3.0, 1.5]]), rtol=1e-12)
+    # the rows wrap the same way when the ring is a column
+    column = fill_gaps(ring.T, mask=observed.T, method=method, periodic=(True, False))
+    assert_matches_oracle(column, wrapped.T, rtol=1e-12)
+
+
+def test_mirror_edges_stay_the_default() -> None:
+    ring = jnp.array([[0.0, jnp.nan, 3.0, jnp.nan]])
+    filled = fill_gaps(ring, mask=jnp.isfinite(ring))
+    assert_matches_oracle(filled, np.array([[0.0, 1.5, 3.0, 3.0]]), rtol=1e-12)
+
+
+def test_a_hole_across_the_seam_is_symmetric() -> None:
+    # a field symmetric about the seam, with a hole two columns wide each side
+    lon = np.linspace(0.0, 2.0 * np.pi, 12, endpoint=False)
+    field = np.tile(np.cos(lon), (5, 1))
+    image = field.copy()
+    image[1:4, [0, 1, 11]] = np.nan
+    filled = np.asarray(
+        fill_gaps(
+            jnp.asarray(image),
+            mask=jnp.isfinite(jnp.asarray(image)),
+            periodic=(False, True),
+        )
+    )
+    # cos is even about λ = 0, so column k mirrors column (12 − k) mod 12
+    assert_matches_oracle(filled[:, 1], filled[:, 11], rtol=1e-10)
+
+
+@pytest.mark.parametrize("method", ["laplace", "biharmonic"])
+def test_periodic_fill_traces_and_satisfies_its_hole_equation(method: str) -> None:
+    pairs = [_image_and_mask(seed) for seed in range(3)]
+    images = jnp.stack([image for image, _ in pairs])
+    masks = jnp.stack([mask for _, mask in pairs])
+
+    def fill(field: jax.Array, observed: jax.Array) -> jax.Array:
+        return fill_gaps(
+            field, mask=observed, method=method, periodic=(True, True), solver=TIGHT
+        )
+
+    assert_traces(fill, images, masks, rtol=1e-10)
+    # Δx = 0 (or Δ²x = 0) at the holes, with both axes wrapping
+    filled = fill(images[0], masks[0])
+    laplacian = periodic_laplacian(filled, periodic=(True, True))
+    if method == "biharmonic":
+        laplacian = periodic_laplacian(laplacian, periodic=(True, True))
+    holes = ~masks[0]
+    assert_matches_oracle(
+        laplacian[holes], jnp.zeros(int(holes.sum())), rtol=0, atol=1e-10
     )
