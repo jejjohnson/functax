@@ -24,17 +24,17 @@
 **Function approximation for JAX: bases, interpolation plans with adjoints, quadrature and transforms.**
 
 functax treats a field as a function, which is also where the name comes from (see [The name](#the-name)).
-A field $x(\mathbf{s})$ over the coordinates $\mathbf{s} \in \Omega$ is written as one expansion,
+A field $`x(\mathbf{s})`$ over the coordinates $`\mathbf{s} \in \Omega`$ is written as one expansion,
 
 ```math
 x(\mathbf{s}) \approx \sum_{d=1}^{D_z} z_d \phi_d(\mathbf{s}; \boldsymbol{\theta})
 ```
 
-where $\phi_d$ are the basis functions with parameters $\boldsymbol{\theta}$ and $\mathbf{z} \in \mathbb{R}^{D_z}$ are the coefficients.
-On a set of $N$ points $\mathbf{s}_n$ this becomes $\mathbf{x} = \boldsymbol{\Phi} \mathbf{z}$, with $\mathbf{x} \in \mathbb{R}^N$ and the basis matrix $\boldsymbol{\Phi} \in \mathbb{R}^{N \times D_z}$, $[\boldsymbol{\Phi}]_{nd} = \phi_d(\mathbf{s}_n)$.
+where $`\phi_d`$ are the basis functions with parameters $`\boldsymbol{\theta}`$ and $`\mathbf{z} \in \mathbb{R}^{D_z}`$ are the coefficients.
+On a set of $`N`$ points $`\mathbf{s}_n`$ this becomes $`\mathbf{x} = \boldsymbol{\Phi} \mathbf{z}`$, with $`\mathbf{x} \in \mathbb{R}^N`$ and the basis matrix $`\boldsymbol{\Phi} \in \mathbb{R}^{N \times D_z}`$, $`[\boldsymbol{\Phi}]_{nd} = \phi_d(\mathbf{s}_n)`$.
 Almost everything in the library is one of five operations on this expansion.
 We interpolate it, differentiate it, integrate it, project data onto it and transform between its values and its coefficients.
-For interpolation, a plan gives us its read-out $\mathbf{H}$, the adjoint $\mathbf{H}^\top$ and its derivative.
+For interpolation, a plan gives us its read-out $`\mathbf{H}`$, the adjoint $`\mathbf{H}^\top`$ and its derivative.
 So the same object samples a field at the observations and sends the residuals back to the grid.
 
 We keep functax small and functional.
@@ -122,8 +122,8 @@ fitted = design_nodes @ coefficients                    # → (N_q,)
 integral = rule.weights @ fitted                        # → ()
 ```
 
-The field $x(\mathbf{s}) = s_3^2 + s_1 / 2$ only has harmonics up to degree 2, so the 25 coefficients $\hat{\mathbf{z}}$ fit the 500 points to machine precision.
-The plan reads `values = [6.0, 16.0]`, and the integral agrees with the exact $\int_{S^2} x(\mathbf{s}) \mathrm{d}\mathbf{s} = 4\pi/3$ to 15 significant digits.
+The field $`x(\mathbf{s}) = s_3^2 + s_1 / 2`$ only has harmonics up to degree 2, so the 25 coefficients $`\hat{\mathbf{z}}`$ fit the 500 points to machine precision.
+The plan reads `values = [6.0, 16.0]`, and the integral agrees with the exact $`\int_{S^2} x(\mathbf{s}) \mathrm{d}\mathbf{s} = 4\pi/3`$ to 15 significant digits.
 The basis, the plan and the rule are built once.
 The lines that apply them, the plan call, its adjoint and the contractions, all trace under `jit` and differentiate under `grad`.
 
@@ -135,15 +135,15 @@ We read the grid at the satellite's pixels, map the field back from those pixels
 
 | Symbol | Meaning | Shape, units |
 | --- | --- | --- |
-| $\mathbf{s}$ | a coordinate, (longitude, latitude) | $\mathbb{R}^2$, degrees |
-| $\mathbf{x}$ | XCH₄ at the centres $\mathbf{s}_n \in \Omega_x$ of the grid cells | $\mathbb{R}^{N_{\Omega_x}}$, ppb |
-| $\mathbf{y}$ | XCH₄ at the centres $\mathbf{s}_m \in \Omega_y$ of the cloud-free pixels | $\mathbb{R}^{N_{\Omega_y}}$, ppb |
-| $\boldsymbol{\mu}_x$ | the background, 1,880 ppb in every cell | $\mathbb{R}^{N_{\Omega_x}}$, ppb |
-| $\tilde{\mathbf{x}} = \mathbf{x} - \boldsymbol{\mu}_x$ | the enhancement over the background | $\mathbb{R}^{N_{\Omega_x}}$, ppb |
-| $\boldsymbol{\Sigma}_\varepsilon = \sigma_\varepsilon^2 \mathbf{I}$ | the pixel noise covariance, $\sigma_\varepsilon = 8$ ppb | $N_{\Omega_y} \times N_{\Omega_y}$, ppb² |
-| $\mathbf{H}$ | the plan, from the grid cells to the pixels | $N_{\Omega_y} \times N_{\Omega_x}$ |
+| $`\mathbf{s}`$ | a coordinate, (longitude, latitude) | $`\mathbb{R}^2`$, degrees |
+| $`\mathbf{x}`$ | XCH₄ at the centres $`\mathbf{s}_n \in \Omega_x`$ of the grid cells | $`\mathbb{R}^{N_{\Omega_x}}`$, ppb |
+| $`\mathbf{y}`$ | XCH₄ at the centres $`\mathbf{s}_m \in \Omega_y`$ of the cloud-free pixels | $`\mathbb{R}^{N_{\Omega_y}}`$, ppb |
+| $`\boldsymbol{\mu}_x`$ | the background, 1,880 ppb in every cell | $`\mathbb{R}^{N_{\Omega_x}}`$, ppb |
+| $`\tilde{\mathbf{x}} = \mathbf{x} - \boldsymbol{\mu}_x`$ | the enhancement over the background | $`\mathbb{R}^{N_{\Omega_x}}`$, ppb |
+| $`\boldsymbol{\Sigma}_\varepsilon = \sigma_\varepsilon^2 \mathbf{I}`$ | the pixel noise covariance, $`\sigma_\varepsilon = 8`$ ppb | $`N_{\Omega_y} \times N_{\Omega_y}`$, ppb² |
+| $`\mathbf{H}`$ | the plan, from the grid cells to the pixels | $`N_{\Omega_y} \times N_{\Omega_x}`$ |
 
-The grid has $N_{\Omega_x} = 10{,}000$ cells, and one overpass leaves 60 % of them cloud-free, $N_{\Omega_y} = 6{,}017$ pixels.
+The grid has $`N_{\Omega_x} = 10{,}000`$ cells, and one overpass leaves 60 % of them cloud-free, $`N_{\Omega_y} = 6{,}017`$ pixels.
 Unlike the kernellib and pyrox versions, the pixels do not sit on the grid.
 Each pixel centre is up to half a cell away from its cell centre, as a satellite's own footprint would be.
 The block below simulates the overpass, a 40 ppb plume with 8 ppb of pixel noise.
@@ -210,17 +210,17 @@ observations = xch4(pixels) + noise[cloud_free]             # → (N_Ωy,)  ppb
 
 ### Stage 1: read the grid at the pixels (`functax.interp`)
 
-Each pixel centre $\mathbf{s}_m$ lies somewhere inside a grid cell, not on its centre.
-So we need a read-out $\mathbf{H}$ that takes the field on the grid to the field at the pixels.
-We build it once, as a plan with bilinear weights, so each row of $\mathbf{H}$ has four non-zeros (the four cell centres around the pixel).
-The same plan gives the adjoint $\mathbf{H}^\top$, which sends residuals at the pixels back to the grid.
+Each pixel centre $`\mathbf{s}_m`$ lies somewhere inside a grid cell, not on its centre.
+So we need a read-out $`\mathbf{H}`$ that takes the field on the grid to the field at the pixels.
+We build it once, as a plan with bilinear weights, so each row of $`\mathbf{H}`$ has four non-zeros (the four cell centres around the pixel).
+The same plan gives the adjoint $`\mathbf{H}^\top`$, which sends residuals at the pixels back to the grid.
 We check that the two really are transposes of each other with the dot-product test
 
 ```math
 \langle \mathbf{H} \mathbf{a}, \mathbf{r} \rangle = \langle \mathbf{a}, \mathbf{H}^\top \mathbf{r} \rangle
 ```
 
-for random $\mathbf{a} \in \mathbb{R}^{N_{\Omega_x}}$ and $\mathbf{r} \in \mathbb{R}^{N_{\Omega_y}}$.
+for random $`\mathbf{a} \in \mathbb{R}^{N_{\Omega_x}}`$ and $`\mathbf{r} \in \mathbb{R}^{N_{\Omega_y}}`$.
 The usual shortcut is to read each pixel from the centre of its own cell (nearest neighbour).
 So we score both against the truth at the pixels.
 
@@ -264,7 +264,7 @@ All 6,017 pixels are valid.
 Read from the true field, the bilinear plan is 0.009 ppb RMS from the truth at the pixels and the nearest cell is 0.20 ppb.
 Both are well below the 8 ppb of noise here.
 This is because the plume's standard deviation is about ten cells, so it is smooth on the scale of one cell.
-The dot-product test holds to $3 \times 10^{-16}$ relative, so $\mathbf{H}$ and $\mathbf{H}^\top$ are transposes of each other to rounding.
+The dot-product test holds to $`3 \times 10^{-16}`$ relative, so $`\mathbf{H}`$ and $`\mathbf{H}^\top`$ are transposes of each other to rounding.
 
 ### Stage 2: map the field from the pixels (`functax.project`)
 
@@ -275,16 +275,16 @@ On its own this is underdetermined, so we add a penalty on how rough the map is 
 \mathcal{J}(\tilde{\mathbf{x}}) = (\tilde{\mathbf{y}} - \mathbf{H} \tilde{\mathbf{x}})^\top \boldsymbol{\Sigma}_\varepsilon^{-1} (\tilde{\mathbf{y}} - \mathbf{H} \tilde{\mathbf{x}}) + \beta \Vert \mathbf{L} \tilde{\mathbf{x}} \Vert_2^2
 ```
 
-where $\tilde{\mathbf{y}} = \mathbf{y} - \mathbf{H} \boldsymbol{\mu}_x$ is the enhancement at the pixels and $\beta \ge 0$ is the weight of the penalty.
-The matrix $\mathbf{L} \in \mathbb{R}^{N_\text{pair} \times N_{\Omega_x}}$ takes the differences between neighbouring cells along longitude and latitude.
+where $`\tilde{\mathbf{y}} = \mathbf{y} - \mathbf{H} \boldsymbol{\mu}_x`$ is the enhancement at the pixels and $`\beta \ge 0`$ is the weight of the penalty.
+The matrix $`\mathbf{L} \in \mathbb{R}^{N_\text{pair} \times N_{\Omega_x}}`$ takes the differences between neighbouring cells along longitude and latitude.
 Setting the gradient to zero gives the normal equations
 
 ```math
 \left( \mathbf{H}^\top \boldsymbol{\Sigma}_\varepsilon^{-1} \mathbf{H} + \beta \mathbf{L}^\top \mathbf{L} \right) \hat{\tilde{\mathbf{x}}} = \mathbf{H}^\top \boldsymbol{\Sigma}_\varepsilon^{-1} \tilde{\mathbf{y}}
 ```
 
-which `Variational` solves matrix-free by conjugate gradients, with $\mathbf{H}$ applied through the plan from stage 1.
-functax keeps no public difference operator (finitevolX and spectraldiffx have them), so we write $\mathbf{L}$ here and pass it in as a lineax operator.
+which `Variational` solves matrix-free by conjugate gradients, with $`\mathbf{H}`$ applied through the plan from stage 1.
+functax keeps no public difference operator (finitevolX and spectraldiffx have them), so we write $`\mathbf{L}`$ here and pass it in as a lineax operator.
 
 ```python
 # user
@@ -321,9 +321,9 @@ cloudy_rmse = rms(map_error[~cloud_free])         # → ()  ppb
 
 From pixels with 8 ppb of noise, the map is 1.27 ppb RMS from the truth in the observed cells and 1.26 ppb in the cloudy ones.
 The largest errors (up to 6.6 ppb) sit on the peak of the plume, which the roughness penalty flattens.
-We picked $\beta = 0.1$ out of four values by the error against the truth, which a real overpass does not have.
+We picked $`\beta = 0.1`$ out of four values by the error against the truth, which a real overpass does not have.
 So take it as a best case.
-Over all cells, $\beta$ = 0.05, 0.1, 0.2 and 0.5 give 1.4, 1.3, 1.6 and 2.5 ppb.
+Over all cells, $`\beta`$ = 0.05, 0.1, 0.2 and 0.5 give 1.4, 1.3, 1.6 and 2.5 ppb.
 
 <p align="center"><img src="docs/assets/readme/example.png" alt="The true XCH4 plume on the grid, the cloud-free pixels with their noise, the variational map from those pixels, and its error against the truth" width="100%"></p>
 
@@ -335,7 +335,7 @@ Lastly, we want to know how much methane is in the map, so we integrate the enha
 \int_{\Omega} \tilde{x}(\mathbf{s}) \mathrm{d}\mathbf{s} \approx \sum_{n=1}^{N_{\Omega_x}} w_n \tilde{x}_n
 ```
 
-where the weight $w_n$ is the area of cell $n$ on a sphere of radius 6,371 km.
+where the weight $`w_n`$ is the area of cell $`n`$ on a sphere of radius 6,371 km.
 A longitude-latitude cell is not a square on the Earth, and cells shrink towards the poles.
 Its area is the radius squared, times its width in longitude (in radians), times the difference of the sines of its two bounding latitudes.
 So we take the weights from `cell_area` rather than from a constant pixel size.
@@ -408,16 +408,16 @@ The neural-field half lives next door in [geonnax](https://github.com/jejjohnson
 
 These are some of the bases in `functax.basis`, drawn by [`docs/assets/readme/figures.py`](docs/assets/readme/figures.py).
 
-The real spherical harmonics $Y_\ell^m$ are global functions on the sphere; here are six of the 25 with degree $\ell \le 4$ (`basis.sphere.real_spherical_harmonics`).
+The real spherical harmonics $`Y_\ell^m`$ are global functions on the sphere; here are six of the 25 with degree $`\ell \le 4`$ (`basis.sphere.real_spherical_harmonics`).
 
 <p align="center"><img src="docs/assets/readme/sh_basis.png" alt="Six real spherical harmonics up to degree 4 on Mollweide maps" width="100%"></p>
 
-Slepian functions are regional instead: these are for a 40° cap, ranked by their concentration $\lambda$, the share of their energy that sits inside the cap (`basis.slepian.slepian_cap_basis`).
+Slepian functions are regional instead: these are for a 40° cap, ranked by their concentration $`\lambda`$, the share of their energy that sits inside the cap (`basis.slepian.slepian_cap_basis`).
 The first few live inside the cap, and past the Shannon number (about 52 here) they leak out of it.
 
 <p align="center"><img src="docs/assets/readme/slepian.png" alt="Six Slepian functions for a 40 degree cap; concentration falls as the modes leak outside the dashed cap boundary" width="100%"></p>
 
-Needlets are multiscale: here is one centre at four scales, each scale $j$ twice as fine as the last (`basis.sphere.needlet_basis`).
+Needlets are multiscale: here is one centre at four scales, each scale $`j`$ twice as fine as the last (`basis.sphere.needlet_basis`).
 
 <p align="center"><img src="docs/assets/readme/needlets.png" alt="Four needlets centred near the same point at scales 0 to 3, each more localised than the last" width="100%"></p>
 
