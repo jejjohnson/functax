@@ -114,9 +114,9 @@ lines-after-imports = 2
 # Format the code inside ``Examples:`` doctest blocks like real source.
 docstring-code-format = true
 docstring-code-line-length = 72
-# The README's code blocks follow code-sketch (an aligned shape column), which
+# These pages' code blocks follow code-sketch (an aligned shape column), which
 # the formatter would collapse; figures.py runs them, so they stay checked.
-exclude = ["README.md"]
+exclude = ["README.md", "docs/guide/quickstart.md"]
 
 [tool.ty.environment]
 python-version = "3.12"
