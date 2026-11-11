@@ -20,6 +20,8 @@ The three operators arrive as lineax operators (a plan's `operator()`, a diagona
 
 `fill_gaps` fills the holes of an image (the pixels where `mask` is false) from the observed ones, which stay fixed as Dirichlet values. With $\gmat{\Delta}$ the five-point Laplacian with mirror edges (the edge pixel is its own ghost neighbour), so that $\gmat{\Delta} = -\mat{D}^\top \mat{D}$ for the forward differences $\mat{D}$, `method="laplace"` gives $\gmat{\Delta} \vect{x} = 0$ in the holes and `method="biharmonic"` gives $\gmat{\Delta}^2 \vect{x} = 0$. These are the two named cases of the variational fit as the observation error goes to zero, with $\mat{L} = \mat{D}$ and $\mat{L} = \gmat{\Delta}$. In one dimension, the samples $[0, 1, ?, ?, 0]$ fill to $[2/3, 1/3]$ (Laplace) and $[1, 1/2]$ (biharmonic).
 
+`periodic=(row, col)` wraps an axis instead, so on a periodic axis of length $n$ the neighbours of index $j$ are $j \pm 1 \bmod n$, and a hole can reach observed pixels across the seam. `periodic=(False, True)` joins the east and west edges of a global longitude grid, as xrtoolz's `fillnan_laplacian(boundary="wrap")` does. On a ring of four, $[0, ?, 3, ?]$ fills to $[0, 1.5, 3, 1.5]$, where mirror edges give $[0, 1.5, 3, 3]$.
+
 The Laplace fill equals xrtoolz's `fillnan_laplacian` with `boundary="reflect"` run to convergence: its red/black Gauss–Seidel sweeps have the same discrete equation as their fixed point, and a pinned test checks the two to $10^{-12}$ relative to the image scale.
 
 ::: functax.project

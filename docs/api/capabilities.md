@@ -454,7 +454,7 @@ current).
 
 ## `functax.project`
 
-### Laplace and biharmonic gap fill of an image, with a mirror-edge five-point Laplacian. (`functax._src.project._fill`)
+### Laplace and biharmonic gap fill of an image, with a five-point Laplacian. (`functax._src.project._fill`)
 
 | Name | Kind | What it does |
 |---|---|---|
