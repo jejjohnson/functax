@@ -323,3 +323,38 @@ class TestOneNodeAxis:
         targets = jnp.array([[2.0, *middle], [4.9, *middle], [5.1, *middle]])
         plan = Linear().plan(thick, Points(targets), policies=Policies(extent="cells"))
         assert plan.valid.tolist() == [True, True, False]
+
+
+class TestNearestTies:
+    """A nearest tie goes to the lower coordinate on either direction of axis (#129)."""
+
+    @pytest.mark.parametrize(
+        "flips", [(False, False), (True, False), (False, True), (True, True)]
+    )
+    def test_equals_scipy_at_midpoints(self, flips: tuple[bool, bool]) -> None:
+        # spacings of ½ and ¼, so every midpoint is an exact tie in floating point
+        nodes = [0.5 * np.arange(5.0), 1.0 + 0.25 * np.arange(6.0)]
+        field = np.random.default_rng(91).normal(size=(5, 6))
+        # every midpoint between neighbouring nodes, on both axes
+        midpoints = [0.5 * (n[:-1] + n[1:]) for n in nodes]
+        rows, cols = np.meshgrid(*midpoints, indexing="ij")
+        targets = np.column_stack([rows.ravel(), cols.ravel()])
+        expected = RegularGridInterpolator(nodes, field, method="nearest")(targets)
+        axes, values = [], field
+        for d, (axis_nodes, flip) in enumerate(zip(nodes, flips, strict=True)):
+            axes.append(Axis(jnp.asarray(axis_nodes[::-1] if flip else axis_nodes)))
+            if flip:
+                values = np.flip(values, axis=d)
+        plan = Nearest().plan(
+            RectilinearGrid(tuple(axes)), Points(jnp.asarray(targets))
+        )
+        flat = einx.id("... -> (...)", jnp.asarray(values))
+        assert_matches_oracle(plan(flat), expected, rtol=0, atol=0)
+
+    def test_traced_decreasing_axis(self) -> None:
+        def read(values: jax.Array) -> jax.Array:
+            field = Nearest().fit(Axis(values), jnp.array([12.0, 11.0, 10.0]))
+            return field(jnp.array([[0.5], [1.5]]))
+
+        decreasing = jnp.array([2.0, 1.0, 0.0])
+        assert jax.jit(read)(decreasing).tolist() == [10.0, 11.0]

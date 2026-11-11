@@ -274,3 +274,12 @@ class TestRepeatedNodes:
         Tensor((Linear(), Cubic())).plan(grid, Points(jnp.array([[0.5, 1.5]])))
         with pytest.raises(GeometryError, match="axis 0 repeats"):
             Tensor((Cubic(), Linear())).plan(grid, Points(jnp.array([[0.5, 1.5]])))
+
+
+def test_nearest_ties_go_to_the_lower_coordinate() -> None:
+    # #129: the same field on the same nodes, in either order
+    targets = Points(jnp.array([[0.5], [1.5]]))
+    up = Nearest().plan(Axis(jnp.array([0.0, 1.0, 2.0])), targets)
+    down = Nearest().plan(Axis(jnp.array([2.0, 1.0, 0.0])), targets)
+    assert up(jnp.array([10.0, 11.0, 12.0])).tolist() == [10.0, 11.0]
+    assert down(jnp.array([12.0, 11.0, 10.0])).tolist() == [10.0, 11.0]

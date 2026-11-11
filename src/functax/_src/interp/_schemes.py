@@ -43,6 +43,7 @@ from functax._src.interp._prefilter import prefilter_for
 from functax._src.interp._tensor import (
     check_local_source,
     coordinates_to_positions,
+    descending_axes,
     source_layout,
     stencil_from_positions,
     target_coordinates,
@@ -170,7 +171,12 @@ class LocalScheme(Scheme):
             source, coordinates, extrapolate=extrapolate
         )
         stencil = stencil_from_positions(
-            positions, shape, periodic, bases, policies=policies
+            positions,
+            shape,
+            periodic,
+            bases,
+            policies=policies,
+            descending=descending_axes(source),
         )
         orders = tuple(basis.prefilter_order for basis in bases)
         prefilter = prefilter_for(orders, shape, periodic, policies.boundary)

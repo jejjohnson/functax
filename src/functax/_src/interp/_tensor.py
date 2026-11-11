@@ -9,7 +9,7 @@ past the ends.
 
 from __future__ import annotations
 
-from functax._src._backend import require_jax
+from functax._src._backend import is_tracer, require_jax
 
 
 require_jax(__name__)
@@ -50,6 +50,7 @@ from functax.exceptions import GeometryError
 __all__ = [
     "check_local_source",
     "coordinates_to_positions",
+    "descending_axes",
     "source_layout",
     "stencil_from_positions",
     "target_coordinates",
@@ -97,6 +98,30 @@ def _target_coordinates(source: Any, target: Any) -> jax.Array:
         f"on an AffineGrid source), got {type(target).__name__}"
     )
     raise GeometryError(msg)
+
+
+def descending_axes(source: Any) -> tuple[bool | jax.Array, ...]:
+    """Whether each source axis decreases: a bool, or a traced bool on a traced axis.
+
+    Grids without axes (`AffineGrid`, `CurvilinearGrid`) count as increasing.
+    """
+    if isinstance(source, Axis):
+        axes = (source,)
+    elif isinstance(source, RectilinearGrid):
+        axes = source.axes
+    else:
+        shape, _ = source_layout(source)
+        return (False,) * len(shape)
+    flags = []
+    for axis in axes:
+        values = axis.values
+        if values.shape[0] == 1:
+            flags.append(False)
+        elif is_tracer(values):
+            flags.append(values[0] > values[-1])
+        else:
+            flags.append(axis.is_descending)
+    return tuple(flags)
 
 
 def check_local_source(
@@ -186,6 +211,7 @@ def _axis_stencil(
     periodic: bool,
     basis: Basis,
     policies: Policies,
+    descending: bool | jax.Array = False,
 ) -> tuple[jax.Array, jax.Array, tuple[jax.Array, jax.Array]]:
     """Taps, weights, and (row kept, target inside) on one axis, after the policies."""
     lower, upper = domain_bounds(n_nodes, policies.extent)
@@ -212,7 +238,11 @@ def _axis_stencil(
         last = max(n_nodes - 1 - high_tap, first)
         cell = jnp.clip(cell, first, last)
     offset = position - cell
-    relative, weights = basis.stencil(offset)
+    if isinstance(basis, NearestBasis):
+        # a tie goes to the lower coordinate, the next node on a decreasing axis
+        relative, weights = basis.stencil(offset, ties_up=descending)
+    else:
+        relative, weights = basis.stencil(offset)
     taps = einx.add(
         "target, target tap -> target tap", cell.astype(jnp.int32), relative
     )
@@ -230,11 +260,15 @@ def stencil_from_positions(
     bases: tuple[Basis, ...],
     *,
     policies: Policies,
+    descending: tuple[bool | jax.Array, ...] | None = None,
 ) -> Stencil:
     """The tensor stencil of index positions u on a grid of ``shape``.
 
     Rows outside the domain under ``outside="nan"`` and rows at non-finite
-    positions under any policy are invalid, with zero weights.
+    positions under any policy are invalid, with zero weights. ``descending``
+    (`descending_axes` of the source) sends a nearest tie to the node of
+    lower coordinate on a decreasing axis; every axis counts as increasing
+    when it is ``None``.
 
     Raises:
         OutsideDomainError: Under ``outside="raise"`` when a target is outside.
@@ -251,10 +285,13 @@ def stencil_from_positions(
             valid=jnp.zeros(0, dtype=bool),
             check=False,
         )
+    descending = (False,) * len(shape) if descending is None else descending
     per_axis = [
-        _axis_stencil(positions[:, d], n_nodes, is_periodic, basis, policies)
-        for d, (n_nodes, is_periodic, basis) in enumerate(
-            zip(shape, periodic, bases, strict=True)
+        _axis_stencil(
+            positions[:, d], n_nodes, is_periodic, basis, policies, decreasing
+        )
+        for d, (n_nodes, is_periodic, basis, decreasing) in enumerate(
+            zip(shape, periodic, bases, descending, strict=True)
         )
     ]
     indices, weights, (row_ok, inside_all) = per_axis[0]
@@ -328,4 +365,11 @@ def tensor_stencil(
     check_local_source(source, bases, policies)
     extrapolate = policies.outside == "extrapolate"
     positions = target_positions(source, target, extrapolate=extrapolate)
-    return stencil_from_positions(positions, shape, periodic, bases, policies=policies)
+    return stencil_from_positions(
+        positions,
+        shape,
+        periodic,
+        bases,
+        policies=policies,
+        descending=descending_axes(source),
+    )
