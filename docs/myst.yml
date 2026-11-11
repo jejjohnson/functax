@@ -36,6 +36,7 @@ project:
     - title: Guide
       children:
         - file: guide/quickstart.md
+        - file: guide/methane.md
         - file: guide/interpolation.md
         - file: guide/gridding.md
         - file: guide/regridding.md
