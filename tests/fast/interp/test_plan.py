@@ -12,7 +12,7 @@ import pytest
 
 from functax import GeometryError, OutsideDomainError, PolicyError, ValidationError
 from functax.geometry import AffineGrid, Axis, Points, RectilinearGrid
-from functax.interp import Fit, Linear, Plan, Policies, Tensor
+from functax.interp import Cubic, Fit, Linear, Nearest, Plan, Policies, Tensor
 
 
 def _rectilinear(
@@ -124,3 +124,33 @@ def test_default_policies_are_nan_and_mirror() -> None:
     plan = Linear().plan(Axis(jnp.arange(3.0)), Points(jnp.zeros((1, 1))))
     assert plan.policies == Policies()
     assert math.isnan(plan.policies.fill_value)
+
+
+ZERO_TARGET_SOURCES = [
+    (Axis(jnp.linspace(0.0, 1.0, 6)), 1),
+    (
+        RectilinearGrid(
+            (Axis(jnp.linspace(0.0, 1.0, 6)), Axis(jnp.linspace(0.0, 1.0, 5)))
+        ),
+        2,
+    ),
+]
+
+
+@pytest.mark.parametrize("scheme", [Nearest(), Linear(), Cubic()])
+@pytest.mark.parametrize(("source", "n_dim"), ZERO_TARGET_SOURCES)
+def test_a_plan_on_zero_targets_reads_and_sends_back_nothing(
+    scheme, source, n_dim: int
+) -> None:
+    # einx rejects zero-length axes; an empty target set must still plan,
+    # as gaussx's interpolation weights did (gaussx#703, gaussx#813)
+    plan = scheme.plan(source, Points(jnp.zeros((0, n_dim))))
+    n_source = 6 if n_dim == 1 else 30
+    assert plan(jnp.ones((3, n_source))).shape == (3, 0)
+    adjoint = plan.adjoint(jnp.ones((3, 0)))
+    assert adjoint.shape == (3, n_source)
+    assert not jnp.any(adjoint)
+    indices, weights = plan.to_gaussx()
+    taps = plan.read.n_taps
+    assert indices.shape == weights.shape == (0, taps)
+    assert plan.operator().mv(jnp.ones(n_source)).shape == (0,)

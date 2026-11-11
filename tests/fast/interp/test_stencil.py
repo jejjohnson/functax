@@ -140,3 +140,10 @@ class TestValidation:
         build = jax.jit(lambda i: Stencil(i, jnp.ones((1, 2)), n_source=3).indices)
         with pytest.raises(Exception, match=r"'indices' must lie in \[0, 3\)"):
             build(jnp.array([[0, 5]])).block_until_ready()
+
+
+def test_a_stencil_with_no_rows_applies_to_empty_arrays() -> None:
+    stencil = Stencil(jnp.zeros((0, 3), dtype=jnp.int32), jnp.zeros((0, 3)), n_source=5)
+    assert stencil.apply(jnp.ones((2, 5))).shape == (2, 0)
+    assert stencil.apply_adjoint(jnp.ones((2, 0))).shape == (2, 5)
+    assert stencil.to_dense().shape == (0, 5)
