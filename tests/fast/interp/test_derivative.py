@@ -103,3 +103,38 @@ class TestValidation:
         )
         with pytest.raises(ValidationError, match="both read-outs are stencils"):
             self.plan + dense
+
+
+class TestEndNodes:
+    """A derivative read exactly at an end node comes from inside the axis (#128)."""
+
+    @pytest.mark.parametrize("outside", ["nan", "clamp", "extrapolate"])
+    @pytest.mark.parametrize("boundary", ["mirror", "edge", "wrap", "constant"])
+    def test_linear_reads_the_end_cells_slope(
+        self, outside: str, boundary: str
+    ) -> None:
+        # secants 1, 2, 3
+        data = jnp.array([1.0, 2.0, 4.0, 7.0])
+        plan = Linear().plan(
+            Axis(jnp.arange(4.0)),
+            Points(jnp.array([[0.0], [2.5], [3.0]])),
+            policies=Policies(outside=outside, boundary=boundary),
+        )
+        assert plan(data).tolist() == [1.0, 5.5, 7.0]
+        assert plan.derivative(0)(data).tolist() == [1.0, 3.0, 3.0]
+
+    def test_a_decreasing_axis(self) -> None:
+        data = jnp.array([7.0, 4.0, 2.0, 1.0])
+        plan = Linear().plan(
+            Axis(jnp.array([3.0, 2.0, 1.0, 0.0])), Points(jnp.array([[0.0], [3.0]]))
+        )
+        assert plan.derivative(0)(data).tolist() == [1.0, 3.0]
+
+    def test_clamp_holds_a_constant_past_the_ends(self) -> None:
+        data = jnp.array([1.0, 2.0, 4.0, 7.0])
+        plan = Linear().plan(
+            Axis(jnp.arange(4.0)),
+            Points(jnp.array([[-1.0], [4.0]])),
+            policies=Policies(outside="clamp"),
+        )
+        assert plan.derivative(0)(data).tolist() == [0.0, 0.0]

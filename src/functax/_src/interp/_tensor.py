@@ -34,6 +34,7 @@ from functax._src.interp._bases import Basis, LinearBasis, NearestBasis
 from functax._src.interp._curvilinear import curvilinear_positions
 from functax._src.interp._locate import (
     check_outside,
+    clamp_positions,
     domain_bounds,
     hold_repeated_ends,
     index_positions,
@@ -197,8 +198,13 @@ def _axis_stencil(
         policies.outside == "extrapolate" and n_nodes == 1
     )
     if clamps and not periodic:
-        position = jnp.clip(position, lower, upper)
+        position = clamp_positions(position, lower, upper)
     cell = jnp.floor(position)
+    if not periodic and n_nodes > 1:
+        # a target on the last node reads the last cell at t = 1, not the cell
+        # past the end at t = 0: the same value, and a derivative from inside
+        on_last = position == n_nodes - 1
+        cell = jnp.where(on_last, n_nodes - 2, cell)
     if policies.outside == "extrapolate" and not periodic and n_nodes > 1:
         # keep every tap on the axis, so the edge cell's weights continue
         low_tap, high_tap = basis.support
