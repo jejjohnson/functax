@@ -61,6 +61,7 @@ W = "#FFFFFF"
 
 
 def _polyline(points: list[tuple[float, float]]) -> str:
+    """An SVG path through the given points."""
     return "M" + " L".join(f"{x:.1f} {y:.1f}" for x, y in points)
 
 
@@ -74,6 +75,7 @@ def glyph_expansion() -> str:
     xs = [x0 + (x1 - x0) * i / n for i in range(n + 1)]
 
     def bump(x: float, centre: float, weight: float) -> float:
+        """The weighted Gaussian bump wⱼ exp(−(x − cⱼ)² / 2σ²)."""
         return weight * math.exp(-0.5 * ((x - centre) / width) ** 2)
 
     parts = []
@@ -112,6 +114,7 @@ def tile(gid: str, x: float = 0, y: float = 0, size: float = 128) -> str:
 
 
 def svg(width: int, height: int, label: str, title: str, body: str) -> str:
+    """A standalone SVG document with a title and an accessible label."""
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}" role="img" aria-label="{label}">\n'
@@ -130,6 +133,7 @@ def text(
     family: str = SANS,
     anchor: str = "start",
 ) -> str:
+    """An SVG text element, whitespace preserved."""
     return (
         f'<text x="{x}" y="{y}" text-anchor="{anchor}" font-family="{family}" '
         f'font-size="{size}" font-weight="{weight}" fill="{fill}" '
@@ -138,6 +142,7 @@ def text(
 
 
 def arrow_defs(mid: str, colour: str) -> str:
+    """An arrowhead marker definition with the given id and colour."""
     return (
         f'<defs><marker id="{mid}" viewBox="0 0 10 10" refX="9" refY="5" '
         'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
@@ -146,6 +151,7 @@ def arrow_defs(mid: str, colour: str) -> str:
 
 
 def line(points: list[tuple[float, float]], colour: str, head: str | None) -> str:
+    """An SVG polyline through the points, with an optional arrowhead."""
     d = " ".join(f"{'M' if i == 0 else 'L'}{x} {y}" for i, (x, y) in enumerate(points))
     end = f' marker-end="url(#{head})"' if head else ""
     return (
@@ -163,6 +169,7 @@ def card(
     *,
     highlight: bool = False,
 ) -> str:
+    """A rounded card, highlighted in the accent colours when asked."""
     fill, stroke, sw = (
         (t["hi_fill"], t["hi_line"], 2) if highlight else (t["card"], t["line"], 1)
     )
@@ -173,6 +180,7 @@ def card(
 
 
 def wordmark(x: float, y: float, size: float, mode: str) -> str:
+    """The functax wordmark, its last letter in the accent colour."""
     t = THEME[mode]
     return (
         f'<text x="{x}" y="{y}" font-family="{SANS}" font-size="{size}" '
@@ -185,10 +193,12 @@ def wordmark(x: float, y: float, size: float, mode: str) -> str:
 
 
 def write_icon() -> None:
+    """Write icon.svg, the tile on its own."""
     (OUT / "icon.svg").write_text(svg(128, 128, "functax", "functax", tile("ic")))
 
 
 def write_logos() -> None:
+    """Write logo-light.svg and logo-dark.svg, the tile and the wordmark."""
     for mode in THEME:
         body = tile(f"logo-{mode}", x=6, y=6) + wordmark(154, 92, 72, mode)
         (OUT / f"logo-{mode}.svg").write_text(svg(510, 140, "functax", "functax", body))

@@ -51,6 +51,7 @@ def run(page: Path, heading: str | None = None) -> dict:
 
 
 def save(fig: plt.Figure, name: str) -> None:
+    """Lay out a figure and write it next to this script at 150 dpi."""
     fig.tight_layout()
     fig.savefig(OUT / name, dpi=150)
     plt.close(fig)
@@ -60,10 +61,12 @@ def save(fig: plt.Figure, name: str) -> None:
 
 
 def check_quick_start() -> None:
+    """Run the quickstart's blocks and log the numbers its prose quotes."""
     ns = run(QUICKSTART, "Three operations on one expansion")
-    fit_error = float(
-        jnp.abs(ns["design"] @ ns["coefficients"] - ns["observations"]).max()
-    )
+    # Φ ẑ, the fit at the sample points
+    fitted = einx.dot("obs feature, feature -> obs", ns["design"], ns["coefficients"])
+    # max |Φ ẑ − y|
+    fit_error = float(einx.max("[obs]", jnp.abs(fitted - ns["observations"])))
     logger.info("quick start: max fit error {:.1e}", fit_error)
     logger.info("quick start: values {}", ns["values"].tolist())
     logger.info(
@@ -75,21 +78,24 @@ def check_quick_start() -> None:
 
 
 def example_figure() -> None:
+    """Run the methane page's blocks, log its numbers and draw example.png."""
     ns = run(METHANE)
     for key in ("read_rmse", "adjoint_gap", "observed_rmse", "cloudy_rmse"):
         logger.info("example: {} = {}", key, ns[key])
     for key in ("truth_integral", "map_integral", "pixel_integral"):
         logger.info("example: {} = {:.1f} ppb km²", key, float(ns[key]) / 1e6)
-    logger.info(
-        "example: max |map error| = {:.2f} ppb", float(abs(ns["map_error"]).max())
-    )
-    logger.info("example: N_Ωy = {}", int(ns["cloud_free"].sum()))
-    logger.info("example: grid area {:.0f} km²", float(ns["area"].weights.sum()) / 1e6)
+    worst = float(einx.max("[cell]", jnp.abs(ns["map_error"])))
+    logger.info("example: max |map error| = {:.2f} ppb", worst)
+    n_pixels = int(einx.sum("[cell]", ns["cloud_free"]))
+    logger.info("example: N_Ωy = {}", n_pixels)
+    grid_area = float(einx.sum("[cell]", ns["area"].weights)) / 1e6
+    logger.info("example: grid area {:.0f} km²", grid_area)
 
     extent = (-104.2, -103.4, 31.6, 32.4)
 
     def image(values: jnp.ndarray) -> np.ndarray:
         # (λ, φ) row-major → rows of φ, for imshow
+        """Field values on the (lon, lat) grid as an image with rows of latitude."""
         return einx.id("(lon lat) -> lat lon", np.asarray(values), lon=100)
 
     lo, hi = 1875.0, 1925.0
@@ -124,7 +130,7 @@ def example_figure() -> None:
             )
         ax.set_title(title, fontsize=9)
     error = image(ns["map_error"])
-    bound = float(np.abs(error).max())
+    bound = float(einx.max("[lat lon]", np.abs(error)))
     shown = axes[3].imshow(
         error, origin="lower", extent=extent, vmin=-bound, vmax=bound, cmap="RdBu_r"
     )
@@ -147,7 +153,8 @@ LON, LAT = np.meshgrid(np.linspace(-179, 179, 180), np.linspace(-89, 89, 90))
 
 
 def mollweide(ax: plt.Axes, field: np.ndarray, title: str) -> None:
-    bound = float(np.nanmax(np.abs(field)))
+    """Draw one field on a Mollweide map with a symmetric colour scale."""
+    bound = float(einx.max("[point]", np.abs(field)))
     ax.pcolormesh(
         np.deg2rad(LON),
         np.deg2rad(LAT),
@@ -165,6 +172,7 @@ def mollweide(ax: plt.Axes, field: np.ndarray, title: str) -> None:
 
 
 def gallery_figures() -> None:
+    """Draw the spherical-harmonic, Slepian and needlet gallery figures."""
     lonlat = jnp.asarray(einx.id("lat lon, lat lon -> (lat lon) (1 + 1)", LON, LAT))
     xyz = lonlat_to_unit(lonlat, unit="degrees")
     moll = {"projection": "mollweide"}
@@ -185,8 +193,9 @@ def gallery_figures() -> None:
     basis = slepian_cap_basis(20, radius, lonlat_centre=centre)
     slepian = np.asarray(basis.evaluate(xyz))
     concentration = np.asarray(basis.eigenvalues)
-    pole = np.asarray(lonlat_to_unit(centre[None]))[0]
-    cosine = np.clip(np.asarray(xyz) @ pole, -1, 1)
+    pole = np.asarray(lonlat_to_unit(einx.id("d -> 1 d", centre)))[0]
+    # cos θ = ⟨u, p⟩, the angle from the cap centre
+    cosine = np.clip(einx.dot("point d, d -> point", np.asarray(xyz), pole), -1, 1)
     angle = einx.id("(lat lon) -> lat lon", np.arccos(cosine), lat=LAT.shape[0])
     fig, axes = plt.subplots(2, 3, figsize=(9, 3.6), subplot_kw=moll)
     for ax, mode in zip(axes.flat, [0, 3, 15, 40, 52, 70], strict=True):
@@ -212,7 +221,9 @@ def gallery_figures() -> None:
     fig, axes = plt.subplots(1, 4, figsize=(11, 1.75), subplot_kw=moll)
     for ax, scale in zip(axes, range(4), strict=True):
         columns = np.where(scales == scale)[0]
-        nearest = columns[np.argmax(centres[columns] @ point)]
+        # the needlet of this scale whose centre is nearest the point
+        closeness = einx.dot("atom d, d -> atom", centres[columns], point)
+        nearest = columns[int(einx.argmax("[atom]", closeness)[0])]
         mollweide(ax, needlets[:, nearest], f"needlet, scale j = {scale}")
     save(fig, "needlets.png")
 

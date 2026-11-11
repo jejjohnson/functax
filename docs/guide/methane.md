@@ -150,7 +150,8 @@ def differences(field: Float[Array, " cell"]) -> Float[Array, " pair"]:
     along_lat = image[:, 1:] - image[:, :-1]
     flat_lon = einx.id("a b -> (a b)", along_lon)
     flat_lat = einx.id("a b -> (a b)", along_lat)
-    return jnp.concatenate([flat_lon, flat_lat])
+    # (L x) = [differences along lon; differences along lat]
+    return einx.id("p, q -> (p + q)", flat_lon, flat_lat)
 
 
 cell_vector = jax.ShapeDtypeStruct((10_000,), jnp.float64)
