@@ -6,7 +6,10 @@ checks, each a second or more.
 from __future__ import annotations
 
 import inspect
+import warnings
 
+import einx
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -194,3 +197,36 @@ class TestValidationAndConfig:
         object.__setattr__(wrong_targets, "read", posterior.read[:, :4])
         with pytest.raises(ValidationError, match="'read'"):
             check(wrong_targets)
+
+
+class _ArrayKernel(eqx.Module):
+    """A Gaussian kernel holding its lengthscale as an array, as kernellib's do."""
+
+    lengthscale: jax.Array
+
+    def __call__(self, targets: jax.Array, sources: jax.Array) -> jax.Array:
+        difference = einx.subtract("t d, s d -> t s d", targets, sources)
+        squared = einx.sum("t s [d]", difference**2)
+        return jnp.exp(-0.5 * squared / self.lengthscale**2)
+
+
+def test_a_kernel_holding_arrays_traces_through_the_variance() -> None:
+    # kernellib#301: a kernel with array hyperparameters used to be a static
+    # field of the posterior, which warned and leaked a tracer under filter_jit
+    rng = np.random.default_rng(0)
+    sources = Points(jnp.asarray(rng.uniform(0.0, 1.0, (12, 2))))
+    targets = Points(jnp.asarray(rng.uniform(0.0, 1.0, (5, 2))))
+
+    def variance(kernel: _ArrayKernel) -> jax.Array:
+        return Kriging(kernel, nugget=1e-6).plan(sources, targets).variance()
+
+    kernel = _ArrayKernel(jnp.asarray(0.3))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        traced = eqx.filter_jit(variance)(kernel)
+    assert_matches_oracle(traced, variance(kernel), rtol=1e-12)
+    gradient = jax.grad(lambda ell: jnp.sum(variance(_ArrayKernel(ell))))(0.3)
+    assert jnp.isfinite(gradient)
+    plan = Kriging(kernel, nugget=1e-6).plan(sources, targets)
+    restored = type(plan).deserialize(plan.serialize(), like=plan)
+    assert_matches_oracle(restored.variance(), plan.variance(), rtol=0.0)

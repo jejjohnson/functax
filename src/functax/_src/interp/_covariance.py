@@ -350,7 +350,9 @@ class KernelCovariance(PosteriorCovariance):
     fit: KernelSolve
     read: Float[Array, "target coefficient"]
     targets: Float[Array, "target dim"]
-    kernel: Kernel = eqx.field(static=True)
+    # a pytree field, not static: a kernel holds arrays (kernellib's
+    # hyperparameters), which must trace and differentiate with the plan
+    kernel: Kernel
 
     def __check_init__(self) -> None:
         n_target = self.read.shape[0]

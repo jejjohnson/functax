@@ -302,7 +302,8 @@ class Plan(eqx.Module):
         """The plan's array leaves as bytes, by ``eqx.tree_serialise_leaves``.
 
         Only the arrays (the stencil's indices, weights and valid rows) are
-        written; the static fields (N, the policies) come back from the
+        written; the static fields (N, the policies) and any other leaf (a
+        kernel's Python parameters, a callable kernel) come back from the
         template that `deserialize` is given. Runs on the host.
 
         Returns:
@@ -321,7 +322,9 @@ class Plan(eqx.Module):
             True
         """
         for leaf in jax.tree_util.tree_leaves(self):
-            if is_tracer(leaf) or not isinstance(leaf, jax.Array):
+            # arrays must be concrete; other leaves (a kernel's Python
+            # parameters or a callable) come back from the template
+            if is_tracer(leaf) or isinstance(leaf, jax.ShapeDtypeStruct):
                 msg = (
                     "'self' must hold concrete arrays to serialize, got a "
                     f"{type(leaf).__name__} leaf; call serialize outside jit"
