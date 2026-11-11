@@ -1,10 +1,10 @@
-"""Render the README figures from the README's own code.
+"""Render the docs' and the README's figures from the docs' own code.
 
-The quick start (in docs/guide/quickstart.md) and the README's example run
-their Python blocks verbatim and in order, then the example's figure is drawn
-from what they computed, so the numbers the pages quote and the picture come
-from the same run (they are logged). The gallery figures call the bases
-directly.
+The quick start (docs/guide/quickstart.md) and the methane example
+(docs/guide/methane.md) run their Python blocks verbatim and in order, then
+the example's figure is drawn from what they computed, so the numbers the
+pages quote and the picture come from the same run (they are logged). The
+gallery figures call the bases directly.
 
 Run from the repo root (about a minute on a laptop CPU):
 
@@ -28,20 +28,21 @@ from functax.geometry import lonlat_to_unit
 
 
 OUT = Path(__file__).parent
-README = OUT.parents[2] / "README.md"
 QUICKSTART = OUT.parents[1] / "guide" / "quickstart.md"
+METHANE = OUT.parents[1] / "guide" / "methane.md"
 
 
-def python_blocks(page: Path, heading: str) -> list[str]:
-    """The ```python blocks under ``## <heading>``, up to the next ``## ``."""
+def python_blocks(page: Path, heading: str | None = None) -> list[str]:
+    """The ```python blocks of a page, or of its ``## <heading>`` section only."""
     text = page.read_text()
-    start = text.index(f"\n## {heading}")
-    end = text.find("\n## ", start + 1)
-    end = len(text) if end == -1 else end
-    return re.findall(r"```python\n(.*?)```", text[start:end], flags=re.S)
+    if heading is not None:
+        start = text.index(f"\n## {heading}")
+        end = text.find("\n## ", start + 1)
+        text = text[start : len(text) if end == -1 else end]
+    return re.findall(r"```python\n(.*?)```", text, flags=re.S)
 
 
-def run(page: Path, heading: str) -> dict:
+def run(page: Path, heading: str | None = None) -> dict:
     """Execute a page section's blocks in one namespace, as a reader would."""
     namespace: dict = {}
     for block in python_blocks(page, heading):
@@ -74,7 +75,7 @@ def check_quick_start() -> None:
 
 
 def example_figure() -> None:
-    ns = run(README, "Example: map methane from one overpass")
+    ns = run(METHANE)
     for key in ("read_rmse", "adjoint_gap", "observed_rmse", "cloudy_rmse"):
         logger.info("example: {} = {}", key, ns[key])
     for key in ("truth_integral", "map_integral", "pixel_integral"):
