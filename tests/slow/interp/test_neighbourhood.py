@@ -5,6 +5,7 @@ dot-product test and gradients. The slow tier: each compiles new shapes eagerly.
 
 from __future__ import annotations
 
+import einx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -240,3 +241,79 @@ def test_more_neighbours_than_sources_reads_them_all() -> None:
     assert_matches_oracle(
         plan(jnp.asarray(VALUES[:3])), np.full(2, VALUES[:3].mean()), rtol=1e-12
     )
+
+
+class TestGeodesic:
+    """Great-circle weights on the sphere (#120)."""
+
+    @staticmethod
+    def _lonlat(seed: int, count: int) -> np.ndarray:
+        rng = np.random.default_rng(seed)
+        lon = rng.uniform(-180.0, 180.0, count)
+        lat = np.degrees(np.arcsin(rng.uniform(-1.0, 1.0, count)))
+        return np.column_stack([lon, lat])
+
+    def test_the_neighbours_are_the_chord_search_s(self) -> None:
+        sources, targets = self._lonlat(0, 60), self._lonlat(1, 20)
+        plans = {
+            metric: InverseDistance(k=6).plan(
+                Points(jnp.asarray(sources), metric=metric),
+                Points(jnp.asarray(targets), metric=metric),
+                unit="degrees",
+            )
+            for metric in ("chord", "geodesic")
+        }
+        chord, geodesic = plans["chord"].read, plans["geodesic"].read
+        assert chord.indices.tolist() == geodesic.indices.tolist()
+        # the weights differ, and each row sums to one
+        assert not np.allclose(chord.weights, geodesic.weights)
+        assert_matches_oracle(
+            einx.sum("target [tap]", geodesic.weights), np.ones(20), rtol=1e-14
+        )
+
+    def test_weights_are_inverse_angles(self) -> None:
+        # on the equator the angles are the longitude differences
+        sources = Points(jnp.array([[10.0, 0.0], [40.0, 0.0]]), metric="geodesic")
+        target = Points(jnp.array([[20.0, 0.0]]), metric="geodesic")
+        plan = InverseDistance(k=2, power=1.0).plan(sources, target, unit="degrees")
+        # 1/10° and 1/20°, normalised: 2/3 and 1/3
+        assert_matches_oracle(plan(jnp.array([3.0, 6.0])), np.array([4.0]), rtol=1e-13)
+
+    def test_across_the_dateline_and_at_the_pole(self) -> None:
+        sources = Points(
+            jnp.array([[179.0, 0.0], [-178.0, 0.0], [0.0, 89.0], [180.0, 89.0]]),
+            metric="geodesic",
+        )
+        targets = Points(jnp.array([[180.0, 0.0], [90.0, 90.0]]), metric="geodesic")
+        plan = InverseDistance(k=2, power=1.0).plan(sources, targets, unit="degrees")
+        values = plan(jnp.array([0.0, 3.0, 5.0, 7.0]))
+        # 1° and 2° away: weights 2/3 and 1/3; the pole is 1° from both
+        assert_matches_oracle(values, np.array([1.0, 6.0]), rtol=1e-12)
+
+    def test_the_radius_is_an_arc(self) -> None:
+        sources = Points(jnp.array([[0.0, 0.0], [30.0, 0.0]]), metric="geodesic")
+        targets = Points(jnp.array([[10.0, 0.0], [15.0, 0.0]]), metric="geodesic")
+        # 12° of arc: the first target reaches one source, the second none
+        radius = float(np.radians(12.0))
+        plan = InverseDistance(k=2, radius=radius).plan(
+            sources, targets, unit="degrees"
+        )
+        assert plan.valid.tolist() == [True, False]
+        # π or more is no limit
+        whole = InverseDistance(k=2, radius=4.0).plan(sources, targets, unit="degrees")
+        assert whole.valid.tolist() == [True, True]
+
+    def test_traced_coordinates_give_the_same_stencil(self) -> None:
+        sources, targets = self._lonlat(2, 30), self._lonlat(3, 7)
+
+        def weights(source_xy: jax.Array, target_xy: jax.Array) -> jax.Array:
+            plan = InverseDistance(k=4).plan(
+                Points(source_xy, metric="geodesic"),
+                Points(target_xy, metric="geodesic"),
+                unit="degrees",
+            )
+            return plan(jnp.arange(30.0))
+
+        eager = weights(jnp.asarray(sources), jnp.asarray(targets))
+        traced = jax.jit(weights)(jnp.asarray(sources), jnp.asarray(targets))
+        assert_matches_oracle(traced, eager, rtol=1e-12)
