@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.0.7](https://github.com/jejjohnson/functax/compare/v0.0.6...v0.0.7) (2026-11-11)
+
+
+### Features
+
+* **geometry:** a one-node Axis ([#124](https://github.com/jejjohnson/functax/issues/124)) ([c380be2](https://github.com/jejjohnson/functax/commit/c380be21cdbafe9fccb6143c6715d4117cfd43ba))
+* **geometry:** batched affine transforms and the transform of a slice ([#123](https://github.com/jejjohnson/functax/issues/123)) ([eb6e404](https://github.com/jejjohnson/functax/commit/eb6e404423823cbc16cedd2914e8a60a568cd2fd))
+* **geometry:** repeated knots on an Axis ([#125](https://github.com/jejjohnson/functax/issues/125)) ([7bf348a](https://github.com/jejjohnson/functax/commit/7bf348a1029bc07b95999ae128e687f7b6c6e4dc)), closes [#117](https://github.com/jejjohnson/functax/issues/117)
+* **interp:** derivatives of the series interpolants ([#126](https://github.com/jejjohnson/functax/issues/126)) ([7675be8](https://github.com/jejjohnson/functax/commit/7675be808cd7ce8d52d0788422eb2806f59aeb65)), closes [#116](https://github.com/jejjohnson/functax/issues/116)
+
+
+### Bug Fixes
+
+* **interp:** keep a kriging kernel's arrays traceable in its posterior ([#107](https://github.com/jejjohnson/functax/issues/107)) ([9e733b4](https://github.com/jejjohnson/functax/commit/9e733b4a68a95a276814302bc8b770c89140072e))
+* **interp:** plan and apply local schemes on zero targets ([#106](https://github.com/jejjohnson/functax/issues/106)) ([2ff069b](https://github.com/jejjohnson/functax/commit/2ff069b83a7f0cc9bcad20c981c4b58864c3d2d7))
+
 ## [0.0.6](https://github.com/jejjohnson/functax/compare/v0.0.5...v0.0.6) (2026-11-10)
 
 
