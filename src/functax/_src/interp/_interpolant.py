@@ -31,6 +31,7 @@ from functax._src.interp._prefilter import prefilter_for
 from functax._src.interp._tensor import (
     check_local_source,
     coordinates_to_positions,
+    descending_axes,
     source_layout,
     stencil_from_positions,
     target_coordinates,
@@ -91,7 +92,12 @@ class Interpolant(eqx.Module):
             self.source, coordinates, extrapolate=extrapolate
         )
         stencil = stencil_from_positions(
-            positions, shape, periodic, bases, policies=self.policies
+            positions,
+            shape,
+            periodic,
+            bases,
+            policies=self.policies,
+            descending=descending_axes(self.source),
         )
         # the fill already ran at the fit, before the prefilter
         policies = self.policies

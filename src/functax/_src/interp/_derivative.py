@@ -31,6 +31,7 @@ from functax._src.interp._policies import Policies
 from functax._src.interp._stencil import Stencil
 from functax._src.interp._tensor import (
     coordinates_to_positions,
+    descending_axes,
     source_layout,
     stencil_from_positions,
 )
@@ -81,7 +82,12 @@ class LocalGeometry(ReadGeometry):
             self.source, coordinates, extrapolate=extrapolate
         )
         rebuilt = stencil_from_positions(
-            positions, shape, periodic, self.bases, policies=policies
+            positions,
+            shape,
+            periodic,
+            self.bases,
+            policies=policies,
+            descending=descending_axes(self.source),
         )
         return rebuilt.weights
 

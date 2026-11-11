@@ -20,7 +20,7 @@ import einx
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 from functax.exceptions import ValidationError
 
@@ -68,8 +68,9 @@ class Basis(eqx.Module):
 class NearestBasis(Basis):
     """Nearest neighbour: one tap, the closer of i and i + 1, with weight 1.
 
-    A tie (t = ½) goes to i, the lower node, as in SciPy's
-    ``RegularGridInterpolator(method="nearest")``; ``map_coordinates(order=0)``
+    A tie (t = ½) goes to the node of lower coordinate, as in SciPy's
+    ``RegularGridInterpolator(method="nearest")``: i on an increasing axis,
+    and i + 1 on a decreasing one (``ties_up``). ``map_coordinates(order=0)``
     rounds ties up, and NumPy's ``round`` to even.
 
     Examples:
@@ -84,10 +85,20 @@ class NearestBasis(Basis):
     support: ClassVar[tuple[int, int]] = (0, 1)
 
     def stencil(
-        self, offsets: Float[Array, " target"]
+        self,
+        offsets: Float[Array, " target"],
+        *,
+        ties_up: bool | Bool[Array, ""] = False,
     ) -> tuple[Int[Array, "target tap"], Float[Array, "target tap"]]:
-        # r = 1 when t > ½, else 0: ties go to the lower node
-        upper = (offsets > 0.5).astype(jnp.int32)
+        """The tap r = 1 when t > ½ (or t ≥ ½ with ``ties_up``), else r = 0.
+
+        Args:
+            offsets: t, the offset of each target in its cell.
+            ties_up: Whether a tie goes to i + 1, the node of lower
+                coordinate on a decreasing axis; it may be traced.
+        """
+        # r = 1 when t > ½, else 0: ties go to i, unless they go up
+        upper = jnp.where(ties_up, offsets >= 0.5, offsets > 0.5).astype(jnp.int32)
         taps = einx.id("target -> target 1", upper)
         weights = einx.id("target -> target 1", jnp.ones_like(offsets))
         return taps, weights
