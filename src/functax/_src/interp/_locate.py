@@ -184,12 +184,15 @@ def _one_node_positions(
     Without edges, u = sign(x − x₀), so only x₀ lies in the domain [0, 0] of
     ``extent="nodes"``. With edges [e₀, e₁] in either order, u = ±½ |x − x₀|/w
     on the side of x, w being the distance from x₀ to that side's edge, and
-    u = ±1 past a side of zero width. NaN stays NaN.
+    u = ±1 past a side of zero width. ±∞ and NaN stay as they are, so a
+    non-finite target stays invalid under every policy.
     """
     node = axis.values[0]
     offset = positions - node
+    # sign(±∞) would be finite, so a non-finite target keeps its position
+    finite = jnp.isfinite(offset)
     if axis.edges is None:
-        return jnp.sign(offset)
+        return jnp.where(finite, jnp.sign(offset), offset)
     lower = jnp.minimum(axis.edges[0], axis.edges[1])
     upper = jnp.maximum(axis.edges[0], axis.edges[1])
     below = offset < 0
@@ -198,8 +201,9 @@ def _one_node_positions(
     has_width = width > 0
     safe_width = jnp.where(has_width, width, jnp.ones((), width.dtype))
     distance = jnp.abs(offset)
-    # ½ |x − x₀|/w, or sign |x − x₀| (0 or 1, NaN kept) past a zero width
-    magnitude = jnp.where(has_width, 0.5 * distance / safe_width, jnp.sign(distance))
+    # ½ |x − x₀|/w, or sign |x − x₀| (0 or 1, ∞ and NaN kept) past a zero width
+    past = jnp.where(finite, jnp.sign(distance), distance)
+    magnitude = jnp.where(has_width, 0.5 * distance / safe_width, past)
     return jnp.where(below, -magnitude, magnitude)
 
 

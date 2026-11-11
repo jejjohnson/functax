@@ -168,6 +168,14 @@ def from_pixel(transform: Any, rowcol: Any) -> Any:
     return xp.stack([x, y], axis=-1)
 
 
+def _to_dtype(xp: Any, value: Any, dtype: Any) -> Any:
+    """``value`` in ``dtype`` when it is an integer array; anything else unchanged."""
+    value_dtype = getattr(value, "dtype", None)
+    if value_dtype is not None and np.issubdtype(value_dtype, np.integer):
+        return xp.asarray(value, dtype=dtype)
+    return value
+
+
 def slice_transform(
     transform: Any,
     row0: Any,
@@ -205,6 +213,9 @@ def slice_transform(
     Raises:
         GeometryError: If ``transform`` does not end in six.
 
+    Integer arrays of offsets or steps are cast to the transform's dtype
+    first, so a float32 transform stays float32.
+
     Examples:
         >>> import numpy as np
         >>> from functax.geometry import from_pixel, slice_transform
@@ -227,6 +238,12 @@ def slice_transform(
     xp = namespace(transform, row0, col0, row_step, col_step)
     transform = xp.asarray(transform)
     _require_six(transform)
+    # integer arrays of offsets or steps take the transform's dtype, so they
+    # cannot promote a float32 transform (Python ints are weak already)
+    row0, col0, row_step, col_step = (
+        _to_dtype(xp, value, transform.dtype)
+        for value in (row0, col0, row_step, col_step)
+    )
     a, b, c, d, e, f = (transform[..., k] for k in range(6))
     coefficients = (
         a * col_step,

@@ -188,6 +188,14 @@ class TestSliceTransform:
         with pytest.raises(GeometryError, match=r"shape \(\*batch, 6\)"):
             slice_transform(np.zeros(5), 0, 0)
 
+    @pytest.mark.parametrize("backend", [np, jnp], ids=["numpy", "jax"])
+    def test_integer_offsets_keep_a_float32_transform(self, backend: object) -> None:
+        transforms = backend.asarray(_random_transforms(3, seed=27), dtype="float32")
+        offsets = backend.asarray([0, 4, 9], dtype="int64")
+        steps = backend.asarray([1, 2, 3], dtype="int64")
+        chip = slice_transform(transforms, offsets, offsets, steps, steps)
+        assert chip.dtype == np.float32
+
 
 class TestTraces:
     def test_a_concrete_transform_closed_over_under_jit(self) -> None:
