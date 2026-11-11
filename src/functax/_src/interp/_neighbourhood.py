@@ -45,8 +45,9 @@ __all__ = [
 ]
 
 
-# The metrics a neighbour search runs in: planar, or chords between unit vectors
-_SEARCH_METRICS: tuple[str, ...] = ("euclidean", "chord")
+# The metrics a neighbour search runs in: planar, or on unit vectors, where the
+# chord and the great-circle angle order the neighbours the same way
+_SEARCH_METRICS: tuple[str, ...] = ("euclidean", "chord", "geodesic")
 
 
 def scattered_targets(
@@ -101,15 +102,17 @@ def check_scattered_policies(policies: Policies, what: str) -> None:
 def _search_space(
     coordinates: Float[Array, "obs dim"], metric: str, unit: str | None
 ) -> Float[Array, "obs space"]:
-    """The coordinates the search runs in: as given, or unit vectors for a chord."""
+    """The coordinates the search runs in: as given, or unit vectors on the sphere."""
     if metric == "euclidean":
         return coordinates
     if unit is None:
-        msg = "'unit' must be 'degrees' or 'radians' for the 'chord' metric, got None"
+        msg = (
+            f"'unit' must be 'degrees' or 'radians' for the {metric!r} metric, got None"
+        )
         raise ValidationError(msg)
     if coordinates.shape[1] != 2:
         msg = (
-            "the 'chord' metric needs (λ, φ) coordinates, got "
+            f"the {metric!r} metric needs (λ, φ) coordinates, got "
             f"{coordinates.shape[1]} per point"
         )
         raise GeometryError(msg)
@@ -128,6 +131,37 @@ def _tap_distances(
     )
     squared = einx.sum("target tap [c]", difference**2)
     return _safe_norm(squared)
+
+
+def _tap_angles(
+    sources: Float[Array, "source 3"],
+    targets: Float[Array, "target 3"],
+    indices: Int[Array, "target tap"],
+) -> Float[Array, "target tap"]:
+    """θᵢⱼ = atan2(‖u × v‖, u · v), the great-circle angle to each tap.
+
+    The atan2 form is accurate at every angle, as in `geodesic_distance`,
+    and the cross product's norm is guarded at θ = 0, so the gradient there
+    is zero.
+    """
+    neighbours = sources[indices]
+    # u × v, one component at a time, for u a tap and v its target
+    u_x, u_y, u_z = neighbours[..., 0], neighbours[..., 1], neighbours[..., 2]
+    v_x, v_y, v_z = targets[:, 0], targets[:, 1], targets[:, 2]
+    pair = "target tap, target -> target tap"
+    cross_x = einx.multiply(pair, u_y, v_z) - einx.multiply(pair, u_z, v_y)
+    cross_y = einx.multiply(pair, u_z, v_x) - einx.multiply(pair, u_x, v_z)
+    cross_z = einx.multiply(pair, u_x, v_y) - einx.multiply(pair, u_y, v_x)
+    cross_norm = _safe_norm(cross_x**2 + cross_y**2 + cross_z**2)
+    dot = einx.dot("target tap c, target c -> target tap", neighbours, targets)
+    return jnp.arctan2(cross_norm, dot)
+
+
+def _chord_radius(radius: float | None) -> float | None:
+    """The chord 2 sin(r/2) of an arc radius r, or no limit for r ≥ π."""
+    if radius is None or radius >= math.pi:
+        return None
+    return 2.0 * math.sin(0.5 * radius)
 
 
 def _tree_neighbours(
@@ -257,9 +291,12 @@ class InverseDistance(Scheme):
 
     so f̂(x*ᵢ) = ∑ⱼ wᵢⱼ y_{iᵢⱼ}. A target that coincides with a source takes
     that source's value, through the floor. The distance is the source
-    `Points.metric`: ``"euclidean"`` on the coordinates as given, or
-    ``"chord"`` on (λ, φ), the straight line between unit vectors (so the
-    search runs on the sphere, across the dateline and the poles).
+    `Points.metric`: ``"euclidean"`` on the coordinates as given, or, on
+    (λ, φ), ``"chord"``, the straight line c between unit vectors, or
+    ``"geodesic"``, the great-circle angle θ = 2 arcsin(c/2) (haversine IDW).
+    Both sphere metrics search on unit vectors, across the dateline and the
+    poles; c is monotone in θ, so they pick the same neighbours and differ
+    only in the weights.
 
     Algorithm:
         1. Lift the coordinates into the search space (unit vectors for a
@@ -280,11 +317,12 @@ class InverseDistance(Scheme):
     Args:
         k: The number of neighbours, at least 1.
         power: p ≥ 0; 0 gives the unweighted mean of the neighbours.
-        radius: r, the search radius in the metric's units (coordinate units,
-            or the chord of the unit sphere, 2 sin(θ/2) for an angle θ), or
-            ``None`` for no limit.
+        radius: r, the search radius in the metric's units: coordinate units,
+            the chord of the unit sphere (2 sin(θ/2) for an angle θ), or, for
+            ``"geodesic"``, the angle θ in radians of arc (π or more for no
+            limit); ``None`` for no limit.
         floor: ε > 0, the distance below which a neighbour counts as
-            coincident.
+            coincident (in radians under ``"geodesic"``).
 
     Raises:
         ValidationError: If ``k`` is not a positive integer, ``power`` is
@@ -313,6 +351,13 @@ class InverseDistance(Scheme):
         >>> dateline = Points(jnp.array([[180.0, 0.0]]), metric="chord")
         >>> plan = InverseDistance(k=2).plan(lonlat, dateline, unit="degrees")
         >>> sorted(plan.read.indices[0].tolist())
+        [0, 1]
+        >>> # great-circle weights: the same neighbours, weighed by their angles
+        >>> arcs = Points(lonlat.xy, metric="geodesic")
+        >>> arc_plan = InverseDistance(k=2).plan(
+        ...     arcs, Points(dateline.xy, metric="geodesic"), unit="degrees"
+        ... )
+        >>> sorted(arc_plan.read.indices[0].tolist())
         [0, 1]
     """
 
@@ -352,8 +397,9 @@ class InverseDistance(Scheme):
         """H for scattered ``source`` data read at ``target``.
 
         Args:
-            source: `Points` with a ``"euclidean"`` or ``"chord"`` metric;
-                padding points (``valid`` False) are never a neighbour.
+            source: `Points` with a ``"euclidean"``, ``"chord"`` or
+                ``"geodesic"`` metric; padding points (``valid`` False) are
+                never a neighbour.
             target: `Points` (in the source's metric), or an `Axis`, a
                 `RectilinearGrid` or an `AffineGrid` read at its nodes, in the
                 source's coordinates; a grid keeps its shape as
@@ -362,7 +408,8 @@ class InverseDistance(Scheme):
                 with no neighbour; ``missing`` and ``fill_value`` as for any
                 plan.
             unit: ``"degrees"`` or ``"radians"``, the unit of (λ, φ) under the
-                ``"chord"`` metric; unused for ``"euclidean"``.
+                ``"chord"`` and ``"geodesic"`` metrics; unused for
+                ``"euclidean"``.
 
         Returns:
             The `Plan`, with an (M, Q) `Stencil` read-out and the identity fit.
@@ -370,8 +417,8 @@ class InverseDistance(Scheme):
         Raises:
             GeometryError: If the source is not `Points`, its metric is not
                 searchable, the target's metric or dimension differs, or a
-                chord metric meets coordinates that are not (λ, φ).
-            ValidationError: Under the chord metric without ``unit``.
+                sphere metric meets coordinates that are not (λ, φ).
+            ValidationError: Under a sphere metric without ``unit``.
             PolicyError: Under ``outside="clamp"`` or ``"extrapolate"``.
             OutsideDomainError: Under ``outside="raise"`` when a target has no
                 neighbour.
@@ -410,12 +457,18 @@ class InverseDistance(Scheme):
             is_tracer(leaf) for leaf in (sources, targets, source.valid, target_valid)
         )
         search = _brute_force_neighbours if traced else _tree_neighbours
-        indices, found = search(sources, targets, source.valid, n_taps, self.radius)
+        geodesic = source.metric == "geodesic"
+        # the search runs in chords, so an arc radius becomes 2 sin(r/2)
+        radius = _chord_radius(self.radius) if geodesic else self.radius
+        indices, found = search(sources, targets, source.valid, n_taps, radius)
         if target_valid is not None:
             found = einx.logical_and(
                 "target tap, target -> target tap", found, target_valid
             )
-        distances = _tap_distances(sources, targets, indices)
+        if geodesic:
+            distances = _tap_angles(sources, targets, indices)
+        else:
+            distances = _tap_distances(sources, targets, indices)
         stencil = _inverse_distance_stencil(
             distances, indices, found, n_source, self.power, self.floor
         )

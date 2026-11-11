@@ -68,3 +68,9 @@ def test_rejects_bad_geometry_and_policies() -> None:
         scheme.plan(
             Points(SOURCE_XY), Points(TARGET_XY), policies=Policies(outside="clamp")
         )
+
+
+def test_geodesic_needs_a_unit() -> None:
+    points = Points(jnp.zeros((2, 2)), metric="geodesic")
+    with pytest.raises(ValidationError, match="for the 'geodesic' metric"):
+        InverseDistance(k=1).plan(points, points)
