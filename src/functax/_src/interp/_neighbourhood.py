@@ -41,6 +41,7 @@ from functax.exceptions import GeometryError, PolicyError, ValidationError
 __all__ = [
     "InverseDistance",
     "check_scattered_policies",
+    "nearest_sources",
     "scattered_targets",
 ]
 
@@ -248,6 +249,29 @@ def _brute_force_neighbours(
     return indices, found
 
 
+def nearest_sources(
+    sources: Float[Array, "source space"],
+    targets: Float[Array, "target space"],
+    source_valid: Bool[Array, " source"] | None,
+    n_taps: int,
+    radius: float | None,
+) -> tuple[Int[Array, "target tap"], Bool[Array, "target tap"]]:
+    """The Q nearest real sources of each target, nearest first, and which were found.
+
+    A SciPy k-d tree on the host when every coordinate is concrete, a chunked
+    brute force inside the trace otherwise; both give the same neighbours. A
+    neighbour counts when d < r; a missing one (fewer than Q real sources,
+    none within the radius, or a non-finite target) comes back not found.
+
+    Raises:
+        MissingExtraError: If SciPy is missing and the coordinates are
+            concrete.
+    """
+    traced = any(is_tracer(leaf) for leaf in (sources, targets, source_valid))
+    search = _brute_force_neighbours if traced else _tree_neighbours
+    return search(sources, targets, source_valid, n_taps, radius)
+
+
 def _inverse_distance_stencil(
     distances: Float[Array, "target tap"],
     indices: Int[Array, "target tap"],
@@ -453,14 +477,10 @@ class InverseDistance(Scheme):
         targets = _search_space(coordinates, source.metric, unit)
         n_source = source.xy.shape[0]
         n_taps = min(self.k, n_source)
-        traced = any(
-            is_tracer(leaf) for leaf in (sources, targets, source.valid, target_valid)
-        )
-        search = _brute_force_neighbours if traced else _tree_neighbours
         geodesic = source.metric == "geodesic"
         # the search runs in chords, so an arc radius becomes 2 sin(r/2)
         radius = _chord_radius(self.radius) if geodesic else self.radius
-        indices, found = search(sources, targets, source.valid, n_taps, radius)
+        indices, found = nearest_sources(sources, targets, source.valid, n_taps, radius)
         if target_valid is not None:
             found = einx.logical_and(
                 "target tap, target -> target tap", found, target_valid

@@ -3,7 +3,8 @@
 The interpolant f̂(x) = ∑ⱼ cⱼ k(x, xⱼ) + ∑ₚ bₚ pₚ(x) is fitted once per field by
 `KernelSolve` and read at the targets by a dense `KernelReadout`,
 [K* P*], so an `RBF` plan is a `Plan` like any other, with an adjoint and a
-lineax operator.
+lineax operator. With ``neighbors=Q`` each target solves the same system on
+its Q nearest sources instead, and the plan is a sparse `Stencil` of Q taps.
 """
 
 from __future__ import annotations
@@ -23,15 +24,16 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
-from jaxtyping import Array, Bool, Float
+from jaxtyping import Array, Bool, Float, Int
 
 from functax._src.geometry._types import Points, RectilinearGrid
-from functax._src.interp._fit import KernelSolve
+from functax._src.interp._fit import Identity, KernelSolve
 from functax._src.interp._kernels import Kernel, kernel_matrix
+from functax._src.interp._neighbourhood import nearest_sources
 from functax._src.interp._plan import Plan
 from functax._src.interp._policies import Policies
 from functax._src.interp._schemes import Scheme
-from functax._src.interp._stencil import Readout
+from functax._src.interp._stencil import Readout, Stencil
 from functax._src.interp._tensor import _target_coordinates
 from functax._typing import Shape
 from functax.exceptions import GeometryError, PolicyError, ValidationError
@@ -344,6 +346,20 @@ class RBF(Scheme):
     costs O(N² + MN) per field. Every target is valid (a kernel interpolant
     is defined everywhere), so ``outside`` and ``boundary`` do not apply.
 
+    With ``neighbors=Q``, as SciPy's ``RBFInterpolator(neighbors=Q)``, each
+    target i solves the same system on its Q nearest sources 𝒩ᵢ only, with the
+    tail scaled to their bounding box:
+
+        [[K_𝒩ᵢ + λI, P_𝒩ᵢ], [P_𝒩ᵢᵀ, 0]] [c; b] = [y_𝒩ᵢ; 0].
+
+    The read-out is linear in y, f̂(x*ᵢ) = wᵢᵀ y_𝒩ᵢ with wᵢ = 𝒮ᵢᵀ [k*ᵢ; p*ᵢ], so
+    the plan is a `Stencil` of Q taps per target with the identity fit and
+    its own adjoint. Building costs O(M (Q + P)³) and applying O(MQ) per
+    field, so it scales to large gap-fill images. The neighbours come from a
+    SciPy k-d tree on the host (the ``functax[scipy]`` extra) when the
+    coordinates are concrete, and from a chunked brute force inside the trace
+    otherwise, as for `InverseDistance`.
+
     Args:
         kernel: k, any `Kernel`: `Polyharmonic`, `Wendland`, or a callable
             returning an (M, N) array or lineax operator.
@@ -356,11 +372,15 @@ class RBF(Scheme):
         solver: The lineax solver of the inner system on the tail's null
             space; ``None`` (the default) takes ``lineax.Cholesky()``, or
             ``lineax.LU()`` when ``degree`` is below ``min_degree`` and that
-            system may be indefinite.
+            system may be indefinite. With ``neighbors`` it solves each
+            target's system.
+        neighbors: Q, the number of nearest sources each target reads, or
+            ``None`` (the default) for the global solve over all N.
 
     Raises:
         ValidationError: If ``kernel`` is not callable, ``degree`` is below
-            −1, or ``smoothing`` is not a non-negative finite number.
+            −1, ``smoothing`` is not a non-negative finite number, or
+            ``neighbors`` is not ``None`` or a positive integer.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -383,6 +403,17 @@ class RBF(Scheme):
         ...     )
         ... )
         True
+        >>> # a local RBF on the 4 nearest of 9 sources: 4 taps per target
+        >>> import einx
+        >>> rows, cols = jnp.meshgrid(jnp.arange(3.0), jnp.arange(3.0))
+        >>> nine = Points(einx.id("a b, a b -> (a b) (1 + 1)", rows, cols))
+        >>> local = RBF(Polyharmonic(2), neighbors=4).plan(
+        ...     nine, Points(jnp.array([[0.25, 0.5]]))
+        ... )
+        >>> local.read.indices.shape
+        (1, 4)
+        >>> bool(jnp.allclose(local(1.0 + nine.xy[:, 0]), 1.25))
+        True
     """
 
     kernel: Kernel
@@ -390,6 +421,8 @@ class RBF(Scheme):
     degree: int | None = eqx.field(static=True, default=None)
     smoothing: float | int = eqx.field(static=True, default=0.0)
     solver: lx.AbstractLinearSolver | None = None
+    # int | None rather than a narrower type, so a bad value reaches the check
+    neighbors: int | None = eqx.field(static=True, default=None)
 
     def __check_init__(self) -> None:
         if not callable(self.kernel):
@@ -401,6 +434,11 @@ class RBF(Scheme):
             msg = f"'degree' must be None or an integer ≥ −1, got {degree!r}"
             raise ValidationError(msg)
         _check_smoothing(self.smoothing, "smoothing")
+        neighbors = self.neighbors
+        is_count = isinstance(neighbors, int) and not isinstance(neighbors, bool)
+        if neighbors is not None and (not is_count or neighbors < 1):
+            msg = f"'neighbors' must be None or a positive integer, got {neighbors!r}"
+            raise ValidationError(msg)
 
     @property
     def tail_degree(self) -> int:
@@ -422,17 +460,25 @@ class RBF(Scheme):
                 fills non-finite samples before the fit).
 
         Returns:
-            The `Plan`, with a `KernelSolve` fit and a `KernelReadout`.
+            The `Plan`, with a `KernelSolve` fit and a `KernelReadout`; with
+            ``neighbors``, the identity fit and a `Stencil` of
+            Q = min(``neighbors``, N) taps per target.
 
         Raises:
             GeometryError: If the geometries are unsupported.
             PolicyError: Under ``missing="renormalise"``.
             ValidationError: If the tail has as many terms as there are
-                sources, or the kernel returns the wrong shape.
+                sources (or neighbours), or the kernel returns the wrong
+                shape.
+            MissingExtraError: With ``neighbors``, if SciPy (the
+                ``functax[scipy]`` extra) is missing and the coordinates are
+                concrete.
         """
         policies = Policies() if policies is None else policies
         _check_policies(policies)
         degree = self.tail_degree
+        if self.neighbors is not None:
+            return self._local_plan(source, target, policies, degree)
 
         def tail_for(sources: jax.Array) -> Tail | None:
             if degree < 0:
@@ -449,6 +495,60 @@ class RBF(Scheme):
             positive_definite=degree >= getattr(self.kernel, "min_degree", -1),
         )
         return Plan(system.fit, system.read, policies, None, system.target_shape)
+
+    def _local_plan(
+        self, source: Any, target: Any, policies: Policies, degree: int
+    ) -> Plan:
+        """The plan of the RBF on each target's Q nearest sources, as a `Stencil`."""
+        sources = _scattered_source(source)
+        coordinates, valid, target_shape = _targets(target)
+        n_source = sources.shape[0]
+        neighbors = self.neighbors
+        assert neighbors is not None
+        n_taps = min(neighbors, n_source)
+        n_terms = len(_monomial_powers(sources.shape[1], degree)) if degree >= 0 else 0
+        if n_terms >= n_taps:
+            msg = (
+                f"the degree-{degree} tail has {n_terms} terms, so each target "
+                f"needs more than {n_terms} neighbours, got {n_taps}"
+            )
+            raise ValidationError(msg)
+        indices, found = nearest_sources(sources, coordinates, None, n_taps, None)
+        positive_definite = degree >= getattr(self.kernel, "min_degree", -1)
+
+        def tap_weights(
+            point: Float[Array, " dim"], taps: Int[Array, " tap"]
+        ) -> Float[Array, " tap"]:
+            """wᵢ = 𝒮ᵢᵀ [k*ᵢ; p*ᵢ] on the neighbourhood 𝒩ᵢ of one target."""
+            neighbours = sources[taps]
+            point_row = einx.id("dim -> 1 dim", point)
+            # --- the system on 𝒩ᵢ: K̃ = K + λI and P, scaled to its box ---
+            gram = kernel_matrix(self.kernel, neighbours, neighbours)
+            if self.smoothing:
+                identity = jnp.eye(gram.shape[0], dtype=gram.dtype)
+                gram = gram + self.smoothing * identity
+            cross = kernel_matrix(self.kernel, point_row, neighbours)
+            terms = None
+            if degree >= 0:
+                tail = PolynomialTail.from_sources(neighbours, degree)
+                terms = tail(neighbours)
+                cross = einx.id("1 a, 1 b -> 1 (a + b)", cross, tail(point_row))
+            fit = KernelSolve(
+                gram,
+                terms,
+                solver=self.solver,
+                positive_definite=positive_definite,
+            )
+            # f̂(x*ᵢ) = [k*ᵢ p*ᵢ] 𝒮ᵢ y_𝒩ᵢ, so its weights are 𝒮ᵢᵀ [k*ᵢ; p*ᵢ]
+            return fit.apply_adjoint(einx.id("1 coefficient -> coefficient", cross))
+
+        weights = jax.vmap(tap_weights)(coordinates, indices)
+        # a padding or non-finite target reads nothing
+        row_ok = valid & einx.all("target [tap]", found)
+        zero = jnp.zeros((), weights.dtype)
+        weights = einx.where("target, target tap, -> target tap", row_ok, weights, zero)
+        stencil = Stencil(indices, weights, n_source=n_source, valid=row_ok)
+        return Plan(Identity(), stencil, policies, None, target_shape)
 
 
 def _check_smoothing(value: Any, name: str) -> None:
