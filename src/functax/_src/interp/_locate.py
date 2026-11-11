@@ -8,7 +8,8 @@ linearly past the end cells. A descending axis is located on its reversed
 values; a periodic axis of period P first maps x into one period and gains a
 wrap cell between its last node and the first one plus P. An axis of one node
 x₀ has no spacing: u = 0 at x₀, and its edges, when it has them, sit at
-u = ∓½.
+u = ∓½. On an axis with repeats, u is right-continuous: a target at a
+repeated node sits at the last node of the repeat.
 """
 
 from __future__ import annotations
@@ -34,10 +35,12 @@ from functax.exceptions import GeometryError, OutsideDomainError, PolicyError
 __all__ = [
     "check_outside",
     "domain_bounds",
+    "hold_repeated_ends",
     "index_positions",
     "locate",
     "remap_taps",
     "require_cell_widths",
+    "require_no_repeats",
 ]
 
 
@@ -69,6 +72,108 @@ def _rectilinear_positions(
     # t = (x − xᵢ)/(xᵢ₊₁ − xᵢ), outside [0, 1] beyond the end cells
     offset = (positions - left) / (right - left)
     return cell + offset
+
+
+def _repeated_positions(
+    nodes: Float[Array, " node"], positions: Float[Array, "*target"]
+) -> Float[Array, "*target"]:
+    """u on increasing nodes that may repeat: right-continuous, linear past the ends.
+
+    With i the last node such that xᵢ ≤ x, the cell [xᵢ, xᵢ₊₁] has a positive
+    width and u = i + (x − xᵢ)/(xᵢ₊₁ − xᵢ), so a target at a repeat reads its
+    last node. Past the ends, u continues with the width of the outermost
+    cell of positive width: u = (x − x₀)/h_first below x₀ and
+    u = N − 1 + (x − x_{N−1})/h_last from x_{N−1} on.
+    """
+    n_nodes = nodes.shape[0]
+    widths = nodes[1:] - nodes[:-1]
+    # i = searchsorted(x, side="right") − 1, −1 below x₀ and N − 1 from x_{N−1}
+    cell = jnp.searchsorted(nodes, positions, side="right") - 1
+    inner = jnp.clip(cell, 0, n_nodes - 2)
+    left = nodes[inner]
+    width = nodes[inner + 1] - left
+    has_width = width > 0
+    # a zero width is only reached below x₀ or from x_{N−1} on, which do not use it
+    safe_width = jnp.where(has_width, width, jnp.ones((), width.dtype))
+    interior = inner + (positions - left) / safe_width
+    # h_first and h_last, the outermost positive widths (the span is positive)
+    positive = widths > 0
+    first_width = widths[jnp.argmax(positive)]
+    last_width = widths[n_nodes - 2 - jnp.argmax(positive[::-1])]
+    below = (positions - nodes[0]) / first_width
+    above = (n_nodes - 1) + (positions - nodes[-1]) / last_width
+    return jnp.where(cell < 0, below, jnp.where(cell >= n_nodes - 1, above, interior))
+
+
+def hold_repeated_ends(
+    axis: Axis, positions: Float[Array, "*target"]
+) -> Float[Array, "*target"]:
+    """u held at an end of an axis with repeats whose outermost cell has zero width.
+
+    A repeat at an end leaves a piece of one node there, which has no slope
+    to extrapolate with, so ``outside="extrapolate"`` continues it as a
+    constant: u is clipped to 0 below a repeated first node and to N − 1
+    above a repeated last node. Every other axis returns u unchanged.
+
+    Args:
+        axis: The source axis.
+        positions: u, from `index_positions` on ``axis``.
+
+    Returns:
+        u, held at the repeated ends.
+    """
+    n_nodes = axis.values.shape[0]
+    if axis.repeats != "allow" or n_nodes == 1:
+        return positions
+    values = axis.values
+    # in index order, which `index_positions` keeps for a decreasing axis too
+    low_held = values[1] == values[0]
+    high_held = values[-1] == values[-2]
+    # a strict where, so the held side is a constant (zero derivative) at the
+    # end node too, where min and max would split the gradient
+    zero = jnp.zeros((), positions.dtype)
+    last = jnp.asarray(n_nodes - 1, positions.dtype)
+    positions = jnp.where(low_held & (positions < 0), zero, positions)
+    return jnp.where(high_held & (positions >= n_nodes - 1), last, positions)
+
+
+def require_no_repeats(source: Any, reader: str, *, axes: Any = None) -> None:
+    """Raise when an axis that ``reader`` cannot read with repeats has one.
+
+    A concrete axis is checked for a repeat xₖ = xₖ₊₁, which the message
+    names; a traced axis with ``repeats="allow"`` cannot be checked when the
+    plan is built, so it is refused.
+
+    Args:
+        source: The geometry: an `Axis` or a grid with ``axes``.
+        reader: The scheme's name, for the message.
+        axes: The indices of the axes to check; every axis when ``None``.
+
+    Raises:
+        GeometryError: If a checked axis has a repeat, or allows repeats and
+            is traced.
+    """
+    all_axes = (source,) if isinstance(source, Axis) else getattr(source, "axes", ())
+    indices = range(len(all_axes)) if axes is None else axes
+    for index in indices:
+        axis = all_axes[index]
+        if axis.repeats != "allow" or axis.values.shape[0] == 1:
+            continue
+        if is_tracer(axis.values):
+            msg = (
+                f"{reader} cannot read an axis with repeats, and axis {index} "
+                "allows them but is traced, so it cannot be checked"
+            )
+            raise GeometryError(msg)
+        values = np.asarray(axis.values)
+        repeated = np.flatnonzero(values[1:] == values[:-1])
+        if repeated.size:
+            k = int(repeated[0])
+            msg = (
+                f"{reader} cannot read repeated nodes, but axis {index} repeats "
+                f"x[{k}] = x[{k + 1}] = {float(values[k])!r}"
+            )
+            raise GeometryError(msg)
 
 
 def _one_node_positions(
@@ -136,6 +241,9 @@ def index_positions(
     lies in [0, N) on an increasing axis, the cell (N − 1, N) being the wrap
     cell between the last node and the first one plus P. On an axis of one
     node x₀, u = 0 at x₀ and ∓½ at its edges (``sign(x − x₀)`` without edges).
+    On an axis with repeats, u is right-continuous, so a target at a repeat
+    sits at its last node, and past the ends it continues with the outermost
+    cell of positive width.
 
     Args:
         axis: The source axis, increasing or decreasing, maybe periodic.
@@ -168,6 +276,8 @@ def index_positions(
         positions_ascending = _rectilinear_positions(extended, wrapped)
     elif n_nodes == 1:
         return _one_node_positions(axis, positions)
+    elif axis.repeats == "allow":
+        positions_ascending = _repeated_positions(nodes, positions)
     elif not is_tracer(axis.values) and axis.is_regular:
         # u = (x − x₀)/Δ, with Δ from the end nodes
         spacing = (nodes[-1] - nodes[0]) / (n_nodes - 1)

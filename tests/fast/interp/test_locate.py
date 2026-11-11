@@ -13,7 +13,11 @@ import pytest
 from scipy.ndimage import map_coordinates
 
 from functax import GeometryError, OutsideDomainError, PolicyError
-from functax._src.interp._locate import require_cell_widths
+from functax._src.interp._locate import (
+    hold_repeated_ends,
+    require_cell_widths,
+    require_no_repeats,
+)
 from functax.geometry import Axis
 from functax.interp import (
     Policies,
@@ -63,6 +67,60 @@ class TestOneNode:
         require_cell_widths(Axis(jnp.array([1.0]), edges=[0.0, 2.0]), "cells")
         with pytest.raises(GeometryError, match="axis 0 has one node and no 'edges'"):
             require_cell_widths(Axis(jnp.array([1.0])), "cells")
+
+
+class TestRepeats:
+    def test_positions_are_right_continuous(self) -> None:
+        axis = Axis(jnp.array([0.0, 1.0, 1.0, 1.0, 3.0]), repeats="allow")
+        targets = jnp.array([0.5, 1.0, 2.0, 3.0])
+        assert index_positions(axis, targets).tolist() == [0.5, 3.0, 3.5, 4.0]
+
+    def test_positions_past_the_ends_use_the_outer_positive_widths(self) -> None:
+        axis = Axis(jnp.array([0.0, 0.0, 2.0, 4.0, 4.0]), repeats="allow")
+        located = index_positions(axis, jnp.array([-1.0, 0.0, 4.0, 5.0]))
+        assert located.tolist() == [-0.5, 1.0, 4.0, 4.5]
+
+    def test_a_decreasing_axis(self) -> None:
+        axis = Axis(jnp.array([3.0, 1.0, 1.0, 0.0]), repeats="allow")
+        # x = 1 is the repeat; right-continuous in x reads node 1
+        assert index_positions(axis, jnp.array([1.0, 2.0])).tolist() == [1.0, 0.5]
+
+    def test_without_repeats_it_equals_a_strict_axis(self) -> None:
+        values = jnp.array([0.0, 0.5, 2.0, 2.5])
+        targets = jnp.linspace(-1.0, 3.5, 19)
+        np.testing.assert_allclose(
+            index_positions(Axis(values, repeats="allow"), targets),
+            index_positions(Axis(values), targets),
+            rtol=1e-15,
+            atol=1e-15,
+        )
+
+    def test_hold_repeated_ends(self) -> None:
+        axis = Axis(jnp.array([0.0, 0.0, 2.0, 4.0, 4.0]), repeats="allow")
+        held = hold_repeated_ends(axis, jnp.array([-0.5, 1.0, 4.5]))
+        assert held.tolist() == [0.0, 1.0, 4.0]
+        strict = Axis(jnp.array([0.0, 2.0, 4.0]))
+        assert hold_repeated_ends(strict, jnp.array([-0.5, 2.5])).tolist() == [
+            -0.5,
+            2.5,
+        ]
+
+    def test_require_no_repeats_names_the_repeat(self) -> None:
+        require_no_repeats(Axis(jnp.array([0.0, 1.0, 2.0]), repeats="allow"), "Cubic")
+        with pytest.raises(
+            GeometryError, match=r"Cubic cannot read repeated nodes, .* x\[1\] = x\[2\]"
+        ):
+            require_no_repeats(
+                Axis(jnp.array([0.0, 1.0, 1.0, 2.0]), repeats="allow"), "Cubic"
+            )
+
+    def test_require_no_repeats_refuses_a_traced_axis(self) -> None:
+        def build(values: jax.Array) -> jax.Array:
+            require_no_repeats(Axis(values, repeats="allow"), "Cubic")
+            return values
+
+        with pytest.raises(GeometryError, match="allows them but is traced"):
+            jax.jit(build)(jnp.array([0.0, 1.0, 2.0]))
 
 
 class TestLocate:

@@ -36,11 +36,12 @@ from functax._src.interp._fit import Identity
 from functax._src.interp._gaussian import GaussianPlan
 from functax._src.interp._interpolant import Interpolant, fit_interpolant
 from functax._src.interp._kernels import RadialKernel
-from functax._src.interp._locate import require_cell_widths
+from functax._src.interp._locate import require_no_repeats
 from functax._src.interp._plan import Plan
 from functax._src.interp._policies import Policies
 from functax._src.interp._prefilter import prefilter_for
 from functax._src.interp._tensor import (
+    check_local_source,
     coordinates_to_positions,
     source_layout,
     stencil_from_positions,
@@ -161,10 +162,13 @@ class LocalScheme(Scheme):
         """
         policies = Policies() if policies is None else policies
         shape, periodic = source_layout(source)
-        require_cell_widths(source, policies.extent)
         bases = self.bases(len(shape))
+        check_local_source(source, bases, policies)
         coordinates = target_coordinates(source, target)
-        positions = coordinates_to_positions(source, coordinates)
+        extrapolate = policies.outside == "extrapolate"
+        positions = coordinates_to_positions(
+            source, coordinates, extrapolate=extrapolate
+        )
         stencil = stencil_from_positions(
             positions, shape, periodic, bases, policies=policies
         )
@@ -321,6 +325,7 @@ class Linear(LocalScheme):
             return super().plan(source, target, policies=policies)
         policies = Policies() if policies is None else policies
         _check_bridge(source, policies)
+        require_no_repeats(source, "Linear(prior_variance_rate=...)")
         # the ordinary plan first, so the Gaussian one keeps its geometry
         # (derivative) and target shape (windows)
         plan = super().plan(source, target, policies=policies)

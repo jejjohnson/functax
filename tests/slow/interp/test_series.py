@@ -17,11 +17,12 @@ from _harness import (
     assert_transpose_matches,
 )
 
-from functax import PolicyError
+from functax import GeometryError, PolicyError
 from functax.geometry import Axis, Points
 from functax.interp import (
     Akima,
     CubicSpline,
+    Linear,
     NonlinearPlan,
     Pchip,
     Plan,
@@ -321,3 +322,168 @@ class TestPoliciesAndValidation:
             Pchip().plan(self.knots, targets, policies=Policies(missing="renormalise"))(
                 values
             )
+
+
+def _pieces(
+    lengths: tuple[int, ...], seed: int
+) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """Knots and values of pieces of the given lengths, end to end.
+
+    Each piece starts where the last ends, so the joined knots repeat there.
+    """
+    rng = np.random.default_rng(seed)
+    knots, values = [], []
+    start = 0.0
+    for length in lengths:
+        steps = rng.uniform(0.3, 1.0, length - 1)
+        piece = start + np.concatenate([[0.0], np.cumsum(steps)])
+        knots.append(piece)
+        values.append(rng.normal(size=length))
+        start = piece[-1]
+    return knots, values
+
+
+def _piece_reference(scheme, knots: np.ndarray, values: np.ndarray, targets):  # type: ignore[no-untyped-def]
+    """The scheme on one piece alone; SciPy's line and parabola for short not-a-knot."""
+    if isinstance(scheme, CubicSpline) and scheme.bc == "not-a-knot":
+        if knots.size == 2:
+            return np.interp(targets, knots, values)
+        if knots.size == 3:
+            return scipy.interpolate.CubicSpline(knots, values)(targets)
+    plan = scheme.plan(Axis(jnp.asarray(knots)), Points(jnp.asarray(targets)[:, None]))
+    return np.asarray(plan(jnp.asarray(values)))
+
+
+SPLIT_SCHEMES = [
+    Pchip(),
+    Steffen(),
+    Akima(),
+    CubicSpline(),
+    CubicSpline(bc="natural"),
+    CubicSpline(bc="clamped"),
+]
+SPLIT_IDS = ["pchip", "steffen", "akima", "not-a-knot", "natural", "clamped"]
+
+
+class TestRepeatedKnots:
+    """A repeat splits the axis, and each piece is read as an axis of its own (#117)."""
+
+    @pytest.mark.parametrize("scheme", SPLIT_SCHEMES, ids=SPLIT_IDS)
+    @pytest.mark.parametrize("descending", [False, True])
+    def test_each_piece_equals_the_scheme_on_it_alone(
+        self, scheme, descending: bool
+    ) -> None:  # type: ignore[no-untyped-def]
+        # pieces of 7, 1, 2, 3, 4 and 6 knots, so every short-piece rule runs
+        knots, values = _pieces((7, 1, 2, 3, 4, 6), seed=100)
+        nodes = np.concatenate(knots)
+        data = np.concatenate(values)
+        targets, expected = [], []
+        for piece_knots, piece_values in zip(knots, values, strict=True):
+            if piece_knots.size < 2:
+                continue
+            # right-open: the right end of a piece is read by the next piece
+            inside = np.linspace(piece_knots[0], piece_knots[-1], 17)[:-1]
+            targets.append(inside)
+            expected.append(_piece_reference(scheme, piece_knots, piece_values, inside))
+        targets = np.concatenate(targets)
+        if descending:
+            nodes, data = nodes[::-1], data[::-1]
+        axis = Axis(jnp.asarray(nodes), repeats="allow")
+        plan = scheme.plan(axis, Points(jnp.asarray(targets)[:, None]))
+        assert_matches_oracle(
+            plan(jnp.asarray(data)), np.concatenate(expected), rtol=1e-12, atol=1e-13
+        )
+
+    @pytest.mark.parametrize("scheme", SPLIT_SCHEMES, ids=SPLIT_IDS)
+    def test_a_repeat_reads_its_last_knot(self, scheme) -> None:  # type: ignore[no-untyped-def]
+        axis = Axis(jnp.array([0.0, 0.5, 1.0, 1.0, 1.7, 2.5, 3.0]), repeats="allow")
+        data = jnp.array([0.0, 1.0, 2.0, 5.0, 6.0, 4.0, 7.0])
+        plan = scheme.plan(axis, Points(jnp.array([[1.0], [3.0]])))
+        assert_matches_oracle(plan(data), np.array([5.0, 7.0]), rtol=1e-14)
+
+    @pytest.mark.parametrize("scheme", SPLIT_SCHEMES, ids=SPLIT_IDS)
+    def test_without_repeats_it_equals_a_strict_axis(self, scheme) -> None:  # type: ignore[no-untyped-def]
+        knots, data = _axis_and_data(seed=101)
+        targets = Points(jnp.asarray(np.linspace(knots[0], knots[-1], 31))[:, None])
+        strict = scheme.plan(Axis(jnp.asarray(knots)), targets)
+        allowing = scheme.plan(Axis(jnp.asarray(knots), repeats="allow"), targets)
+        assert_matches_oracle(
+            allowing(jnp.asarray(data)), strict(jnp.asarray(data)), rtol=1e-12
+        )
+
+    def test_extrapolation_holds_a_repeated_end(self) -> None:
+        axis = Axis(jnp.array([0.0, 0.0, 1.0, 2.0, 3.0, 3.0]), repeats="allow")
+        data = jnp.array([9.0, 0.0, 1.0, 4.0, 9.0, -2.0])
+        plan = Pchip().plan(
+            axis,
+            Points(jnp.array([[-1.0], [3.0], [4.0]])),
+            policies=Policies(outside="extrapolate"),
+        )
+        assert plan(data).tolist() == [9.0, -2.0, -2.0]
+
+    @pytest.mark.parametrize("scheme", SPLIT_SCHEMES, ids=SPLIT_IDS)
+    def test_knots_traced_under_vmap_and_finite_gradients(self, scheme) -> None:  # type: ignore[no-untyped-def]
+        knots, values = _pieces((5, 4), seed=102)
+        nodes = jnp.asarray(np.concatenate(knots))
+        data = jnp.asarray(np.concatenate(values))
+        targets = jnp.linspace(nodes[0], nodes[-1], 13)[:, None]
+
+        def read(knots: jax.Array, data: jax.Array) -> jax.Array:
+            return scheme.fit(Axis(knots, repeats="allow"), data)(targets)
+
+        eager = read(nodes, data)
+        batched = jax.vmap(read)(jnp.stack([nodes, nodes]), jnp.stack([data, data]))
+        assert_matches_oracle(batched[1], eager, rtol=1e-14)
+        gradient = jax.grad(lambda k, y: read(k, y).sum(), argnums=(0, 1))
+        knots_gradient, data_gradient = gradient(nodes, data)
+        assert bool(jnp.all(jnp.isfinite(knots_gradient)))
+        assert bool(jnp.all(jnp.isfinite(data_gradient)))
+
+    def test_cubic_spline_is_still_linear(self) -> None:
+        knots, _ = _pieces((5, 2, 4), seed=103)
+        axis = Axis(jnp.asarray(np.concatenate(knots)), repeats="allow")
+        targets = Points(jnp.asarray(np.linspace(0.0, 4.0, 21))[:, None])
+        plan = CubicSpline().plan(axis, targets)
+        operator = plan.operator()
+        assert_adjoint(
+            lambda y: operator.mv(y), plan.adjoint, 11, 21, key=jax.random.key(104)
+        )
+
+    def test_periodic_spline_names_the_repeat(self) -> None:
+        axis = Axis(jnp.array([0.0, 1.0, 1.0, 2.0, 3.0]), repeats="allow")
+        with pytest.raises(GeometryError, match=r"bc='periodic'.* x\[1\] = x\[2\]"):
+            CubicSpline(bc="periodic").plan(axis, Points(jnp.array([[0.5]])))
+
+    @pytest.mark.parametrize("scheme", [Linear(), Pchip()], ids=["linear", "pchip"])
+    def test_a_float32_cdf_inverse_with_repeats_matches_float64(self, scheme) -> None:  # type: ignore[no-untyped-def]
+        # gauss_flows's HistogramCDF: 1000 samples in 128 bins, counts + 1e-6,
+        # whose float32 CDF repeats in the empty tail bins near 1
+        samples = np.random.default_rng(105).normal(size=1000)
+        edges = np.linspace(samples.min(), samples.max(), 129)
+        counts = np.histogram(samples, edges)[0] + 1e-6
+        cdf64 = np.concatenate([[0.0], np.cumsum(counts)])
+        cdf64 = cdf64 / cdf64[-1]
+        cdf32 = cdf64.astype(np.float32)
+        assert np.any(np.diff(cdf32) == 0)
+        # the inverse at the samples' own CDF values, as the round trip reads it
+        levels = np.interp(samples, edges, cdf64).astype(np.float32)
+        inverse32 = scheme.fit(
+            Axis(jnp.asarray(cdf32), repeats="allow"), jnp.asarray(edges, jnp.float32)
+        )(jnp.asarray(levels)[:, None])
+        inverse64 = scheme.fit(Axis(jnp.asarray(cdf64)), jnp.asarray(edges))(
+            jnp.asarray(levels.astype(np.float64))[:, None]
+        )
+        assert inverse32.dtype == jnp.float32
+        if isinstance(scheme, Linear):
+            assert_matches_oracle(inverse32, inverse64, rtol=0.0, atol=1e-5)
+            return
+        # PCHIP's slopes within two cells of a repeat are a piece's end slopes,
+        # where float64 still sees cells 1e-6 wide; elsewhere they agree
+        cell = np.searchsorted(cdf32, levels, side="right") - 1
+        repeat = np.diff(cdf32) == 0
+        near = np.array([repeat[max(k - 2, 0) : k + 3].any() for k in cell])
+        assert_matches_oracle(inverse32, inverse64, rtol=0.0, atol=1e-5, where=~near)
+        # and the round trip to the samples is no worse than float64's
+        error32 = np.abs(np.asarray(inverse32) - samples).max()
+        error64 = np.abs(np.asarray(inverse64) - samples).max()
+        assert error32 <= error64 + 1e-5

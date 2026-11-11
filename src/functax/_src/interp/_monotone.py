@@ -21,6 +21,7 @@ import jax.numpy as jnp
 
 __all__ = [
     "akima_slopes",
+    "akima_totals",
     "pchip_slopes",
     "steffen_slopes",
 ]
@@ -79,21 +80,15 @@ def pchip_slopes(nodes: jax.Array, values: jax.Array) -> jax.Array:
     return einx.id(", n, -> (1 + n + 1)", first, interior, last)
 
 
-def akima_slopes(nodes: jax.Array, values: jax.Array) -> jax.Array:
-    """Akima's slopes, as SciPy's ``Akima1DInterpolator(method="akima")``.
+def _akima_jumps(
+    nodes: jax.Array, values: jax.Array
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """The extended secants and Akima's weights f₂ = |mₖ₋₁ − mₖ₋₂|, f₁ = |mₖ₊₁ − mₖ|.
 
-    The secants are extended by two on each side (m₋₁ = 2m₀ − m₁, …); with
-    f₁ = |mₖ₊₁ − mₖ| and f₂ = |mₖ₋₁ − mₖ₋₂|, the slope is
-    mₖ₋₁ + f₂/(f₁ + f₂) (mₖ − mₖ₋₁) where f₁ + f₂ exceeds 10⁻⁹ of its
-    maximum, and the mean of the outer secants elsewhere.
-
-    References:
-        Akima, H. (1970). A new method of interpolation and smooth curve
-        fitting based on local procedures. Journal of the ACM 17(4), 589-602.
+    The secants are extended by two on each side, continuing the end
+    differences (m₋₁ = 2m₀ − m₁, m₋₂ = 2m₋₁ − m₀, and the same at the end).
     """
     _, secants = _secants(nodes, values)
-    if nodes.shape[0] == 2:
-        return einx.id("1, 1 -> (1 + 1)", secants, secants)
     # two extra secants at each end, continuing the end differences
     left = 2.0 * secants[0] - secants[1]
     far_left = 2.0 * left - secants[0]
@@ -103,10 +98,48 @@ def akima_slopes(nodes: jax.Array, values: jax.Array) -> jax.Array:
         ", , n, , -> (1 + 1 + n + 1 + 1)", far_left, left, secants, right, far_right
     )
     jumps = jnp.abs(extended[1:] - extended[:-1])
-    after = jumps[2:]
-    before = jumps[:-2]
+    return extended, jumps[:-2], jumps[2:]
+
+
+def akima_totals(nodes: jax.Array, values: jax.Array) -> jax.Array:
+    """f₁ + f₂ at each knot, whose maximum sets where Akima's slope is defined.
+
+    Zero on two knots, where `akima_slopes` takes the secant.
+    """
+    if nodes.shape[0] == 2:
+        return jnp.zeros(2, values.dtype)
+    _, before, after = _akima_jumps(nodes, values)
+    return after + before
+
+
+def akima_slopes(
+    nodes: jax.Array, values: jax.Array, scale: jax.Array | None = None
+) -> jax.Array:
+    """Akima's slopes, as SciPy's ``Akima1DInterpolator(method="akima")``.
+
+    The secants are extended by two on each side (m₋₁ = 2m₀ − m₁, …); with
+    f₁ = |mₖ₊₁ − mₖ| and f₂ = |mₖ₋₁ − mₖ₋₂|, the slope is
+    mₖ₋₁ + f₂/(f₁ + f₂) (mₖ − mₖ₋₁) where f₁ + f₂ exceeds 10⁻⁹ of its
+    maximum, and the mean of the outer secants elsewhere.
+
+    Args:
+        nodes: x, increasing, (N,).
+        values: y, (N,).
+        scale: The maximum of f₁ + f₂ that the 10⁻⁹ threshold is relative
+            to; that of these knots when ``None``. A piece of a longer axis
+            passes the maximum over the piece.
+
+    References:
+        Akima, H. (1970). A new method of interpolation and smooth curve
+        fitting based on local procedures. Journal of the ACM 17(4), 589-602.
+    """
+    _, secants = _secants(nodes, values)
+    if nodes.shape[0] == 2:
+        return einx.id("1, 1 -> (1 + 1)", secants, secants)
+    extended, before, after = _akima_jumps(nodes, values)
     total = after + before
-    defined = total > 1e-9 * jnp.max(total)
+    largest = jnp.max(total) if scale is None else scale
+    defined = total > 1e-9 * largest
     # the fallback where the slope is not defined: the mean of the outer secants
     mean = 0.5 * (extended[3:] + extended[:-3])
     blended = extended[1:-2] + (before / _safe(total, defined)) * (

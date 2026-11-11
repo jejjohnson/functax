@@ -25,11 +25,11 @@ from jaxtyping import Array, Float
 from functax._src.geometry._types import Points
 from functax._src.interp._derivative import LocalGeometry
 from functax._src.interp._fit import Identity
-from functax._src.interp._locate import require_cell_widths
 from functax._src.interp._plan import Plan
 from functax._src.interp._policies import Policies
 from functax._src.interp._prefilter import prefilter_for
 from functax._src.interp._tensor import (
+    check_local_source,
     coordinates_to_positions,
     source_layout,
     stencil_from_positions,
@@ -84,9 +84,12 @@ class Interpolant(eqx.Module):
     def _read_plan(self, coordinates: Float[Array, "target dim"]) -> Plan:
         """The plan that reads the coefficients (not the data) at the coordinates."""
         shape, periodic = source_layout(self.source)
-        require_cell_widths(self.source, self.policies.extent)
         bases = self.scheme.bases(len(shape))
-        positions = coordinates_to_positions(self.source, coordinates)
+        check_local_source(self.source, bases, self.policies)
+        extrapolate = self.policies.outside == "extrapolate"
+        positions = coordinates_to_positions(
+            self.source, coordinates, extrapolate=extrapolate
+        )
         stencil = stencil_from_positions(
             positions, shape, periodic, bases, policies=self.policies
         )

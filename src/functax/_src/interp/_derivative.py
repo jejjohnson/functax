@@ -95,8 +95,12 @@ def derivative_stencil(
     if policies.outside == "raise":
         policies = dataclasses.replace(policies, outside="nan")
 
+    extrapolate = policies.outside == "extrapolate"
+
     def weights(coordinates: jax.Array) -> jax.Array:
-        positions = coordinates_to_positions(geometry.source, coordinates)
+        positions = coordinates_to_positions(
+            geometry.source, coordinates, extrapolate=extrapolate
+        )
         rebuilt = stencil_from_positions(
             positions, shape, periodic, geometry.bases, policies=policies
         )
