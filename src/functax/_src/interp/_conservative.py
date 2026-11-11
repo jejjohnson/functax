@@ -36,7 +36,7 @@ from functax._src.geometry._types import (
 )
 from functax._src.interp._clip import cell_overlaps
 from functax._src.interp._fit import Identity
-from functax._src.interp._locate import check_outside
+from functax._src.interp._locate import check_outside, require_no_repeats
 from functax._src.interp._overlap import OverlapBand, overlap_band
 from functax._src.interp._plan import Plan
 from functax._src.interp._policies import Policies
@@ -442,6 +442,8 @@ class Conservative(Scheme):
             MissingExtraError: On the polygon path without SciPy.
         """
         policies = Policies() if policies is None else policies
+        require_no_repeats(source, "Conservative")
+        require_no_repeats(target, "Conservative")
         curvilinear = isinstance(source, CurvilinearGrid) or isinstance(
             target, CurvilinearGrid
         )

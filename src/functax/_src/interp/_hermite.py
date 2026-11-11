@@ -63,7 +63,7 @@ def ascending_axis(axis: Axis) -> tuple[Axis, bool]:
         return axis, False
     ends = np.asarray(values)[[0, -1]]
     if bool(ends[0] > ends[1]):
-        return Axis(values[::-1]), True
+        return Axis(values[::-1], repeats=axis.repeats), True
     return axis, False
 
 
@@ -120,7 +120,9 @@ def hermite_stencil(
         coordinates: x, the M target coordinates.
         policies: The outside rules; ``boundary`` does not apply (every tap is
             a real knot of the cell), and outside the knots the end cubic is
-            continued under ``extrapolate``.
+            continued under ``extrapolate``. On an axis with repeats, a
+            repeat at an end leaves a piece of one knot there, which is
+            continued as a constant.
 
     Returns:
         The `Stencil` on 2N coefficients: taps i, i + 1 (values) and N + i,
@@ -142,6 +144,9 @@ def hermite_stencil(
     cell = cell.astype(jnp.int32)
     # hᵢ = xᵢ₊₁ − xᵢ
     width = nodes[cell + 1] - nodes[cell]
+    if axis.repeats == "allow":
+        # a cell of zero width is only reached past a repeated end: hold its knot
+        offset = jnp.where(width > 0, offset, jnp.clip(offset, 0.0, 1.0))
     t2 = offset * offset
     t3 = t2 * offset
     # h₀₀, h₀₁ on the values; h₁₀ hᵢ, h₁₁ hᵢ on the slopes

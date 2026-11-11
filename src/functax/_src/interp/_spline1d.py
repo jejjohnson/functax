@@ -30,6 +30,7 @@ from functax.exceptions import ValidationError
 __all__ = [
     "SPLINE_CONDITIONS",
     "SPLINE_SLOPES",
+    "solve_tridiagonal",
     "spline_slopes",
 ]
 
@@ -46,7 +47,7 @@ MINIMUM_KNOTS: dict[str, int] = {
 }
 
 
-def _solve(
+def solve_tridiagonal(
     lower: jax.Array, diagonal: jax.Array, upper: jax.Array, rhs: jax.Array
 ) -> jax.Array:
     """x with T x = rhs, T tridiagonal (lower[0] and upper[-1] ignored)."""
@@ -126,7 +127,7 @@ def spline_slopes(nodes: jax.Array, values: jax.Array, *, condition: str) -> jax
             first, (lower, diagonal, upper, rhs), last, strict=True
         )
     ]
-    return _solve(*pieces)
+    return solve_tridiagonal(*pieces)
 
 
 def _periodic_slopes(widths: jax.Array, secants: jax.Array) -> jax.Array:
@@ -148,8 +149,8 @@ def _periodic_slopes(widths: jax.Array, secants: jax.Array) -> jax.Array:
     modified = modified.at[n - 1].add(-corner_low * corner_high / gamma)
     u = jnp.zeros(n, widths.dtype).at[0].set(gamma).at[n - 1].set(corner_high)
     v = jnp.zeros(n, widths.dtype).at[0].set(1.0).at[n - 1].set(corner_low / gamma)
-    base = _solve(lower, modified, upper, rhs)
-    correction = _solve(lower, modified, upper, u)
+    base = solve_tridiagonal(lower, modified, upper, rhs)
+    correction = solve_tridiagonal(lower, modified, upper, u)
     # x = y − (vᵀ y) / (1 + vᵀ z) z
     scale = jnp.dot(v, base) / (1.0 + jnp.dot(v, correction))
     slopes = base - scale * correction

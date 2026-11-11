@@ -42,6 +42,8 @@ __all__ = [
 type Metric = Literal["euclidean", "chord", "geodesic"]
 """The distance a point set's neighbours are measured in."""
 
+_REPEATS: tuple[str, ...] = ("forbid", "allow")
+
 _METRICS: tuple[str, ...] = ("euclidean", "chord", "geodesic")
 
 # The resolutions `Axis.to_datetimes` rounds to; each divides one second.
@@ -87,6 +89,13 @@ class Axis(eqx.Module):
     allowed (wavelength from wavenumber). Times are stored as float seconds
     since ``epoch``; `from_datetimes` converts them on the host.
 
+    With ``repeats="allow"`` the nodes need only be non-decreasing (or
+    non-increasing), so a repeat xₖ = xₖ₊₁ makes a cell of zero width, where
+    a piecewise read-out may jump. Reads are right-continuous in x: a target
+    at a repeated node reads the last node of the repeat, as ``numpy.interp``
+    does. Not every scheme reads repeats; those that do not raise a
+    `GeometryError` naming the repeat.
+
     An axis of one node x₀ (a single time step, a raster one row thick) has
     no spacing, so it carries no direction and `cell_edges` needs explicit
     ``edges``. A scheme reads it with weight 1 on its node: under
@@ -106,10 +115,16 @@ class Axis(eqx.Module):
             ``values`` and spanning at most P on a periodic axis; ``None``
             for the midpoints between nodes (`cell_edges`). Kept in the dtype
             they arrive in. Conservative remapping reads them.
+        repeats: ``"forbid"`` (the default) for strictly monotone nodes, or
+            ``"allow"`` for non-decreasing or non-increasing ones with
+            repeats. The nodes must still span a positive width, and a
+            periodic axis cannot have repeats.
 
     Raises:
         GeometryError: If ``values`` is not 1-D, is empty, is not floating,
-            is not strictly monotone, or spans P or more; if ``period`` is
+            is not strictly monotone (monotone with a positive span under
+            ``repeats="allow"``), or spans P or more; if ``repeats`` is
+            unknown or set on a periodic axis; if ``period`` is
             not positive and finite; if ``epoch`` is not a time;
             if ``edges`` is not 1-D with n + 1 floating entries, or (when
             concrete) is not strictly monotone in the direction of ``values``
@@ -133,6 +148,10 @@ class Axis(eqx.Module):
         ... )
         >>> latitude.edges.shape
         (181,)
+        >>> # a float32 CDF that repeats its last value
+        >>> cdf = Axis(jnp.array([0.0, 0.5, 1.0, 1.0]), repeats="allow")
+        >>> cdf.repeats
+        'allow'
         >>> # one time step, as a grid one node thick
         >>> Axis(jnp.array([3600.0])).values.shape
         (1,)
@@ -142,6 +161,7 @@ class Axis(eqx.Module):
     period: float | None = eqx.field(static=True)
     epoch: str | None = eqx.field(static=True)
     edges: Float[Array, " edge"] | None
+    repeats: str = eqx.field(static=True)
 
     def __init__(
         self,
@@ -150,6 +170,7 @@ class Axis(eqx.Module):
         period: float | int | None = None,
         epoch: Any = None,
         edges: ArrayLike | Sequence[float] | None = None,
+        repeats: str = "forbid",
     ) -> None:
         values = jnp.asarray(values)
         if values.ndim != 1:
@@ -164,14 +185,28 @@ class Axis(eqx.Module):
             if not (np.isfinite(period) and period > 0.0):
                 msg = f"'period' must be positive and finite, got {period!r}"
                 raise GeometryError(msg)
+        if repeats not in _REPEATS:
+            msg = f"'repeats' must be one of {list(_REPEATS)}, got {repeats!r}"
+            raise GeometryError(msg)
+        if repeats == "allow" and period is not None:
+            msg = "a periodic Axis cannot have repeats; use repeats='forbid'"
+            raise GeometryError(msg)
 
         # Δₖ = xₖ₊₁ − xₖ, all of one sign
         spacing = jnp.diff(values)
-        increasing = jnp.all(spacing > 0)
-        decreasing = jnp.all(spacing < 0)
-        values = _check_values(
-            values, ~(increasing | decreasing), "'values' must be strictly monotone"
-        )
+        if repeats == "forbid":
+            increasing = jnp.all(spacing > 0)
+            decreasing = jnp.all(spacing < 0)
+            message = "'values' must be strictly monotone"
+        else:
+            # Δₖ ≥ 0 (or ≤ 0) for every k, and the span x_last − x_first ≠ 0
+            positive_span = values[-1] != values[0]
+            increasing = jnp.all(spacing >= 0) & positive_span
+            decreasing = jnp.all(spacing <= 0) & positive_span
+            message = "'values' must be monotone with a positive span"
+            if values.shape[0] == 1:
+                increasing = jnp.ones((), dtype=bool)
+        values = _check_values(values, ~(increasing | decreasing), message)
         if period is not None:
             # |x_last − x_first| < P, or two nodes would be the same point
             span = jnp.abs(values[-1] - values[0])
@@ -183,6 +218,7 @@ class Axis(eqx.Module):
         self.period = period
         self.epoch = None if epoch is None else _as_epoch(epoch)
         self.edges = None if edges is None else jnp.asarray(edges)
+        self.repeats = repeats
 
     def __check_init__(self) -> None:
         if self.edges is None:
@@ -206,7 +242,8 @@ class Axis(eqx.Module):
         if values.shape[0] == 1:
             direction = steps[0] if steps[0] != 0 else 1.0
         else:
-            direction = np.sign(values[1] - values[0])
+            # the ends, since repeats may make the first step zero
+            direction = np.sign(values[-1] - values[0])
         if not np.all(steps == direction):
             msg = (
                 "'edges' must be strictly monotone in the direction of 'values', "

@@ -27,7 +27,14 @@ from jaxtyping import Array, Float
 
 from functax._src.geometry._types import AffineGrid, Axis, Points, RectilinearGrid
 from functax._src.interp._hermite import HermiteFit, ascending_axis, hermite_stencil
+from functax._src.interp._locate import require_no_repeats
 from functax._src.interp._monotone import akima_slopes, pchip_slopes, steffen_slopes
+from functax._src.interp._pieces import (
+    PIECEWISE_SPLINE_SLOPES,
+    piecewise_akima_slopes,
+    piecewise_pchip_slopes,
+    piecewise_steffen_slopes,
+)
 from functax._src.interp._plan import Plan
 from functax._src.interp._policies import Policies
 from functax._src.interp._schemes import Scheme
@@ -171,6 +178,10 @@ class SeriesScheme(Scheme):
     def _slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
         """m = slopes(x, y) for increasing knots."""
 
+    @abc.abstractmethod
+    def _piecewise_slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
+        """m = slopes(x, y) for non-decreasing knots, piece by piece between repeats."""
+
     def _minimum_knots(self) -> int:
         return 2
 
@@ -182,8 +193,14 @@ class SeriesScheme(Scheme):
     ) -> Plan:
         """The plan that reads data on the ``source`` axis at ``target``.
 
+        On an axis with repeats (``Axis(..., repeats="allow")``), each piece
+        between repeats gets the slopes the scheme gives it as an axis of its
+        own, with the scheme's end rules at both of its ends, and a read-out
+        at a repeat is right-continuous.
+
         Args:
-            source: An `Axis`, increasing or decreasing, not periodic.
+            source: An `Axis`, increasing or decreasing, not periodic, maybe
+                with repeats.
             target: `Points` with one coordinate, or an `Axis`.
             policies: The outside rules; ``boundary`` does not apply.
 
@@ -191,7 +208,8 @@ class SeriesScheme(Scheme):
             A `Plan` for the cubic spline, a `NonlinearPlan` otherwise.
 
         Raises:
-            GeometryError: If ``source`` is not an `Axis`.
+            GeometryError: If ``source`` is not an `Axis`, or a periodic
+                cubic spline meets a repeat.
             ValidationError: If the axis has too few knots for the scheme.
         """
         policies = Policies() if policies is None else policies
@@ -211,7 +229,13 @@ class SeriesScheme(Scheme):
             period = ascending.values[-1] - first
             coordinates = first + jnp.mod(coordinates - first, period)
         stencil = hermite_stencil(ascending, coordinates, policies)
-        fit = HermiteFit(ascending.values, self._slopes(), reversed_axis, self.linear)
+        if source.repeats == "allow":
+            if self._periodic():
+                require_no_repeats(source, "CubicSpline(bc='periodic')")
+            slopes = self._slopes() if self._periodic() else self._piecewise_slopes()
+        else:
+            slopes = self._slopes()
+        fit = HermiteFit(ascending.values, slopes, reversed_axis, self.linear)
         is_grid = isinstance(target, RectilinearGrid | AffineGrid)
         target_shape = target.shape if is_grid else None
         if self.linear:
@@ -265,6 +289,9 @@ class CubicSpline(SeriesScheme):
     def _slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
         return SPLINE_SLOPES[self.bc]
 
+    def _piecewise_slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
+        return PIECEWISE_SPLINE_SLOPES[self.bc]
+
     def _minimum_knots(self) -> int:
         return MINIMUM_KNOTS[self.bc]
 
@@ -287,6 +314,9 @@ class Pchip(SeriesScheme):
     def _slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
         return pchip_slopes
 
+    def _piecewise_slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
+        return piecewise_pchip_slopes
+
 
 class Akima(SeriesScheme):
     """Akima's local cubic, as SciPy's ``Akima1DInterpolator(method="akima")``.
@@ -308,6 +338,9 @@ class Akima(SeriesScheme):
     def _slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
         return akima_slopes
 
+    def _piecewise_slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
+        return piecewise_akima_slopes
+
 
 class Steffen(SeriesScheme):
     """Steffen's monotone cubic: no overshoot between knots, by construction.
@@ -328,3 +361,6 @@ class Steffen(SeriesScheme):
 
     def _slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
         return steffen_slopes
+
+    def _piecewise_slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
+        return piecewise_steffen_slopes

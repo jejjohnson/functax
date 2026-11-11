@@ -12,7 +12,16 @@ import pytest
 
 from functax import GeometryError, OutsideDomainError, PolicyError, ValidationError
 from functax.geometry import AffineGrid, Axis, Points, RectilinearGrid
-from functax.interp import Cubic, Fit, Linear, Nearest, Plan, Policies, Tensor
+from functax.interp import (
+    Conservative,
+    Cubic,
+    Fit,
+    Linear,
+    Nearest,
+    Plan,
+    Policies,
+    Tensor,
+)
 
 
 def _rectilinear(
@@ -205,3 +214,63 @@ class TestOneNodeAxis:
         field = Linear().fit(grid, jnp.zeros(3), policies=cells)
         with pytest.raises(GeometryError, match="axis 0 has one node"):
             field(targets)
+
+
+class TestRepeatedNodes:
+    """Nearest and Linear read an axis with repeats; the others refuse it (#117)."""
+
+    def test_linear_equals_numpy_interp(self) -> None:
+        nodes = np.array([0.0, 0.5, 1.0, 1.0, 2.0, 2.0, 2.0, 3.0])
+        values = np.random.default_rng(90).normal(size=nodes.size)
+        targets = np.concatenate([np.linspace(0.0, 3.0, 25), nodes])
+        axis = Axis(jnp.asarray(nodes), repeats="allow")
+        plan = Linear().plan(axis, Points(jnp.asarray(targets)[:, None]))
+        np.testing.assert_allclose(
+            plan(jnp.asarray(values)),
+            np.interp(targets, nodes, values),
+            rtol=1e-14,
+            atol=1e-14,
+        )
+
+    def test_linear_reads_the_last_node_of_a_repeat(self) -> None:
+        axis = Axis(jnp.array([0.0, 0.5, 1.0, 1.0]), repeats="allow")
+        plan = Linear().plan(axis, Points(jnp.array([[0.75], [1.0]])))
+        assert plan(jnp.array([0.0, 1.0, 2.0, 5.0])).tolist() == [1.5, 5.0]
+
+    def test_nearest_is_right_continuous(self) -> None:
+        axis = Axis(jnp.array([0.0, 1.0, 1.0, 2.0]), repeats="allow")
+        plan = Nearest().plan(axis, Points(jnp.array([[0.9], [1.0], [1.4]])))
+        assert plan(jnp.array([0.0, 1.0, 3.0, 4.0])).tolist() == [1.0, 3.0, 3.0]
+
+    def test_extrapolation_holds_a_repeated_end(self) -> None:
+        axis = Axis(jnp.array([0.0, 0.5, 1.0, 1.0]), repeats="allow")
+        plan = Linear().plan(
+            axis,
+            Points(jnp.array([[-0.5], [1.5]])),
+            policies=Policies(outside="extrapolate"),
+        )
+        # below: the line through the first cell; above: the one-node piece
+        assert plan(jnp.array([0.0, 1.0, 2.0, 5.0])).tolist() == [-1.0, 5.0]
+
+    def test_a_held_end_has_zero_slope(self) -> None:
+        axis = Axis(jnp.array([0.0, 1.0, 2.0, 3.0, 3.0]), repeats="allow")
+        plan = Linear().plan(
+            axis,
+            Points(jnp.array([[2.5], [3.0], [3.5]])),
+            policies=Policies(outside="extrapolate"),
+        )
+        slopes = plan.derivative(0)(jnp.array([1.0, 2.0, 4.0, 7.0, 20.0]))
+        assert slopes.tolist() == [3.0, 0.0, 0.0]
+
+    def test_other_schemes_name_the_repeat(self) -> None:
+        axis = Axis(jnp.array([0.0, 1.0, 1.0, 2.0]), repeats="allow")
+        targets = Points(jnp.array([[0.5]]))
+        with pytest.raises(GeometryError, match=r"CubicBasis .* x\[1\] = x\[2\]"):
+            Cubic().plan(axis, targets)
+        with pytest.raises(GeometryError, match="Conservative cannot read repeated"):
+            Conservative().plan(axis, Axis(jnp.array([0.5, 1.5])))
+        # Tensor checks each axis with its own scheme
+        grid = RectilinearGrid((axis, Axis(jnp.arange(4.0), repeats="allow")))
+        Tensor((Linear(), Cubic())).plan(grid, Points(jnp.array([[0.5, 1.5]])))
+        with pytest.raises(GeometryError, match="axis 0 repeats"):
+            Tensor((Cubic(), Linear())).plan(grid, Points(jnp.array([[0.5, 1.5]])))

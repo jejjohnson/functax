@@ -30,14 +30,16 @@ from functax._src.geometry._types import (
     Points,
     RectilinearGrid,
 )
-from functax._src.interp._bases import Basis
+from functax._src.interp._bases import Basis, LinearBasis, NearestBasis
 from functax._src.interp._curvilinear import curvilinear_positions
 from functax._src.interp._locate import (
     check_outside,
     domain_bounds,
+    hold_repeated_ends,
     index_positions,
     remap_taps,
     require_cell_widths,
+    require_no_repeats,
 )
 from functax._src.interp._policies import Policies
 from functax._src.interp._stencil import Stencil
@@ -45,6 +47,7 @@ from functax.exceptions import GeometryError
 
 
 __all__ = [
+    "check_local_source",
     "coordinates_to_positions",
     "source_layout",
     "stencil_from_positions",
@@ -95,15 +98,38 @@ def _target_coordinates(source: Any, target: Any) -> jax.Array:
     raise GeometryError(msg)
 
 
+def check_local_source(
+    source: Any, bases: tuple[Basis, ...], policies: Policies
+) -> None:
+    """Refuse what a tensor read-out cannot do on ``source``, before it is built.
+
+    A one-node axis needs ``edges`` under ``extent="cells"``, and only the
+    nearest and linear bases read an axis with repeated nodes.
+
+    Raises:
+        GeometryError: If a one-node axis has no edges under
+            ``extent="cells"``, or an axis read by another basis repeats.
+    """
+    require_cell_widths(source, policies.extent)
+    for index, basis in enumerate(bases):
+        if not isinstance(basis, NearestBasis | LinearBasis):
+            require_no_repeats(source, type(basis).__name__, axes=(index,))
+
+
 def coordinates_to_positions(
-    source: Any, coordinates: Float[Array, "target dim"]
+    source: Any,
+    coordinates: Float[Array, "target dim"],
+    *,
+    extrapolate: bool = False,
 ) -> Float[Array, "target dim"]:
     """The (M, D) index positions u of target coordinates on each source axis.
 
     `index_positions` per axis for an `Axis` or a `RectilinearGrid` source,
     `to_pixel` (row, col) for an `AffineGrid`, and the Newton locate of
     `locate_curvilinear` for a `CurvilinearGrid`; the targets of the last two
-    are map coordinates (x, y). Differentiable in ``coordinates``.
+    are map coordinates (x, y). Differentiable in ``coordinates``. Under
+    ``extrapolate``, an axis with a repeat at an end is held there
+    (`hold_repeated_ends`), since the one-node piece it leaves has no slope.
 
     Raises:
         GeometryError: If the number of coordinates differs from the number of
@@ -122,6 +148,11 @@ def coordinates_to_positions(
         return curvilinear_positions(source, coordinates)
     axes = (source,) if isinstance(source, Axis) else source.axes
     columns = [index_positions(axis, coordinates[:, d]) for d, axis in enumerate(axes)]
+    if extrapolate:
+        columns = [
+            hold_repeated_ends(axis, column)
+            for axis, column in zip(axes, columns, strict=True)
+        ]
     return jnp.column_stack(columns)
 
 
@@ -135,14 +166,17 @@ def target_coordinates(source: Any, target: Any) -> Float[Array, "target dim"]:
     return _target_coordinates(source, target)
 
 
-def target_positions(source: Any, target: Any) -> Float[Array, "target dim"]:
+def target_positions(
+    source: Any, target: Any, *, extrapolate: bool = False
+) -> Float[Array, "target dim"]:
     """The (M, D) index positions u of the targets on each source axis.
 
     Raises:
         GeometryError: If the source or target kind is unsupported, or the
             target has the wrong number of coordinates.
     """
-    return coordinates_to_positions(source, target_coordinates(source, target))
+    coordinates = target_coordinates(source, target)
+    return coordinates_to_positions(source, coordinates, extrapolate=extrapolate)
 
 
 def _axis_stencil(
@@ -285,6 +319,7 @@ def tensor_stencil(
             f"got {len(bases)}"
         )
         raise GeometryError(msg)
-    require_cell_widths(source, policies.extent)
-    positions = target_positions(source, target)
+    check_local_source(source, bases, policies)
+    extrapolate = policies.outside == "extrapolate"
+    positions = target_positions(source, target, extrapolate=extrapolate)
     return stencil_from_positions(positions, shape, periodic, bases, policies=policies)

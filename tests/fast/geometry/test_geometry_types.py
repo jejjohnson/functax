@@ -98,6 +98,34 @@ class TestAxis:
         with pytest.raises(GeometryError, match=match):
             Axis(values)
 
+    def test_repeats_allow_monotone_nodes(self) -> None:
+        axis = Axis(jnp.array([0.0, 0.5, 1.0, 1.0]), repeats="allow")
+        assert axis.repeats == "allow"
+        assert not axis.is_regular
+        descending = Axis(jnp.array([2.0, 2.0, 1.0, 0.0]), repeats="allow")
+        assert descending.is_descending
+
+    @pytest.mark.parametrize(
+        "values", [[0.0, 1.0, 0.5], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0, 0.0]]
+    )
+    def test_repeats_still_need_monotone_nodes_with_a_span(
+        self, values: list[float]
+    ) -> None:
+        with pytest.raises(GeometryError, match="monotone with a positive span"):
+            Axis(jnp.array(values), repeats="allow")
+
+    def test_repeats_are_checked_under_jit(self) -> None:
+        build = jax.jit(lambda v: Axis(v, repeats="allow").values)
+        assert build(jnp.array([0.0, 1.0, 1.0])).tolist() == [0.0, 1.0, 1.0]
+        with pytest.raises(Exception, match="monotone with a positive span"):
+            build(jnp.array([0.0, 1.0, 0.5]))
+
+    def test_rejects_unknown_repeats_and_periodic_repeats(self) -> None:
+        with pytest.raises(GeometryError, match="'repeats' must be one of"):
+            Axis(jnp.array([0.0, 1.0]), repeats="yes")
+        with pytest.raises(GeometryError, match="periodic Axis cannot have repeats"):
+            Axis(jnp.array([0.0, 1.0]), period=360.0, repeats="allow")
+
     def test_one_node(self) -> None:
         axis = Axis(jnp.array([2.0]))
         assert axis.values.tolist() == [2.0]
