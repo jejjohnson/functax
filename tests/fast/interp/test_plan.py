@@ -185,6 +185,16 @@ class TestOneNodeAxis:
         )
         assert plan(jnp.array([7.0])).tolist() == [7.0, 7.0, 7.0]
 
+    @pytest.mark.parametrize("outside", ["clamp", "extrapolate"])
+    @pytest.mark.parametrize("edges", [None, [0.0, 4.0], [2.0, 4.0]])
+    def test_non_finite_targets_stay_invalid(
+        self, outside: str, edges: list[float] | None
+    ) -> None:
+        axis = Axis(jnp.array([2.0]), edges=None if edges is None else jnp.array(edges))
+        targets = Points(jnp.array([[jnp.inf], [-jnp.inf], [jnp.nan], [2.0]]))
+        plan = Linear().plan(axis, targets, policies=Policies(outside=outside))
+        assert plan.valid.tolist() == [False, False, False, True]
+
     def test_cells_extent_reads_the_whole_cell(self) -> None:
         axis = Axis(jnp.array([1.0]), edges=jnp.array([0.0, 4.0]))
         plan = Nearest().plan(
