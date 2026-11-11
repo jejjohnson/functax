@@ -31,7 +31,12 @@ from functax._src._backend import is_tracer
 from functax._src.geometry._types import Axis
 from functax._src.interp._derivative import ReadGeometry
 from functax._src.interp._fit import Fit
-from functax._src.interp._locate import check_outside, domain_bounds, index_positions
+from functax._src.interp._locate import (
+    check_outside,
+    clamp_positions,
+    domain_bounds,
+    index_positions,
+)
 from functax._src.interp._policies import Policies
 from functax._src.interp._stencil import Stencil
 from functax.exceptions import NonlinearSchemeError, ValidationError
@@ -171,7 +176,7 @@ def hermite_stencil(
     check_outside(inside, policies)
     position = jnp.where(finite, position, 0.0)
     if policies.outside == "clamp":
-        position = jnp.clip(position, lower, upper)
+        position = clamp_positions(position, lower, upper)
     # a real cell, so both knots and both slopes exist
     cell = jnp.clip(jnp.floor(position), 0, n_nodes - 2)
     offset = position - cell

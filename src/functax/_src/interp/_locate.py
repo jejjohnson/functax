@@ -34,6 +34,7 @@ from functax.exceptions import GeometryError, OutsideDomainError, PolicyError
 
 __all__ = [
     "check_outside",
+    "clamp_positions",
     "domain_bounds",
     "hold_repeated_ends",
     "index_positions",
@@ -293,6 +294,19 @@ def index_positions(
     if isinstance(descending, bool):
         return reversed_positions if descending else positions_ascending
     return jnp.where(descending, reversed_positions, positions_ascending)
+
+
+def clamp_positions(
+    positions: Float[Array, "*target"], lower: float, upper: float
+) -> Float[Array, "*target"]:
+    """u held to [lower, upper], with derivative 1 inside and at the bounds.
+
+    ``jnp.clip`` splits the gradient at a bound (its ``maximum`` and
+    ``minimum`` give ½ at a tie), which halves a derivative read exactly at
+    an end node; a strict ``where`` keeps the bound inside.
+    """
+    positions = jnp.where(positions < lower, lower, positions)
+    return jnp.where(positions > upper, upper, positions)
 
 
 def domain_bounds(n_nodes: int, extent: str) -> tuple[float, float]:
