@@ -30,7 +30,7 @@ import numpy as np
 from jaxtyping import Array, Bool, Float, Int
 
 from functax._src.interp._compose import compose
-from functax._src.interp._derivative import LocalGeometry, derivative_stencil
+from functax._src.interp._derivative import ReadGeometry, derivative_stencil
 from functax._src.interp._fit import Fit, Identity
 from functax._src.interp._policies import Policies
 from functax._src.interp._stencil import Readout, Stencil
@@ -57,8 +57,9 @@ class Plan(eqx.Module):
         read: H, from coefficients to target values (a `Stencil` here).
         policies: The outside, missing and boundary rules the plan was built
             with; ``missing`` and ``fill_value`` act when it is applied.
-        local: The source, target coordinates and bases of a local scheme's
-            plan, which `derivative` needs; ``None`` for a plan built by hand.
+        local: What the stencil was built from, which `derivative` needs: a
+            `LocalGeometry` for a local scheme, a `HermiteGeometry` for a
+            1-D series scheme, ``None`` for a plan built by hand.
         target_shape: The shape of a grid target, whose nodes are the rows in
             row-major order (``einx.id("... y x -> ... (y x)")``); ``None``
             for a flat list of M targets. `__getitem__` cuts windows of it.
@@ -82,7 +83,7 @@ class Plan(eqx.Module):
     fit: Fit
     read: Readout
     policies: Policies = eqx.field(default_factory=Policies)
-    local: LocalGeometry | None = None
+    local: ReadGeometry | None = None
     target_shape: Shape | None = eqx.field(static=True, default=None)
 
     def __check_init__(self) -> None:

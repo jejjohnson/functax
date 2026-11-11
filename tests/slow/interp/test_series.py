@@ -487,3 +487,98 @@ class TestRepeatedKnots:
         error32 = np.abs(np.asarray(inverse32) - samples).max()
         error64 = np.abs(np.asarray(inverse64) - samples).max()
         assert error32 <= error64 + 1e-5
+
+
+DERIVATIVE_ORACLES = [
+    (Pchip(), scipy.interpolate.PchipInterpolator),
+    (Akima(), scipy.interpolate.Akima1DInterpolator),
+    (CubicSpline(), scipy.interpolate.CubicSpline),
+    (
+        CubicSpline(bc="natural"),
+        lambda x, y: scipy.interpolate.CubicSpline(x, y, bc_type="natural"),
+    ),
+]
+
+
+class TestDerivatives:
+    """f̂⁽ᵐ⁾ of the series read-outs in closed form (#116)."""
+
+    @pytest.mark.parametrize(
+        ("scheme", "oracle"),
+        DERIVATIVE_ORACLES,
+        ids=["pchip", "akima", "not-a-knot", "natural"],
+    )
+    @pytest.mark.parametrize("order", [1, 2, 3])
+    @pytest.mark.parametrize("descending", [False, True])
+    def test_equals_scipy(self, scheme, oracle, order: int, descending: bool) -> None:  # type: ignore[no-untyped-def]
+        knots, data = _axis_and_data(seed=110)
+        targets = np.linspace(knots[0], knots[-1], 37)
+        reference = oracle(knots, data)(targets, order)
+        if descending:
+            knots, data = knots[::-1], data[::-1]
+        field = scheme.fit(Axis(jnp.asarray(knots)), jnp.asarray(data))
+        derivative = field.derivative(order=order)(jnp.asarray(targets)[:, None])
+        # the m-th derivative scales as h⁻ᵐ, so compare relative to its size
+        scale = np.abs(reference).max()
+        assert_matches_oracle(derivative, reference, rtol=0.0, atol=1e-12 * scale)
+
+    def test_steffen_is_its_own_slope_at_the_knots(self) -> None:
+        knots, data = _axis_and_data(seed=111)
+        axis = Axis(jnp.asarray(knots))
+        field = Steffen().fit(axis, jnp.asarray(data))
+        slopes = field.plan(Points(jnp.zeros((1, 1)))).fit.apply(jnp.asarray(data))
+        derivative = field.derivative()(jnp.asarray(knots)[:, None])
+        assert_matches_oracle(derivative, slopes[knots.size :], rtol=1e-13)
+
+    @pytest.mark.parametrize("scheme", [Pchip(), Steffen()], ids=["pchip", "steffen"])
+    def test_monotone_data_give_a_non_negative_derivative(self, scheme) -> None:  # type: ignore[no-untyped-def]
+        rng = np.random.default_rng(112)
+        knots = np.cumsum(rng.uniform(0.2, 1.5, 15))
+        # increasing, with flat steps
+        data = np.cumsum(np.where(rng.random(15) < 0.3, 0.0, rng.uniform(0, 2, 15)))
+        field = scheme.fit(Axis(jnp.asarray(knots)), jnp.asarray(data))
+        targets = jnp.linspace(knots[0], knots[-1], 401)[:, None]
+        slopes = field.derivative()(targets)
+        # flat steps give zero up to rounding, ±1e-17 here
+        assert bool(jnp.all(slopes >= -1e-12 * jnp.max(slopes)))
+
+    @pytest.mark.parametrize("scheme", SPLIT_SCHEMES[:4], ids=SPLIT_IDS[:4])
+    def test_equals_autodiff_of_the_read_out(self, scheme) -> None:  # type: ignore[no-untyped-def]
+        # what gauss_flows took as the density: jax.grad of the CDF read-out
+        knots, data = _axis_and_data(seed=113)
+        field = scheme.fit(
+            Axis(jnp.asarray(knots)),
+            jnp.asarray(data),
+            policies=Policies(outside="extrapolate"),
+        )
+        targets = jnp.asarray(np.linspace(knots[0] - 0.5, knots[-1] + 0.5, 23))
+
+        def read(target: jax.Array) -> jax.Array:
+            return field(target[None, None])[0]
+
+        autodiff = jax.vmap(jax.grad(read))(targets)
+        assert_matches_oracle(
+            field.derivative()(targets[:, None]), autodiff, rtol=1e-12, atol=1e-12
+        )
+
+    def test_jit_and_vmap_agree(self) -> None:
+        knots, _ = _axis_and_data(seed=114)
+        axis = Axis(jnp.asarray(knots))
+        targets = jnp.asarray(np.linspace(knots[0], knots[-1], 9))[:, None]
+
+        def density(values: jax.Array) -> jax.Array:
+            return Pchip().fit(axis, values).derivative()(targets)
+
+        batch = jax.random.normal(jax.random.key(115), (3, knots.size))
+        eager = jnp.stack([density(row) for row in batch])
+        assert_matches_oracle(jax.jit(jax.vmap(density))(batch), eager, rtol=1e-12)
+
+    @pytest.mark.parametrize("bc", ["not-a-knot", "natural"])
+    def test_spline_derivative_dot_product(self, bc: str) -> None:
+        knots, _ = _axis_and_data(seed=116)
+        targets = Points(jnp.asarray(np.linspace(knots[0], knots[-1], 15))[:, None])
+        plan = CubicSpline(bc=bc).plan(Axis(jnp.asarray(knots)), targets).derivative(0)
+        operator = plan.operator()
+        assert_adjoint(
+            lambda y: operator.mv(y), plan.adjoint, 11, 15, key=jax.random.key(117)
+        )

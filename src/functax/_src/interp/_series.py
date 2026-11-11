@@ -15,6 +15,7 @@ from functax._src._backend import require_jax
 require_jax(__name__)
 
 import abc
+import dataclasses
 from collections.abc import Callable
 from typing import Any, ClassVar
 
@@ -26,7 +27,12 @@ import lineax as lx
 from jaxtyping import Array, Float
 
 from functax._src.geometry._types import AffineGrid, Axis, Points, RectilinearGrid
-from functax._src.interp._hermite import HermiteFit, ascending_axis, hermite_stencil
+from functax._src.interp._hermite import (
+    HermiteFit,
+    HermiteGeometry,
+    ascending_axis,
+    hermite_stencil,
+)
 from functax._src.interp._locate import require_no_repeats
 from functax._src.interp._monotone import akima_slopes, pchip_slopes, steffen_slopes
 from functax._src.interp._pieces import (
@@ -35,7 +41,7 @@ from functax._src.interp._pieces import (
     piecewise_pchip_slopes,
     piecewise_steffen_slopes,
 )
-from functax._src.interp._plan import Plan
+from functax._src.interp._plan import DerivativePlan, Plan
 from functax._src.interp._policies import Policies
 from functax._src.interp._schemes import Scheme
 from functax._src.interp._spline1d import (
@@ -51,6 +57,7 @@ from functax.exceptions import GeometryError, NonlinearSchemeError, ValidationEr
 __all__ = [
     "Akima",
     "CubicSpline",
+    "NonlinearDerivativePlan",
     "NonlinearPlan",
     "Pchip",
     "SeriesInterpolant",
@@ -67,6 +74,23 @@ class NonlinearPlan(Plan):
     """
 
     window: tuple[int, int] = eqx.field(static=True, kw_only=True)
+
+    def derivative(self, axis: int, order: int = 1) -> DerivativePlan:
+        """∂ᵐf̂/∂xᵐ at the targets, as a `NonlinearDerivativePlan`.
+
+        It reads the closed-form derivative of the Hermite read-out (see
+        `Plan.derivative`), and refuses a fixed operator, as this plan does.
+        """
+        derivative = super().derivative(axis, order)
+        return NonlinearDerivativePlan(
+            derivative.fit,
+            derivative.read,
+            derivative.policies,
+            None,
+            derivative.target_shape,
+            axis=axis,
+            order=order,
+        )
 
     def operator(self) -> lx.FunctionLinearOperator:
         """Raises `NonlinearSchemeError`: the slopes depend on y."""
@@ -131,11 +155,35 @@ class NonlinearPlan(Plan):
         return Stencil(indices, weights, n_source=n_nodes, valid=read.valid)
 
 
+class NonlinearDerivativePlan(DerivativePlan):
+    """∂ᵐf̂/∂xᵐ of a nonlinear series plan: it reads, but has no fixed operator.
+
+    Made by ``NonlinearPlan.derivative``; the slopes still depend on y, so
+    `operator` and `adjoint` raise `NonlinearSchemeError`, and ``jax.vjp`` of
+    the call is its adjoint at y.
+    """
+
+    def operator(self) -> lx.FunctionLinearOperator:
+        """Raises `NonlinearSchemeError`: the slopes depend on y."""
+        msg = "a nonlinear plan has no fixed operator; differentiate its call in y"
+        raise NonlinearSchemeError(msg)
+
+    def adjoint(
+        self, residual: Float[Array, "*batch target"]
+    ) -> Float[Array, "*batch source"]:
+        """Raises `NonlinearSchemeError`; ``jax.vjp`` of the call is it at y."""
+        del residual
+        msg = "a nonlinear plan has no fixed adjoint; use jax.vjp of its call at y"
+        raise NonlinearSchemeError(msg)
+
+
 class SeriesInterpolant(eqx.Module):
     """A 1-D series field f̂ read at targets chosen inside the trace.
 
     Made by ``scheme.fit(axis, y)``; the fit runs in JAX, so gradients reach
     both y and the knot positions. It equals ``scheme.plan(axis, targets)(y)``.
+    `derivative` gives the field f̂⁽ᵐ⁾, the derivative of the cubic Hermite
+    read-out in closed form.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -147,12 +195,16 @@ class SeriesInterpolant(eqx.Module):
         ... )
         >>> field(jnp.array([[1.5], [3.0]])).tolist()
         [1.0, 1.5833333333333333]
+        >>> # f̂′ at a knot is the knot's slope; PCHIP's is 0 at a flat step
+        >>> field.derivative()(jnp.array([[1.0], [2.0]])).tolist()
+        [0.0, 0.0]
     """
 
     data: Float[Array, "*batch source"]
     source: Axis
     scheme: SeriesScheme
     policies: Policies
+    derivative_order: int = eqx.field(static=True, default=0)
 
     def __call__(
         self, targets: Float[Array, "target 1"] | Points
@@ -161,11 +213,36 @@ class SeriesInterpolant(eqx.Module):
         points = (
             targets if isinstance(targets, Points) else Points(jnp.asarray(targets))
         )
-        return self.scheme.plan(self.source, points, policies=self.policies)(self.data)
+        return self.plan(points)(self.data)
 
     def plan(self, target: Any) -> Plan:
-        """The plan that ``scheme.plan(axis, target)`` builds."""
-        return self.scheme.plan(self.source, target, policies=self.policies)
+        """The plan that ``scheme.plan(axis, target)`` builds, or its derivative."""
+        plan = self.scheme.plan(self.source, target, policies=self.policies)
+        if self.derivative_order == 0:
+            return plan
+        return plan.derivative(0, self.derivative_order)
+
+    def derivative(self, axis: int = 0, order: int = 1) -> SeriesInterpolant:
+        """dᵐf̂/dxᵐ as a field, with m = ``order``, read like f̂.
+
+        Args:
+            axis: The target coordinate, 0 (or −1), since the axis is 1-D.
+            order: m ≥ 1; order 3 is piecewise constant and 4 and above zero.
+
+        Raises:
+            ValidationError: If ``axis`` is not 0 or −1, ``order`` is not a
+                positive integer, or the field is already a derivative.
+        """
+        if self.derivative_order:
+            msg = "derivative() of a derivative field: raise 'order' instead"
+            raise ValidationError(msg)
+        if isinstance(axis, bool) or axis not in (0, -1):
+            msg = f"'axis' must be 0 (or -1) on a 1-D axis, got {axis!r}"
+            raise ValidationError(msg)
+        if isinstance(order, bool) or not isinstance(order, int) or order < 1:
+            msg = f"'order' must be a positive integer, got {order!r}"
+            raise ValidationError(msg)
+        return dataclasses.replace(self, derivative_order=order)
 
 
 class SeriesScheme(Scheme):
@@ -222,7 +299,11 @@ class SeriesScheme(Scheme):
         if n_nodes < minimum:
             msg = f"{type(self).__name__} needs at least {minimum} knots, got {n_nodes}"
             raise ValidationError(msg)
-        coordinates = target_coordinates(source, target)[:, 0]
+        target_points = target_coordinates(source, target)
+        local = HermiteGeometry(
+            axis=ascending, coordinates=target_points, periodic=self._periodic()
+        )
+        coordinates = target_points[:, 0]
         if self._periodic():
             # one period P = x_{N−1} − x₀: x ↦ x₀ + ((x − x₀) mod P), as SciPy does
             first = ascending.values[0]
@@ -239,9 +320,9 @@ class SeriesScheme(Scheme):
         is_grid = isinstance(target, RectilinearGrid | AffineGrid)
         target_shape = target.shape if is_grid else None
         if self.linear:
-            return Plan(fit, stencil, policies, None, target_shape)
+            return Plan(fit, stencil, policies, local, target_shape)
         return NonlinearPlan(
-            fit, stencil, policies, None, target_shape, window=self.window
+            fit, stencil, policies, local, target_shape, window=self.window
         )
 
     def fit(
