@@ -7,6 +7,10 @@ and the body of ``Grid.window``). Copied, not imported, so functax's tests do
 not depend on geotoolz. ``namespace`` is reduced to NumPy, the only backend
 the comparison uses, and ``window`` returns geoarray's ``PixelWindow`` fields
 as a tuple ``(col_off, row_off, width, height)``.
+
+``shift_scale_transform`` is pinned later, at geotoolz 48da364 (the same
+``grid.py``), with its ``namespace`` call kept, since it is compared on NumPy
+and on JAX.
 """
 
 from __future__ import annotations
@@ -16,6 +20,8 @@ from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
+
+from functax._src._backend import namespace
 
 
 def to_pixel(transform: Any, xy: Any) -> Any:
@@ -63,3 +69,23 @@ def window(
     c0 = math.floor(_snap(min(cols), atol))
     c1 = math.ceil(_snap(max(cols), atol))
     return (c0, r0, c1 - c0, r1 - r0)
+
+
+def shift_scale_transform(
+    transform: Any,
+    row0: Any,
+    col0: Any,
+    row_step: Any = 1,
+    col_step: Any = 1,
+) -> Any:
+    xp = namespace(transform)
+    a, b, c, d, e, f = (transform[..., i] for i in range(6))
+    columns = (
+        a * col_step,
+        b * row_step,
+        c + a * col0 + b * row0,
+        d * col_step,
+        e * row_step,
+        f + d * col0 + e * row0,
+    )
+    return xp.stack(columns, axis=-1)

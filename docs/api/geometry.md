@@ -12,7 +12,9 @@ $$
 
 in the order of `affine.Affine`, rasterio and geoarray (not GDAL's). Pixel coordinates in functax follow the area convention: integers are pixel centres, so $(0, 0)$ is the centre of the top-left pixel and its outer corner is $(-\frac{1}{2}, -\frac{1}{2})$. `to_pixel` inverts the $2 \times 2$ part $A$ of $T$, with $\det A = ae - bd$, and subtracts $\frac{1}{2}$; `from_pixel` is its inverse. Both reproduce geoarray's arithmetic exactly.
 
-`to_pixel`, `from_pixel`, `pixel_centres` and `window` are the one part of functax in the NumPy-only base install: they take the array namespace of their input, return NumPy for NumPy and JAX for JAX, and import JAX only when a JAX array arrives. On JAX they trace under `jit`, `vmap` and `grad`. `window` follows geoarray's `Grid.window`: it rounds outward to whole pixels, snaps corners within `atol` pixels of an edge, and is not clipped to the grid.
+`from_pixel` also takes a batch of transforms, shape $(\ldots, 6)$, whose batch dims lead the pixels it maps. `slice_transform(transform, row0, col0, row_step, col_step)` is the transform of the slice that starts at $(r_0, c_0)$ with steps $(s_r, s_c)$, $T' = (a s_c, b s_r, c + a c_0 + b r_0, d s_c, e s_r, f + d c_0 + e r_0)$, which is geoarray's `shift_scale_transform`. It aligns the corners, so with a step $s > 1$ each pixel of the slice covers $s$ raster pixels and its centre is their centre. It is elementwise, so it takes a batch of transforms and traced offsets.
+
+`to_pixel`, `from_pixel`, `slice_transform`, `pixel_centres` and `window` are the one part of functax in the NumPy-only base install: they take the array namespace of their input, return NumPy for NumPy and JAX for JAX, and import JAX only when a JAX array arrives. On JAX they trace under `jit`, `vmap` and `grad`. `window` follows geoarray's `Grid.window`: it rounds outward to whole pixels, snaps corners within `atol` pixels of an edge, and is not clipped to the grid.
 
 ## The sphere
 
