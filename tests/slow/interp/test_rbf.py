@@ -246,3 +246,88 @@ class TestValidationAndConfig:
         assert fit.data_size(4) == 3
         with pytest.raises(ValidationError, match="'rhs'"):
             inspect.unwrap(fit.solve)(fit, jnp.ones(3))
+
+
+class TestLocal:
+    """``neighbors=Q``: the RBF on each target's Q nearest sources (#121)."""
+
+    @pytest.mark.parametrize("smoothing", [0.0, 1e-2], ids=["exact", "smoothed"])
+    @pytest.mark.parametrize(
+        ("name", "order"),
+        [("linear", 1), ("thin_plate_spline", 2), ("cubic", 3), ("quintic", 5)],
+    )
+    def test_equals_scipy_rbf_interpolator_with_neighbors(
+        self, name: str, order: int, smoothing: float
+    ) -> None:
+        sources, targets, data = _scattered(seed=20 + order, n_source=60, n_target=40)
+        plan = RBF(Polyharmonic(order), smoothing=smoothing, neighbors=12).plan(
+            Points(jnp.asarray(sources)), Points(jnp.asarray(targets))
+        )
+        expected = scipy.interpolate.RBFInterpolator(
+            sources, data, kernel=name, smoothing=smoothing, neighbors=12
+        )(targets)
+        scale = float(np.max(np.abs(expected)))
+        assert_matches_oracle(
+            plan(jnp.asarray(data)), expected, rtol=1e-10, atol=1e-10 * scale
+        )
+        assert plan.read.indices.shape == (40, 12)
+
+    def test_all_neighbours_is_the_global_rbf(self) -> None:
+        sources, targets, data = _scattered(seed=30)
+        global_plan = RBF(Polyharmonic(2)).plan(
+            Points(jnp.asarray(sources)), Points(jnp.asarray(targets))
+        )
+        local_plan = RBF(Polyharmonic(2), neighbors=30).plan(
+            Points(jnp.asarray(sources)), Points(jnp.asarray(targets))
+        )
+        scale = float(np.max(np.abs(data)))
+        assert_matches_oracle(
+            local_plan(jnp.asarray(data)),
+            global_plan(jnp.asarray(data)),
+            rtol=1e-10,
+            atol=1e-10 * scale,
+        )
+
+    def test_dot_product(self) -> None:
+        sources, targets, _ = _scattered(seed=31)
+        plan = RBF(Polyharmonic(2), neighbors=8).plan(
+            Points(jnp.asarray(sources)), Points(jnp.asarray(targets))
+        )
+        assert_adjoint(plan, plan.adjoint, 30, 20, key=jax.random.key(1), rtol=1e-12)
+        assert_transpose_matches(plan, plan.adjoint, jnp.zeros(30))
+
+    def test_traced_coordinates_and_gradients(self) -> None:
+        sources, targets, data = _scattered(seed=32, n_source=25, n_target=6)
+
+        def read(source_xy: jax.Array, target_xy: jax.Array) -> jax.Array:
+            plan = RBF(Polyharmonic(2), neighbors=10).plan(
+                Points(source_xy), Points(target_xy)
+            )
+            return plan(jnp.asarray(data))
+
+        eager = read(jnp.asarray(sources), jnp.asarray(targets))
+        traced = jax.jit(read)(jnp.asarray(sources), jnp.asarray(targets))
+        assert_matches_oracle(traced, eager, rtol=1e-10)
+        # the neighbour sets are fixed near these targets, so the read-out is
+        # smooth in them
+        assert_grad_matches_fd(
+            lambda target_xy: read(jnp.asarray(sources), target_xy).sum(),
+            jnp.asarray(targets),
+            rtol=1e-6,
+        )
+
+    def test_padding_targets_are_invalid(self) -> None:
+        sources, targets, data = _scattered(seed=33)
+        valid = jnp.asarray(np.arange(20) % 3 != 0)
+        plan = RBF(Polyharmonic(2), neighbors=8).plan(
+            Points(jnp.asarray(sources)), Points(jnp.asarray(targets), valid=valid)
+        )
+        assert plan.valid.tolist() == valid.tolist()
+        assert bool(jnp.all(jnp.isnan(plan(jnp.asarray(data))[~valid])))
+
+    def test_needs_more_neighbours_than_tail_terms(self) -> None:
+        sources, targets, _ = _scattered(seed=34)
+        with pytest.raises(ValidationError, match="needs more than 3 neighbours"):
+            RBF(Polyharmonic(2), neighbors=3).plan(
+                Points(jnp.asarray(sources)), Points(jnp.asarray(targets))
+            )

@@ -111,3 +111,9 @@ class TestValidationAndConfig:
     def test_callable_kernel_has_no_config(self) -> None:
         with pytest.raises(ValidationError, match="'kernel'"):
             RBF(_gaussian).get_config()
+
+
+@pytest.mark.parametrize("neighbors", [0, -1, True])
+def test_rbf_rejects_bad_neighbors(neighbors) -> None:  # type: ignore[no-untyped-def]
+    with pytest.raises(ValidationError, match="'neighbors' must be None or a positive"):
+        RBF(Polyharmonic(2), neighbors=neighbors)
