@@ -154,3 +154,54 @@ def test_a_plan_on_zero_targets_reads_and_sends_back_nothing(
     taps = plan.read.n_taps
     assert indices.shape == weights.shape == (0, taps)
     assert plan.operator().mv(jnp.ones(n_source)).shape == (0,)
+
+
+class TestOneNodeAxis:
+    """An axis of one node x₀ reads its node with weight 1 (#118)."""
+
+    @pytest.mark.parametrize("scheme", [Nearest(), Linear(), Cubic()])
+    def test_reads_the_node_and_nan_elsewhere(self, scheme) -> None:  # type: ignore[no-untyped-def]
+        plan = scheme.plan(Axis(jnp.array([2.0])), Points(jnp.array([[2.0], [2.5]])))
+        values = plan(jnp.array([7.0]))
+        assert values[0] == 7.0
+        assert math.isnan(float(values[1]))
+        assert plan.valid.tolist() == [True, False]
+
+    @pytest.mark.parametrize("outside", ["clamp", "extrapolate"])
+    def test_clamp_and_extrapolate_continue_the_node(self, outside: str) -> None:
+        plan = Linear().plan(
+            Axis(jnp.array([2.0])),
+            Points(jnp.array([[-1.0], [2.0], [9.0]])),
+            policies=Policies(outside=outside),
+        )
+        assert plan(jnp.array([7.0])).tolist() == [7.0, 7.0, 7.0]
+
+    @pytest.mark.parametrize("outside", ["clamp", "extrapolate"])
+    @pytest.mark.parametrize("edges", [None, [0.0, 4.0], [2.0, 4.0]])
+    def test_non_finite_targets_stay_invalid(
+        self, outside: str, edges: list[float] | None
+    ) -> None:
+        axis = Axis(jnp.array([2.0]), edges=None if edges is None else jnp.array(edges))
+        targets = Points(jnp.array([[jnp.inf], [-jnp.inf], [jnp.nan], [2.0]]))
+        plan = Linear().plan(axis, targets, policies=Policies(outside=outside))
+        assert plan.valid.tolist() == [False, False, False, True]
+
+    def test_cells_extent_reads_the_whole_cell(self) -> None:
+        axis = Axis(jnp.array([1.0]), edges=jnp.array([0.0, 4.0]))
+        plan = Nearest().plan(
+            axis,
+            Points(jnp.array([[0.0], [3.0], [4.0], [4.5]])),
+            policies=Policies(extent="cells"),
+        )
+        assert plan.valid.tolist() == [True, True, True, False]
+        assert plan(jnp.array([7.0]))[:3].tolist() == [7.0, 7.0, 7.0]
+
+    def test_cells_extent_without_edges_raises(self) -> None:
+        grid = RectilinearGrid((Axis(jnp.array([1.0])), Axis(jnp.arange(3.0))))
+        targets = Points(jnp.array([[1.0, 0.5]]))
+        cells = Policies(extent="cells")
+        with pytest.raises(GeometryError, match="axis 0 has one node"):
+            Linear().plan(grid, targets, policies=cells)
+        field = Linear().fit(grid, jnp.zeros(3), policies=cells)
+        with pytest.raises(GeometryError, match="axis 0 has one node"):
+            field(targets)

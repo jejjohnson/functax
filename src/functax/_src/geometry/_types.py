@@ -87,8 +87,14 @@ class Axis(eqx.Module):
     allowed (wavelength from wavenumber). Times are stored as float seconds
     since ``epoch``; `from_datetimes` converts them on the host.
 
+    An axis of one node x₀ (a single time step, a raster one row thick) has
+    no spacing, so it carries no direction and `cell_edges` needs explicit
+    ``edges``. A scheme reads it with weight 1 on its node: under
+    ``extent="nodes"`` a target is inside when x = x₀, and under
+    ``extent="cells"`` when e₀ ≤ x ≤ e₁.
+
     Args:
-        values: x, the node coordinates, at least two, strictly increasing or
+        values: x, the node coordinates, at least one, strictly increasing or
             strictly decreasing. Kept in the dtype they arrive in.
         period: P, the period (360.0 for longitude in degrees), or ``None``
             for an axis that is not periodic.
@@ -102,9 +108,9 @@ class Axis(eqx.Module):
             they arrive in. Conservative remapping reads them.
 
     Raises:
-        GeometryError: If ``values`` is not 1-D, has fewer than two nodes, is
-            not floating, is not strictly monotone, or spans P or more; if
-            ``period`` is not positive and finite; if ``epoch`` is not a time;
+        GeometryError: If ``values`` is not 1-D, is empty, is not floating,
+            is not strictly monotone, or spans P or more; if ``period`` is
+            not positive and finite; if ``epoch`` is not a time;
             if ``edges`` is not 1-D with n + 1 floating entries, or (when
             concrete) is not strictly monotone in the direction of ``values``
             or spans more than P.
@@ -127,6 +133,9 @@ class Axis(eqx.Module):
         ... )
         >>> latitude.edges.shape
         (181,)
+        >>> # one time step, as a grid one node thick
+        >>> Axis(jnp.array([3600.0])).values.shape
+        (1,)
     """
 
     values: Float[Array, " node"]
@@ -146,8 +155,8 @@ class Axis(eqx.Module):
         if values.ndim != 1:
             msg = f"'values' must be 1-D, got shape {values.shape}"
             raise GeometryError(msg)
-        if values.shape[0] < 2:
-            msg = f"'values' must have at least two nodes, got {values.shape[0]}"
+        if values.shape[0] < 1:
+            msg = "'values' must have at least one node, got none"
             raise GeometryError(msg)
         _require_floating(values, "values")
         if period is not None:
@@ -192,9 +201,13 @@ class Axis(eqx.Module):
             return
         edges = np.asarray(self.edges)
         values = np.asarray(self.values)
-        # eₖ₊₁ − eₖ, all of the sign of xₖ₊₁ − xₖ
-        direction = np.sign(values[1] - values[0])
-        if not np.all(np.sign(np.diff(edges)) == direction):
+        # eₖ₊₁ − eₖ, all of the sign of xₖ₊₁ − xₖ (either sign for one node)
+        steps = np.sign(np.diff(edges))
+        if values.shape[0] == 1:
+            direction = steps[0] if steps[0] != 0 else 1.0
+        else:
+            direction = np.sign(values[1] - values[0])
+        if not np.all(steps == direction):
             msg = (
                 "'edges' must be strictly monotone in the direction of 'values', "
                 f"got {edges!r}"
@@ -216,6 +229,10 @@ class Axis(eqx.Module):
         Returns:
             e, in the dtype of ``values`` (or of ``edges``).
 
+        Raises:
+            GeometryError: If the axis has one node and no ``edges``, since
+                a single node has no spacing to put its edges at.
+
         Examples:
             >>> import jax.numpy as jnp
             >>> from functax.geometry import Axis
@@ -228,6 +245,9 @@ class Axis(eqx.Module):
         if self.edges is not None:
             return self.edges
         values = self.values
+        if values.shape[0] == 1:
+            msg = "a one-node Axis has no spacing, so its cell needs 'edges'"
+            raise GeometryError(msg)
         # ½ (xₖ₋₁ + xₖ) between nodes
         midpoints = 0.5 * (values[:-1] + values[1:])
         if self.period is None:
@@ -338,9 +358,12 @@ class Axis(eqx.Module):
     def is_regular(self) -> bool:
         """Whether the nodes are equally spaced, to 1e-12 relative.
 
-        max |Δₖ − Δ̄| ≤ 10⁻¹² |Δ̄|, with Δₖ = xₖ₊₁ − xₖ and Δ̄ their mean.
-        Computed on the host, so it needs concrete values.
+        max |Δₖ − Δ̄| ≤ 10⁻¹² |Δ̄|, with Δₖ = xₖ₊₁ − xₖ and Δ̄ their mean;
+        a one-node axis has no spacing and is not regular. Computed on the
+        host, so it needs concrete values.
         """
+        if self.values.shape[0] == 1:
+            return False
         spacing = np.diff(np.asarray(self.values))
         mean_spacing = spacing.mean()
         deviation = np.max(np.abs(spacing - mean_spacing))
@@ -348,7 +371,7 @@ class Axis(eqx.Module):
 
     @property
     def is_descending(self) -> bool:
-        """Whether the nodes decrease. Needs concrete values."""
+        """Whether the nodes decrease; never for one node. Needs concrete values."""
         # np.asarray first, so it also works on a concrete axis inside jit
         ends = np.asarray(self.values)[[0, -1]]
         return bool(ends[0] > ends[1])
