@@ -132,6 +132,10 @@ SLOW_DOCTESTS: frozenset[str] = frozenset(
         "functax._src.transform._sht.SphericalHarmonicTransform.forward",
         "functax._src.transform._sht.SphericalHarmonicTransform.init",
         "functax._src.transform._sht.SphericalHarmonicTransform.inverse",
+        "functax._src.transform._spherical_wavelet.SphericalWaveletTransform",
+        "functax._src.transform._spherical_wavelet.SphericalWaveletTransform.forward",
+        "functax._src.transform._spherical_wavelet.SphericalWaveletTransform.init",
+        "functax._src.transform._spherical_wavelet.SphericalWaveletTransform.inverse",
         "functax.exceptions.ValidationError",
     }
 )
