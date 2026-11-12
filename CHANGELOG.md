@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.10](https://github.com/jejjohnson/functax/compare/v0.0.9...v0.0.10) (2026-11-12)
+
+
+### Features
+
+* **transform:** move SphericalWaveletTransform in from geonnax ([#139](https://github.com/jejjohnson/functax/issues/139)) ([f44bb64](https://github.com/jejjohnson/functax/commit/f44bb644969b999fa3a1572b998024cd42f79479)), closes [#111](https://github.com/jejjohnson/functax/issues/111)
+
 ## [0.0.9](https://github.com/jejjohnson/functax/compare/v0.0.8...v0.0.9) (2026-11-11)
 
 
