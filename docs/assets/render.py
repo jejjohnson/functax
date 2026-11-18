@@ -1,12 +1,13 @@
-"""Render the functax README assets: icon, logos and the two diagrams.
+"""Render the functax README assets: the icon and the two logos.
 
 Every output is a plain SVG written next to this file. The icon shares the
 GeoStack tile (a 120-unit rounded square, r = 26, white glyph) in the functax
 cobalt gradient. Its glyph is a basis expansion: four faint bumps φⱼ and the
 bold curve x = ∑_d z_d φ_d that is their weighted sum.
 
-Diagrams come in a light and a dark variant for GitHub's ``<picture>`` /
-``prefers-color-scheme`` switch.
+The logos come in a light and a dark variant for GitHub's ``<picture>`` /
+``prefers-color-scheme`` switch. The README's schematics are drawn in geostack
+(``docs/images/libraries/functax_*``) with the stack's other library figures.
 
 Run from the repo root:
 
@@ -21,37 +22,15 @@ from pathlib import Path
 
 OUT = Path(__file__).parent
 
-DOT = " \N{MIDDLE DOT} "
 SANS = "ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
-MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace"
 
 # Cobalt: the functax gradient and its wordmark accents.
 C1, C2 = "#3B82F6", "#1E40AF"
 ACCENT = {"light": "#1D4ED8", "dark": "#60A5FA"}
 
 THEME = {
-    "light": {
-        "text": "#1F2937",
-        "muted": "#6B7280",
-        "card": "#F9FAFB",
-        "line": "#D1D5DB",
-        "arrow": "#9CA3AF",
-        "hi_fill": "#EFF6FF",
-        "hi_line": "#2563EB",
-        "site": "#1D4ED8",
-        "band": "#F3F4F6",
-    },
-    "dark": {
-        "text": "#E5E7EB",
-        "muted": "#9CA3AF",
-        "card": "#111827",
-        "line": "#374151",
-        "arrow": "#6B7280",
-        "hi_fill": "#172554",
-        "hi_line": "#3B82F6",
-        "site": "#60A5FA",
-        "band": "#1F2937",
-    },
+    "light": {"text": "#1F2937"},
+    "dark": {"text": "#E5E7EB"},
 }
 
 W = "#FFFFFF"
@@ -122,63 +101,6 @@ def svg(width: int, height: int, label: str, title: str, body: str) -> str:
     )
 
 
-def text(
-    x: float,
-    y: float,
-    s: str,
-    *,
-    size: float = 14,
-    weight: int = 400,
-    fill: str,
-    family: str = SANS,
-    anchor: str = "start",
-) -> str:
-    """An SVG text element, whitespace preserved."""
-    return (
-        f'<text x="{x}" y="{y}" text-anchor="{anchor}" font-family="{family}" '
-        f'font-size="{size}" font-weight="{weight}" fill="{fill}" '
-        f'xml:space="preserve">{s}</text>'
-    )
-
-
-def arrow_defs(mid: str, colour: str) -> str:
-    """An arrowhead marker definition with the given id and colour."""
-    return (
-        f'<defs><marker id="{mid}" viewBox="0 0 10 10" refX="9" refY="5" '
-        'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
-        f'<path d="M0 0 L10 5 L0 10 z" fill="{colour}"/></marker></defs>'
-    )
-
-
-def line(points: list[tuple[float, float]], colour: str, head: str | None) -> str:
-    """An SVG polyline through the points, with an optional arrowhead."""
-    d = " ".join(f"{'M' if i == 0 else 'L'}{x} {y}" for i, (x, y) in enumerate(points))
-    end = f' marker-end="url(#{head})"' if head else ""
-    return (
-        f'<path d="{d}" fill="none" stroke="{colour}" stroke-width="1.6" '
-        f'stroke-linejoin="round"{end}/>'
-    )
-
-
-def card(
-    x: float,
-    y: float,
-    w: float,
-    h: float,
-    t: dict[str, str],
-    *,
-    highlight: bool = False,
-) -> str:
-    """A rounded card, highlighted in the accent colours when asked."""
-    fill, stroke, sw = (
-        (t["hi_fill"], t["hi_line"], 2) if highlight else (t["card"], t["line"], 1)
-    )
-    return (
-        f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="12" fill="{fill}" '
-        f'stroke="{stroke}" stroke-width="{sw}"/>'
-    )
-
-
 def wordmark(x: float, y: float, size: float, mode: str) -> str:
     """The functax wordmark, its last letter in the accent colour."""
     t = THEME[mode]
@@ -204,276 +126,6 @@ def write_logos() -> None:
         (OUT / f"logo-{mode}.svg").write_text(svg(510, 140, "functax", "functax", body))
 
 
-def sub(s: str, size: float = 12.5) -> str:
-    """A subscript of text set at ``size``, as an SVG tspan."""
-    return (
-        f'<tspan baseline-shift="{-0.25 * size:g}" font-size="{0.7 * size:g}">'
-        f"{s}</tspan>"
-    )
-
-
-def bold(s: str) -> str:
-    """A vector or matrix symbol, bold as in the maths standard."""
-    return f'<tspan font-weight="700">{s}</tspan>'
-
-
-# ---------------------------------------------------------------- hero
-
-# (verb, equation, module, names) for the five operations on the expansion.
-# x(s) ≈ ∑_d z_d φ_d(s; θ)
-EXPANSION = (
-    f"x({bold('s')}) ≈ ∑{sub('d', 24)} z{sub('d', 24)} φ{sub('d', 24)}"
-    f"({bold('s')}; {bold('θ')})"
-)
-OPERATIONS = [
-    (
-        "interpolate",
-        f"{bold('y')} = {bold('H')} {bold('x')},  {bold('H')}ᵀ {bold('r')}",
-        "interp",
-        ["Plan", "Linear", "RBF", "Kriging"],
-    ),
-    (
-        "differentiate",
-        f"∇{sub(bold('s'))} x,  ∇²x",
-        "diffops",
-        ["gradient", "laplacian", "surface_grad"],
-    ),
-    (
-        "integrate",
-        f"∫ x d{bold('s')} ≈ ∑ w{sub('n')} x({bold('s')}{sub('n')})",
-        "quad",
-        ["Rule", "SphereRule", "cell_area"],
-    ),
-    (
-        "project",
-        f"{bold('ẑ')} = argmin ‖{bold('Φ')}{bold('z')} − {bold('y')}‖²",
-        "project",
-        ["least_squares", "galerkin", "Variational"],
-    ),
-    (
-        "transform",
-        f"x({bold('s')}{sub('n')}) ↔ {bold('z')}",
-        "transform",
-        ["SphericalHarmonicTransform", "nonuniform_rfft", "ChebyshevTransform1D"],
-    ),
-]
-BASES = DOT.join(
-    ["spherical harmonics", "Slepian", "needlets", "Fourier", "RBF", "wavelets", "EOFs"]
-)
-GEOMETRY = DOT.join(
-    ["Axis", "AffineGrid", "Points", "sphere grids", "meshes", "frames"]
-)
-
-
-def write_hero() -> None:
-    """One expansion in the middle, five operations under it, two foundations below."""
-    width, height = 960, 470
-    for mode, t in THEME.items():
-        head = f"hero-{mode}-head"
-        a = t["arrow"]
-        parts = [arrow_defs(head, a)]
-
-        # The expansion.
-        parts.append(card(230, 20, 500, 92, t, highlight=True))
-        parts.append(
-            # Left-anchored: some renderers misplace centred text with tspans.
-            text(
-                348,
-                62,
-                EXPANSION,
-                size=24,
-                weight=400,
-                fill=t["text"],
-                family=MONO,
-            )
-        )
-        parts.append(
-            text(
-                480,
-                90,
-                "one expansion of the field x: coefficients z, basis functions φ, "
-                "parameters θ",
-                size=13,
-                fill=t["muted"],
-                anchor="middle",
-            )
-        )
-
-        # The five operations.
-        # The transform card is wider: its class names are the longest.
-        y0, h, gap = 168, 172, 15
-        widths = [160, 160, 160, 160, 220]
-        for i, (verb, eq, module, names) in enumerate(OPERATIONS):
-            w = widths[i]
-            x = 20 + sum(widths[:i]) + i * gap
-            cx = x + w / 2
-            parts.append(line([(480 + (cx - 480) * 0.4, 112), (cx, y0 - 4)], a, head))
-            parts.append(card(x, y0, w, h, t))
-            parts.append(
-                text(x + 14, y0 + 26, verb, size=15, weight=700, fill=t["site"])
-            )
-            parts.append(
-                text(x + 14, y0 + 50, eq, size=12.5, fill=t["text"], family=MONO)
-            )
-            parts.append(
-                text(
-                    x + 14,
-                    y0 + 74,
-                    f"functax.{module}",
-                    size=12,
-                    fill=t["muted"],
-                    family=MONO,
-                )
-            )
-            for j, name in enumerate(names):
-                parts.append(
-                    text(
-                        x + 14,
-                        y0 + 104 + 20 * j,
-                        name,
-                        size=12,
-                        weight=600,
-                        fill=t["text"],
-                        family=MONO,
-                    )
-                )
-
-        # The foundations: the basis functions φ and where x lives.
-        for k, (module, what, items) in enumerate(
-            [
-                ("functax.basis", "the basis functions φ", BASES),
-                ("functax.geometry", "where x lives, CRS-free", GEOMETRY),
-            ]
-        ):
-            yb = 366 + 46 * k
-            parts.append(
-                f'<rect x="20" y="{yb}" width="920" height="38" rx="10" '
-                f'fill="{t["band"]}"/>'
-            )
-            parts.append(
-                text(
-                    36,
-                    yb + 24,
-                    module,
-                    size=13.5,
-                    weight=700,
-                    fill=t["site"],
-                    family=MONO,
-                )
-            )
-            parts.append(text(196, yb + 24, what, size=12.5, fill=t["muted"]))
-            parts.append(
-                text(924, yb + 24, items, size=12.5, fill=t["text"], anchor="end")
-            )
-
-        label = (
-            "functax is built around one expansion, a field x of the coordinates s "
-            "equal to the sum over d of z_d phi_d of s, and five operations on it: "
-            "interpolate, differentiate, "
-            "integrate, project and transform, each in its own module, over a basis "
-            "library and CRS-free geometry."
-        )
-        (OUT / f"hero-{mode}.svg").write_text(
-            svg(
-                width, height, label, "One expansion, five operations", "\n".join(parts)
-            )
-        )
-
-
-# ---------------------------------------------------------------- layers
-
-USERS = [
-    ("imports it today", ["geonnax", "integrix"]),
-    (
-        "models and numerics, Wave 5",
-        ["vardax", "sesmax", "plumax", "radtrax", "finitevolX"],
-    ),
-    (
-        "learning and data, Wave 5",
-        ["kernellib", "pyrox", "filterax", "geoarray", "xrops"],
-    ),
-]
-
-
-def write_layers() -> None:
-    """Where functax sits; arrows point at what each group imports."""
-    width, height = 960, 400
-    for mode, t in THEME.items():
-        head = f"layers-{mode}-head"
-        a = t["arrow"]
-        parts = [arrow_defs(head, a)]
-        xs = [30, 350, 670]
-        for (group, names), x in zip(USERS, xs, strict=True):
-            parts.append(card(x, 20, 260, 92, t))
-            parts.append(
-                text(x + 130, 46, group, size=12.5, fill=t["muted"], anchor="middle")
-            )
-            for row in range(0, len(names), 3):
-                parts.append(
-                    text(
-                        x + 130,
-                        72 + 22 * (row // 3),
-                        DOT.join(names[row : row + 3]),
-                        size=14,
-                        weight=700,
-                        fill=t["text"],
-                        family=MONO,
-                        anchor="middle",
-                    )
-                )
-            x_end = x + 130 if x == 350 else x + 130 + (480 - x - 130) * 0.45
-            parts.append(line([(x + 130, 112), (x_end, 182)], a, head))
-        parts.append(card(170, 186, 620, 96, t, highlight=True))
-        parts.append(tile(f"layers-{mode}-icon", 192, 204, 60))
-        parts.append(wordmark(268, 238, 26, mode))
-        parts.append(
-            text(
-                268,
-                264,
-                "Core tier 0: bases, plans with adjoints, rules and transforms",
-                size=13,
-                fill=t["muted"],
-            )
-        )
-        parts.append(line([(480, 282), (480, 328)], a, head))
-        parts.append(
-            f'<rect x="20" y="332" width="920" height="48" rx="10" fill="{t["band"]}"/>'
-        )
-        parts.append(
-            text(
-                480,
-                362,
-                "numpy (base)"
-                + DOT
-                + "jax"
-                + DOT
-                + "equinox"
-                + DOT
-                + "lineax"
-                + DOT
-                + "einx"
-                + DOT
-                + "jaxtyping  (the [jax] extra)",
-                size=14,
-                weight=600,
-                fill=t["text"],
-                family=MONO,
-                anchor="middle",
-            )
-        )
-        label = (
-            "geonnax and integrix import functax today, and the stack's models, "
-            "numerics, learning and data libraries switch to it in Wave 5; functax "
-            "depends on NumPy alone, plus JAX, Equinox, lineax, einx and jaxtyping "
-            "with the jax extra."
-        )
-        (OUT / f"layers-{mode}.svg").write_text(
-            svg(width, height, label, "Where functax sits", "\n".join(parts))
-        )
-
-
 if __name__ == "__main__":
     write_icon()
     write_logos()
-    write_hero()
-    write_layers()
