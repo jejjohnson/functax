@@ -99,11 +99,13 @@ class NonlinearSchemeError(FunctaxError, TypeError):
 
 
 class MissingExtraError(FunctaxError, ImportError):
-    """Raised when a module needs the ``functax[jax]`` extra and it is missing.
+    """Raised when a module or a plan needs an optional extra that is missing.
 
     The base install depends on NumPy alone, so every module that needs JAX
-    checks for it on import and raises this error, whose message names the
-    extra to install. It is also an `ImportError`, so ``except ImportError``
+    checks for it on import, and the ``Conservative``, ``InverseDistance`` and
+    ``Delaunay`` plans check for SciPy when they are built. Either raises this
+    error, whose message names the extra to install, ``functax[jax]`` or
+    ``functax[scipy]``. It is also an `ImportError`, so ``except ImportError``
     still catches it.
 
     Examples:

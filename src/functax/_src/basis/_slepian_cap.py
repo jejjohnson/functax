@@ -393,6 +393,11 @@ def slepian_cap_basis(
 
     Returns:
         A `SlepianCapBasis`, its columns sorted by decreasing concentration.
+        Modes whose concentrations are equal in the working precision keep
+        whatever order the sort leaves them in, which can differ from the
+        float64 order: for a 40° cap at ``l_max=20`` the first five
+        concentrations are all 1.0 in float32, and mode 1 is not the
+        axisymmetric one. Enable float64 when that order matters.
 
     Raises:
         ValidationError: If ``n_modes`` is below 1, the threshold keeps fewer
