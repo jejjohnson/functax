@@ -16,7 +16,7 @@ current).
 |---|---|---|
 | `FunctaxError` | class | Base class for every exception raised by ``functax``. |
 | `GeometryError` | class | Raised when an axis, grid or point set is malformed. |
-| `MissingExtraError` | class | Raised when a module needs the ``functax[jax]`` extra and it is missing. |
+| `MissingExtraError` | class | Raised when a module or a plan needs an optional extra that is missing. |
 | `NonlinearSchemeError` | class | Raised when a linear-only operation meets a plan whose fit is nonlinear in y. |
 | `OutsideDomainError` | class | Raised under ``outside="raise"`` when a target lies outside the domain. |
 | `PolicyError` | class | Raised when an interpolation policy names an option that does not exist. |
