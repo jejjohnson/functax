@@ -76,8 +76,8 @@ def _affine_maps(
 ) -> tuple[Float[np.ndarray, "simplex dim dim"], Float[np.ndarray, "simplex dim"]]:
     """T_τ⁻¹ and r_τ of each simplex, in the layout of ``Delaunay.transform``.
 
-    With r_τ the last vertex and T_τ the D × D matrix of edges vₖ − r_τ as
-    columns, (b₁, …, b_D) = T_τ⁻¹ (x − r_τ).
+    With r_τ the last vertex and T_τ the D × D matrix of edges vₖ − r_τ,
+    k = 1, …, D, as columns, (b₁, …, b_D) = T_τ⁻¹ (x_* − r_τ) at a target x_*.
 
     Raises:
         GeometryError: If a simplex is degenerate (zero volume).
@@ -94,11 +94,11 @@ def _affine_maps(
     edges = einx.id("simplex col row -> simplex row col", offsets)
     # det T_τ
     determinants = np.linalg.det(edges)
-    # (maxₖₗ |T_τ,kl|)ᴰ, the volume of a simplex of that size up to a constant
+    # (maxₖₗ |[T_τ]ₖₗ|)ᴰ, the volume of a simplex of that size up to a constant
     magnitude = np.abs(edges)
     largest = einx.max("simplex [row col]", magnitude)
     scale = largest ** edges.shape[1]
-    # |det T_τ| ≤ 10⁻¹⁴ (maxₖₗ |T_τ,kl|)ᴰ
+    # |det T_τ| ≤ 10⁻¹⁴ (maxₖₗ |[T_τ]ₖₗ|)ᴰ
     volume = np.abs(determinants)
     degenerate = volume <= 1e-14 * scale
     if np.any(degenerate):
@@ -123,11 +123,11 @@ def _locate_in_mesh(
     chunk = max(1, _MAX_PAIRS // n_simplices)
     for start in range(0, n_targets, chunk):
         block = targets[start : start + chunk]
-        # x − r_τ for every target and simplex
+        # x_* − r_τ for every target and simplex
         offsets = einx.subtract(
             "target dim, simplex dim -> target simplex dim", block, references
         )
-        # (b₁, …, b_D) = T_τ⁻¹ (x − r_τ)
+        # (b₁, …, b_D) = T_τ⁻¹ (x_* − r_τ)
         leading = einx.dot(
             "simplex row col, target simplex col -> target simplex row",
             inverses,
@@ -157,16 +157,16 @@ def _barycentric_stencil(
     row_ok: Bool[Array, " target"],
     n_source: int,
 ) -> Stencil:
-    """bₖ = T_τ⁻¹ (x − r_τ) for k ≤ D and b_{D+1} = 1 − ∑ₖ bₖ, at τ's vertices."""
+    """(b₁, …, b_D) = T_τ⁻¹ (x_* − r_τ) and b_{D+1} = 1 − ∑ₖ bₖ, at τ's vertices."""
     zero_index = jnp.zeros((), simplex.dtype)
     safe_simplex = jnp.where(row_ok, simplex, zero_index)
     zero = jnp.zeros((), coordinates.dtype)
     target_references = references[safe_simplex]
-    # x − r_τ, with a target outside read at the origin of simplex 0 and masked
+    # x_* − r_τ, with a target outside read at the origin of simplex 0 and masked
     offsets = coordinates - target_references
     offsets = einx.where("target, target dim, -> target dim", row_ok, offsets, zero)
     target_inverses = inverses[safe_simplex]
-    # (b₁, …, b_D) = T_τ⁻¹ (x − r_τ)
+    # (b₁, …, b_D) = T_τ⁻¹ (x_* − r_τ)
     leading = einx.dot(
         "target row col, target col -> target row", target_inverses, offsets
     )
@@ -187,13 +187,14 @@ def _barycentric_stencil(
 class Delaunay(Scheme):
     """Linear interpolation on a triangulation of the sources: D + 1 taps per target.
 
-    For a target x in simplex τ with inverse affine map T_τ⁻¹ and reference
-    vertex r_τ (as ``scipy.spatial.Delaunay.transform`` stores them), the
-    barycentric weights are
+    For a target x_* ∈ ℝᴰ in simplex τ with inverse affine map T_τ⁻¹ and
+    reference vertex r_τ (as ``scipy.spatial.Delaunay.transform`` stores
+    them), the barycentric weights are
 
-        (b₁, …, b_D) = T_τ⁻¹ (x − r_τ)  and  b_{D+1} = 1 − ∑ₖ bₖ,
+        (b₁, …, b_D) = T_τ⁻¹ (x_* − r_τ)  and  b_{D+1} = 1 − ∑ₖ bₖ,
 
-    at τ's D + 1 vertices, so f̂(x) = ∑ₖ bₖ y_{vₖ}. On a plane (D = 2) these
+    at τ's D + 1 vertices vₖ, k = 1, …, D + 1, so f̂(x_*) = ∑ₖ bₖ y_{vₖ} with
+    y_{vₖ} the sample at vertex vₖ. On a plane (D = 2) these
     are the three weights of the triangle, and the plan reproduces affine
     functions exactly inside the convex hull. It equals SciPy's
     ``LinearNDInterpolator``.

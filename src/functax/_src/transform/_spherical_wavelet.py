@@ -1,12 +1,13 @@
 """The spherical wavelet (scale-discretised, needlet) transform on a lat/lon grid.
 
 A multiresolution analysis built on `SphericalHarmonicTransform`: each scale j
-is a band-pass window hⱼ(l) in harmonic space, and the windowed coefficients are
-synthesised back to a full-resolution map, one per scale (Marinucci et al. 2008;
-Wiaux et al. 2008). The squared windows partition unity, ∑ⱼ hⱼ(l)² = 1, so
-synthesis after analysis is exact up to the harmonic transform's own error.
-Moved from geonnax ``layers/_spherical_wavelet`` at ``6e32651``, apart from
-`SphericalWaveletConv`, which learns weights per scale and stays in geonnax.
+is a band-pass window hⱼ(ℓ) over the harmonic degree ℓ, and the windowed
+coefficients are synthesised back to a full-resolution map, one per scale
+(Marinucci et al. 2008; Wiaux et al. 2008). The squared windows partition
+unity, ∑ⱼ hⱼ(ℓ)² = 1, so synthesis after analysis is exact up to the harmonic
+transform's own error. Moved from geonnax ``layers/_spherical_wavelet`` at
+``6e32651``, apart from `SphericalWaveletConv`, which learns weights per scale
+and stays in geonnax.
 """
 
 from __future__ import annotations
@@ -47,36 +48,36 @@ def _meyer_nu(t: Float[np.ndarray, "*batch"]) -> Float[np.ndarray, "*batch"]:
 def _partition_filters(
     l_max: int, n_scales: int | None = None
 ) -> Float[np.ndarray, "scale degree"]:
-    """Dyadic harmonic windows hⱼ(l) over the degrees l = 0, …, l_max.
+    """Dyadic harmonic windows hⱼ(ℓ) over the degrees ℓ = 0, …, ℓ_max.
 
-    With x = log₂ max(l, 1) and u = x − j, scale j rises as
-    hⱼ = sin(π/2 · ν(u + 1)) for −1 < u ≤ 0 and falls as
-    hⱼ = cos(π/2 · ν(u)) for 0 < u < 1, and is 0 elsewhere; scale 0 is also 1
-    for x ≤ 0, as it has no coarser neighbour. Two scales overlap on each
-    octave, so ∑ⱼ hⱼ(l)² = 1 for every l when the scales cover every octave
-    (the default, ⌈log₂ max(l_max, 2)⌉ + 1 of them). Fewer scales leave the
+    With t = log₂ max(ℓ, 1) − j and the Meyer polynomial ν, scale j rises as
+    hⱼ = sin(π/2 · ν(t + 1)) for −1 < t ≤ 0 and falls as
+    hⱼ = cos(π/2 · ν(t)) for 0 < t < 1, and is 0 elsewhere; scale 0 is also 1
+    for ℓ ≤ 1, as it has no coarser neighbour. Two scales overlap on each
+    octave, so ∑ⱼ hⱼ(ℓ)² = 1 for every ℓ when the scales cover every octave
+    (the default, ⌈log₂ max(ℓ_max, 2)⌉ + 1 of them). Fewer scales leave the
     highest degrees uncovered.
 
     Returns:
-        The windows, (n_scales, l_max + 1), non-negative, in float64.
+        The windows, (n_scales, ℓ_max + 1), non-negative, in float64.
     """
     degrees = np.arange(l_max + 1)
-    # x = log₂ max(l, 1)
+    # log₂ max(ℓ, 1)
     octave = np.log2(np.maximum(degrees, 1))
-    # j_max = ⌈log₂ max(l_max, 2)⌉
+    # j_max = ⌈log₂ max(ℓ_max, 2)⌉
     finest = int(np.ceil(np.log2(max(l_max, 2))))
     count = finest + 1 if n_scales is None else n_scales
 
     filters = np.zeros((count, l_max + 1))
     for scale in range(count):
-        # u = x − j
+        # t = log₂ max(ℓ, 1) − j
         offset = octave - scale
         window = np.zeros_like(octave)
-        # the hand-off from the coarser scale: hⱼ = sin(π/2 · ν(u + 1))
+        # the hand-off from the coarser scale: hⱼ = sin(π/2 · ν(t + 1))
         rising = (offset > -1.0) & (offset <= 0.0)
         rising_taper = _meyer_nu(offset[rising] + 1.0)
         window[rising] = np.sin(0.5 * np.pi * rising_taper)
-        # the hand-off to the finer scale: hⱼ = cos(π/2 · ν(u))
+        # the hand-off to the finer scale: hⱼ = cos(π/2 · ν(t))
         falling = (offset > 0.0) & (offset < 1.0)
         falling_taper = _meyer_nu(offset[falling])
         window[falling] = np.cos(0.5 * np.pi * falling_taper)
@@ -89,23 +90,25 @@ def _partition_filters(
 class SphericalWaveletTransform(eqx.Module):
     """Scale-discretised (needlet) wavelet analysis and synthesis on the sphere.
 
-    Analysis maps a field y to one band-pass map per scale,
-    bⱼ(x) = ∑_{lm} hⱼ(l) c_lm Y_lm(x) with c = SHT(y), and synthesis sums the
+    Analysis maps the grid values y of a field to one band-pass map per scale
+    j = 0, …, S − 1, bⱼ(r̂) = ∑_{ℓ,m} hⱼ(ℓ) c_ℓm Y_ℓm(r̂) at r̂ ∈ S², with the
+    harmonic coefficients c = SHT(y) of `SphericalHarmonicTransform`, the
+    windows hⱼ(ℓ) and the real harmonics Y_ℓm; synthesis sums the
     maps back through the windows again, y = ∑ⱼ SHT⁻¹(hⱼ · SHT(bⱼ)). The
     squared windows partition unity, so synthesis after analysis is the
-    identity on fields band-limited to l_max, up to the SHT's own error. The
+    identity on fields band-limited to ℓ_max, up to the SHT's own error. The
     windows pass through ``lax.stop_gradient``, as the SHT tables do.
 
     Algorithm:
         1. Analysis: c = SHT(y), then each scale's windowed coefficients
-           hⱼ(l) c_lm are synthesised back to a map bⱼ.
+           hⱼ(ℓ) c_ℓm are synthesised back to a map bⱼ.
         2. Synthesis: each map is analysed again, windowed once more and
-           summed over the scales, ∑ⱼ hⱼ(l) SHT(bⱼ)_lm, before one inverse SHT.
+           summed over the scales, ∑ⱼ hⱼ(ℓ) SHT(bⱼ)_ℓm, before one inverse SHT.
 
     Attributes:
         sht: The spherical-harmonic transform it wraps.
-        filters: The windows hⱼ(l), (n_scales, l_max + 1).
-        degree_index: The degree l of each harmonic coefficient.
+        filters: The windows hⱼ(ℓ), (n_scales, ℓ_max + 1).
+        degree_index: The degree ℓ of each harmonic coefficient.
         n_scales: S, the number of scales.
 
     Examples:
@@ -149,7 +152,7 @@ class SphericalWaveletTransform(eqx.Module):
         Args:
             sht: The spherical-harmonic transform to wrap.
             n_scales: S, the number of dyadic scales. The default,
-                ⌈log₂ max(l_max, 2)⌉ + 1, covers every octave up to l_max, so
+                ⌈log₂ max(ℓ_max, 2)⌉ + 1, covers every octave up to ℓ_max, so
                 the round trip is exact; fewer scales leave the highest
                 degrees out.
 
@@ -187,7 +190,7 @@ class SphericalWaveletTransform(eqx.Module):
         )
 
     def _windows(self, dtype: jnp.dtype) -> Float[Array, "scale feature"]:
-        """hⱼ(l) at each harmonic coefficient in ``dtype``, the gradient stopped."""
+        """hⱼ(ℓ) at each harmonic coefficient in ``dtype``, the gradient stopped."""
         constant = jax.lax.stop_gradient(self.filters)
         filters = constant.astype(dtype)
         return einx.get_at(
@@ -221,7 +224,7 @@ class SphericalWaveletTransform(eqx.Module):
         # c = SHT(y)
         coeffs = self.sht.forward(field)
         windows = self._windows(coeffs.dtype)
-        # hⱼ(l) c_lm for each scale
+        # hⱼ(ℓ) c_ℓm for each scale
         windowed = einx.multiply(
             "scale feature, channel feature -> scale channel feature",
             windows,
@@ -261,7 +264,7 @@ class SphericalWaveletTransform(eqx.Module):
         # SHT(bⱼ)
         coeffs = analysis(scales)
         windows = self._windows(coeffs.dtype)
-        # ∑ⱼ hⱼ(l) SHT(bⱼ)_lm
+        # ∑ⱼ hⱼ(ℓ) SHT(bⱼ)_ℓm
         combined = einx.dot(
             "scale feature, scale channel feature -> channel feature",
             windows,

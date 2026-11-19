@@ -1,8 +1,9 @@
 """The sparse read-out H: S taps per target, applied by gather and by scatter-add.
 
-Row k of H has weights wₖₛ at source indices iₖₛ for s = 1, …, S, so
+Row k = 1, …, M of H has weights wₖₛ at source indices iₖₛ ∈ {0, …, N − 1}
+for its taps s = 1, …, S, so for coefficients c ∈ ℝᴺ and a residual r ∈ ℝᴹ
 
-    f̂ₖ = ∑ₛ wₖₛ c[iₖₛ]  and  (Hᵀr)ⱼ = ∑ₖ ∑ₛ [iₖₛ = j] wₖₛ rₖ,
+    f̂ₖ = ∑ₛ wₖₛ c[iₖₛ]  and  (Hᵀ r)ⱼ = ∑ₖ ∑ₛ [iₖₛ = j] wₖₛ rₖ,
 
 with [·] equal to 1 when its condition holds. Every local scheme (nearest,
 linear, cubic, B-spline read-out, inverse distance, Delaunay, conservative)
@@ -39,10 +40,11 @@ __all__ = [
 
 
 class Readout(eqx.Module):
-    """c → f̂(X*): the read-out of a plan, from coefficients to target values.
+    """c ↦ f̂(X_*): the read-out of a plan, from coefficients to target values.
 
     A `Stencil` is the sparse read-out of every local scheme; dense kernel
-    read-outs K(X*, X) arrive with the global schemes of Wave 3.
+    read-outs K_*X, the kernel matrix between the targets X_* and the sources
+    X, arrive with the global schemes of Wave 3.
 
     Examples:
         A `Stencil` is a read-out, with every row valid by default; its
@@ -218,7 +220,7 @@ class Stencil(Readout):
     def apply_adjoint(
         self, residual: Float[Array, "*batch target"]
     ) -> Float[Array, "*batch source"]:
-        """(Hᵀr)ⱼ = ∑ₖ ∑ₛ [iₖₛ = j] wₖₛ rₖ, over any leading batch dims.
+        """(Hᵀ r)ⱼ = ∑ₖ ∑ₛ [iₖₛ = j] wₖₛ rₖ, over any leading batch dims.
 
         Args:
             residual: r, with the targets last.
@@ -240,7 +242,7 @@ class Stencil(Readout):
         )
         batch_shape = residual.shape[:-1]
         zeros = jnp.zeros((*batch_shape, self.n_source), contributions.dtype)
-        # (Hᵀr)ⱼ = ∑ₖ ∑ₛ [iₖₛ = j] wₖₛ rₖ: the scatter adds repeated indices
+        # (Hᵀ r)ⱼ = ∑ₖ ∑ₛ [iₖₛ = j] wₖₛ rₖ: the scatter adds repeated indices
         adjoint = zeros.at[..., self.indices].add(contributions)
         return adjoint
 

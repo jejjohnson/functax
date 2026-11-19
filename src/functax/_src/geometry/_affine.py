@@ -56,9 +56,9 @@ def _require_invertible(transform: Any) -> None:
 def to_pixel(transform: Any, xy: Any) -> Any:
     """Map coordinates (x, y) to fractional pixel (row, col), centres at integers.
 
-    Inverting the 2 × 2 part of T,
+    Inverting the 2 × 2 linear part A = [[a, b], [d, e]] of T,
 
-        (j, i)ᵀ = [[a, b], [d, e]]⁻¹ (x − c, y − f)ᵀ,
+        (j, i)ᵀ = A⁻¹ (x − c, y − f)ᵀ,
 
     and subtracting ½ from both puts integers at pixel centres, so (0, 0) is
     the centre of the top-left pixel.
@@ -185,11 +185,11 @@ def slice_transform(
 ) -> Any:
     """The transform of the slice ``[row0::row_step, col0::col_step]`` of a raster.
 
-    The corner (i, j) of the slice's pixels is the corner (r₀ + sᵣ i,
-    c₀ + s_c j) of the raster's, so T′ = (a′, b′, c′, d′, e′, f′) is
+    The corner (i, j) of the slice's pixels is the corner (i₀ + sᵢ i,
+    j₀ + sⱼ j) of the raster's, so the slice's transform T̃ = (ã, b̃, c̃, d̃, ẽ, f̃) is
 
-        a′ = a s_c,  b′ = b sᵣ,  c′ = c + a c₀ + b r₀,
-        d′ = d s_c,  e′ = e sᵣ,  f′ = f + d c₀ + e r₀.
+        ã = a sⱼ,  b̃ = b sᵢ,  c̃ = c + a j₀ + b i₀,
+        d̃ = d sⱼ,  ẽ = e sᵢ,  f̃ = f + d j₀ + e i₀.
 
     With unit steps the slice's pixels are the raster's. With a step s > 1
     each pixel of the slice covers a block of s raster pixels, and its centre
@@ -203,13 +203,13 @@ def slice_transform(
     Args:
         transform: T = (a, b, c, d, e, f), shape ``(*batch, 6)``, NumPy or
             JAX (a sequence of six numbers counts as NumPy).
-        row0: r₀, the first row of the slice; a number or ``(*batch,)``.
-        col0: c₀, the first column of the slice; a number or ``(*batch,)``.
-        row_step: sᵣ, the row step; a number or ``(*batch,)``.
-        col_step: s_c, the column step; a number or ``(*batch,)``.
+        row0: i₀, the first row of the slice; a number or ``(*batch,)``.
+        col0: j₀, the first column of the slice; a number or ``(*batch,)``.
+        row_step: sᵢ, the row step; a number or ``(*batch,)``.
+        col_step: sⱼ, the column step; a number or ``(*batch,)``.
 
     Returns:
-        T′, shape ``(*batch, 6)``, in the namespace of the inputs.
+        T̃, shape ``(*batch, 6)``, in the namespace of the inputs.
 
     Raises:
         GeometryError: If ``transform`` does not end in six.
@@ -243,7 +243,7 @@ def slice_transform(
         for value in (row0, col0, row_step, col_step)
     )
     a, b, c, d, e, f = (transform[..., k] for k in range(6))
-    # T′ = (a s_c, b sᵣ, c + a c₀ + b r₀, d s_c, e sᵣ, f + d c₀ + e r₀)
+    # T̃ = (a sⱼ, b sᵢ, c + a j₀ + b i₀, d sⱼ, e sᵢ, f + d j₀ + e i₀)
     coefficients = (
         a * col_step,
         b * row_step,
@@ -383,7 +383,7 @@ def window(
     inverse_d = -d / determinant
     inverse_e = a / determinant
     inverse_f = (c * d - a * f) / determinant
-    # j = a⁻ x + b⁻ y + c⁻ and i = d⁻ x + e⁻ y + f⁻ at each corner
+    # (j, i) = T⁻¹(x, y) at each corner, from the six coefficients of T⁻¹
     cols = [inverse_a * x + inverse_b * y + inverse_c for x, y in corners]
     rows = [inverse_d * x + inverse_e * y + inverse_f for x, y in corners]
     # round outward to whole pixels, after snapping near-edges

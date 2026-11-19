@@ -1,10 +1,12 @@
 """Derivatives of fields on the unit sphere: surface gradient and Laplace–Beltrami.
 
 The operators take a field of a unit vector n ∈ S² and differentiate its
-radially constant extension g(x) = f(x/‖x‖), whose Euclidean derivatives at
-‖x‖ = 1 are the surface derivatives of f. They act on the unit sphere: for a
-sphere of radius R, divide the surface gradient by R and the Laplace–Beltrami
-operator by R². Moved from geonnax ``diffops`` at ``be5537d``.
+radially constant extension g(x) = f(x/‖x‖₂), x ∈ ℝ³, whose Euclidean
+derivatives at ‖x‖₂ = 1 are the surface derivatives of f. On this page ∇ and
+∇² are the gradient and the Laplacian in x, and ∇_S and ∇²_S their surface
+counterparts on S². They act on the unit sphere: for a sphere of radius R,
+divide the surface gradient by R and the Laplace–Beltrami operator by R².
+Moved from geonnax ``diffops`` at ``be5537d``.
 """
 
 from __future__ import annotations
@@ -35,26 +37,26 @@ __all__ = [
 
 
 def _unit(x: Float[Array, " 3"]) -> Float[Array, " 3"]:
-    """x/‖x‖; the origin has no direction and maps to itself, with finite gradients."""
+    """x/‖x‖₂; the origin has no direction and maps to itself, with finite gradients."""
     squares = x**2
-    # ‖x‖² = ∑_d x_d²
+    # ‖x‖₂² = ∑_d x_d²
     squared = einx.sum("[dim]", squares)
     has_direction = squared > 0.0
-    # ‖x‖
+    # ‖x‖₂
     norm = _safe_norm(squared)
-    # ‖x‖, or 1 at the origin, so that 0/1 = 0 keeps the gradient finite
+    # ‖x‖₂, or 1 at the origin, so that 0/1 = 0 keeps the gradient finite
     divisor = jnp.where(has_direction, norm, 1.0)
-    # x/‖x‖
+    # x/‖x‖₂
     return x / divisor
 
 
 def _radial_extension(f: ScalarField) -> ScalarField:
-    """g(x) = f(x/‖x‖), constant along rays."""
+    """g(x) = f(x/‖x‖₂), constant along rays."""
 
     def extension(x: Float[Array, " 3"]) -> Float[Array, ""]:
-        # x/‖x‖
+        # x/‖x‖₂
         direction = _unit(x)
-        # g(x) = f(x/‖x‖)
+        # g(x) = f(x/‖x‖₂)
         return f(direction)
 
     return extension
@@ -72,16 +74,16 @@ def _check_sphere_point(n: Real[ArrayLike, "*shape"]) -> Float[Array, " 3"]:
 def surface_grad(f: ScalarField) -> Callable[[Float[Array, " 3"]], Float[Array, " 3"]]:
     """The surface gradient ∇_S f of a field on the unit sphere.
 
-    With g(x) = f(x/‖x‖) the radially constant extension of f and n the unit
-    normal, ∇_S f(n) = (I − n nᵀ) ∇g(n). The input is projected to n/‖n‖ first,
+    With g(x) = f(x/‖x‖₂) the radially constant extension of f and n the unit
+    normal, ∇_S f(n) = (I − n nᵀ) ∇g(n). The input is projected to n/‖n‖₂ first,
     so any non-zero vector gives the surface gradient at its direction, and
     the final projection removes round-off. The origin has no direction and
     returns a finite but meaningless value (with finite gradients, so masked
     padding is safe).
 
     Algorithm:
-        1. Extend f radially, g(x) = f(x/‖x‖).
-        2. Project the input onto the sphere, n = x/‖x‖.
+        1. Extend f radially, g(x) = f(x/‖x‖₂).
+        2. Project the input onto the sphere, n = x/‖x‖₂.
         3. Take ∇g(n) by reverse mode.
         4. Remove its normal part: ∇_S f = ∇g − n (nᵀ∇g).
 
@@ -134,10 +136,12 @@ def surface_grad_enu(
 ) -> Callable[[Float[Array, " 2"]], Float[Array, " 2"]]:
     """The east and north components of the surface gradient, at a (λ, φ).
 
-    Projects `surface_grad` onto the local east and north unit vectors of
-    `enu_basis`, (êᵀ ∇_S f, n̂ᵀ ∇_S f). On a sphere of radius R these are
-    R (∂f/∂x_east, ∂f/∂y_north), the derivatives that give the geostrophic
-    velocity from sea-surface height.
+    At longitude λ and latitude φ, projects `surface_grad` onto the local east
+    and north unit vectors e_east and e_north of `enu_basis`,
+    (e_eastᵀ ∇_S f, e_northᵀ ∇_S f). On a sphere of radius R these are
+    R (∂f/∂s_east, ∂f/∂s_north), with s_east and s_north the eastward and
+    northward distances, the derivatives that give the geostrophic velocity
+    from sea-surface height.
 
     Args:
         f: A field of a unit vector, (3,) → ().
@@ -180,13 +184,13 @@ def surface_grad_enu(
         # n(λ, φ)
         units = lonlat_to_unit(points, unit=unit)
         n = units[0]
-        # the rows ê, n̂, û at the point
+        # the rows e_east, e_north, e_up at the point
         frames = enu_basis(points, unit=unit)
         frame = frames[0]
         tangent_frame = frame[:2]
         # ∇_S f(n)
         surface_gradient = gradient_on_sphere(n)
-        # (êᵀ ∇_S f, n̂ᵀ ∇_S f)
+        # (e_eastᵀ ∇_S f, e_northᵀ ∇_S f)
         return einx.dot(
             "component dim, dim -> component", tangent_frame, surface_gradient
         )
@@ -197,30 +201,31 @@ def surface_grad_enu(
 def laplace_beltrami(
     f: ScalarField,
 ) -> Callable[[Float[Array, " 3"]], Float[Array, ""]]:
-    """The Laplace–Beltrami operator Δ_S f of a field on the unit sphere.
+    """The Laplace–Beltrami operator ∇²_S f of a field on the unit sphere.
 
-    In spherical coordinates Δ = ∂_r² + (2/r) ∂_r + r⁻² Δ_S, so for the radially
-    constant extension g(x) = f(x/‖x‖) the radial terms vanish and
-    Δ_S f(n) = Δg(n) at ‖n‖ = 1. The spherical harmonics are its
-    eigenfunctions, Δ_S Y_l^m = −l(l + 1) Y_l^m.
+    In spherical coordinates, with r = ‖x‖₂, ∇² = ∂²/∂r² + (2/r) ∂/∂r + r⁻² ∇²_S,
+    so for the radially constant extension g(x) = f(x/‖x‖₂) the radial terms
+    vanish and ∇²_S f(n) = ∇²g(n) at ‖n‖₂ = 1. The spherical harmonics are its
+    eigenfunctions, ∇²_S Y_ℓm = −ℓ(ℓ + 1) Y_ℓm.
 
     Algorithm:
-        1. Extend f radially, g(x) = f(x/‖x‖).
-        2. Project the input onto the sphere, n = x/‖x‖.
-        3. Δ_S f(n) = Δg(n), by `laplacian`.
+        1. Extend f radially, g(x) = f(x/‖x‖₂).
+        2. Project the input onto the sphere, n = x/‖x‖₂.
+        3. ∇²_S f(n) = ∇²g(n), by `laplacian`.
 
     Args:
         f: A field of a unit vector, (3,) → ().
 
     Returns:
-        A callable (3,) → () that evaluates Δ_S f at the direction n/‖n‖ of its
+        A callable (3,) → () that evaluates ∇²_S f at the direction n/‖n‖₂ of its
         input (the origin returns a finite but meaningless value).
 
     Raises:
         ValidationError: When the callable gets anything but one 3-D point.
 
     Examples:
-        f = z is Y_1^0 up to a constant: the eigenvalue is −l(l + 1) = −2:
+        f(n) = n₂, the z component, is Y₁₀ up to a constant: the eigenvalue
+        is −ℓ(ℓ + 1) = −2:
 
         >>> import jax.numpy as jnp
         >>> from functax.diffops import laplace_beltrami
@@ -229,7 +234,7 @@ def laplace_beltrami(
         >>> bool(jnp.allclose(degree_one(n), -2.0 * n[2]))
         True
 
-        f = 3z² − 1 is Y_2^0 up to a constant, with eigenvalue −6:
+        f(n) = 3n₂² − 1 is Y₂₀ up to a constant, with eigenvalue −6:
 
         >>> degree_two = laplace_beltrami(lambda m: 3.0 * m[2] ** 2 - 1.0)
         >>> bool(jnp.allclose(degree_two(n), -6.0 * (3.0 * n[2] ** 2 - 1.0)))
@@ -240,7 +245,7 @@ def laplace_beltrami(
 
     def _laplace_beltrami(n: Real[ArrayLike, "*shape"]) -> Float[Array, ""]:
         n = _check_sphere_point(n)
-        # Δ_S f(n) = Δg(n)
+        # ∇²_S f(n) = ∇²g(n)
         return lap(n)
 
     return _laplace_beltrami

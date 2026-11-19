@@ -103,45 +103,45 @@ class Identity(Fit):
 class KernelSolve(Fit):
     """[c; b] = A⁻¹ [y; 0], the saddle-point system of a kernel and a tail.
 
-    With the (N, N) kernel matrix K̃ = K + λI on the sources (smoothing or a
-    nugget on the diagonal) and the (N, P) tail matrix P (monomials, a
-    kriging drift),
+    With the (N, N) kernel matrix K̃ = K_XX + βI on the N sources X (a
+    smoothing or nugget weight β ≥ 0 on the diagonal) and the (N, N_tail) tail
+    matrix P of N_tail terms (monomials, a kriging drift),
 
         A = [[K̃, P], [Pᵀ, 0]],  K̃ c + P b = y  and  Pᵀ c = 0,
 
-    so the N + P coefficients are the kernel weights c and the tail weights
-    b. A is symmetric and indefinite; it is solved by the null-space method,
-    which needs K̃ positive definite only on the null space of Pᵀ, as a
-    conditionally positive definite kernel with a tail of high enough degree
-    is.
+    so the N + N_tail coefficients are the kernel weights c ∈ ℝᴺ and the tail
+    weights b ∈ ℝ^{N_tail}. A is symmetric and indefinite; it is solved by the
+    null-space method, which needs K̃ positive definite only on the null space
+    of Pᵀ, as a conditionally positive definite kernel with a tail of high
+    enough degree is.
 
     Algorithm:
         Built once:
 
         1. Factor P = Q R with the complete QR, Q = [Q₁ Q₂], so the columns of
-           Q₂ (N × (N − P)) span the null space of Pᵀ.
-        2. Form M = Q₂ᵀ K̃ Q₂ ((N − P) × (N − P), positive definite) and
+           Q₂ (N × (N − N_tail)) span the null space of Pᵀ.
+        2. Form C = Q₂ᵀ K̃ Q₂ ((N − N_tail) × (N − N_tail), positive definite) and
            factor it with ``solver`` (lineax; Cholesky by default), once.
 
-        Each solve of A [c; b] = [g; h]:
+        Each solve of A [c; b] = [g; h], with g ∈ ℝᴺ and h ∈ ℝ^{N_tail}:
 
         1. The particular solution c₀ = Q₁ R⁻ᵀ h, with Pᵀ c₀ = h.
-        2. α = M⁻¹ Q₂ᵀ (g − K̃ c₀) and c = c₀ + Q₂ α.
+        2. α = C⁻¹ Q₂ᵀ (g − K̃ c₀) and c = c₀ + Q₂ α.
         3. b = R⁻¹ Q₁ᵀ (g − K̃ c).
 
-        With no tail (P = 0), M = K̃ and c = K̃⁻¹ g.
+        With no tail (N_tail = 0), C = K̃ and c = K̃⁻¹ g.
 
     The fit is 𝒮 = A⁻¹ E with E = [I; 0], and A is symmetric, so its adjoint
     𝒮ᵀ g = Eᵀ A⁻¹ g is the same solve, restricted to the data block.
 
     Args:
         gram: K̃, the (N, N) kernel matrix with any smoothing on its diagonal.
-        terms: P, the (N, P) tail matrix, or ``None`` for no tail.
-        solver: The lineax solver for M; by default ``lineax.Cholesky()``
+        terms: P, the (N, N_tail) tail matrix, or ``None`` for no tail.
+        solver: The lineax solver for C; by default ``lineax.Cholesky()``
             when ``positive_definite``, else ``lineax.LU()``.
-        positive_definite: Whether M is positive definite (the kernel is
+        positive_definite: Whether C is positive definite (the kernel is
             positive definite, or conditionally so of an order the tail
-            covers); M is tagged positive semi-definite for lineax then, and
+            covers); C is tagged positive semi-definite for lineax then, and
             only symmetric otherwise.
 
     Raises:
@@ -213,18 +213,18 @@ class KernelSolve(Fit):
             self.triangular = None
         else:
             n_terms = terms.shape[1]
-            # P = Q R, complete: Q₂ = Q[:, P:] spans the null space of Pᵀ
+            # P = Q R, complete: Q₂ = Q[:, N_tail:] spans the null space of Pᵀ
             basis, triangular = jnp.linalg.qr(terms, mode="complete")
             null_basis = basis[:, n_terms:]
             # Q₂ᵀ K̃
             projected = einx.dot("row free, row col -> free col", null_basis, gram)
-            # M = Q₂ᵀ K̃ Q₂
+            # C = Q₂ᵀ K̃ Q₂
             product = einx.dot(
                 "free col, col other -> free other", projected, null_basis
             )
             # symmetric to the last bit, so 𝒮ᵀ is the same solve as 𝒮
             transposed = einx.id("free other -> other free", product)
-            # M = (M + Mᵀ)/2
+            # C = (C + Cᵀ)/2
             inner_matrix = (product + transposed) / 2
             self.gram = gram
             self.basis = basis
@@ -241,7 +241,7 @@ class KernelSolve(Fit):
         self.n_terms = int(n_terms)
 
     def _inner_solve(self, vector: Float[Array, " free"]) -> Float[Array, " free"]:
-        """M⁻¹ v, with the factorisation computed at build time."""
+        """C⁻¹ v, with the factorisation computed at build time."""
         solution = lx.linear_solve(self.inner, vector, self.solver, state=self.state)
         return solution.value
 
@@ -285,7 +285,7 @@ class KernelSolve(Fit):
         misfit = values - fitted
         # Q₂ᵀ (g − K̃ c₀)
         projected = einx.dot("source free, source -> free", null_basis, misfit)
-        # α = M⁻¹ Q₂ᵀ (g − K̃ c₀)
+        # α = C⁻¹ Q₂ᵀ (g − K̃ c₀)
         null_coefficients = self._inner_solve(projected)
         # Q₂ α
         null_part = einx.dot(
@@ -314,13 +314,13 @@ class KernelSolve(Fit):
         """A⁻¹ [g; h] for any right-hand side, over any leading batch dims.
 
         Args:
-            rhs: [g; h], N + P values with the coefficients last.
+            rhs: [g; h], N + N_tail values with the coefficients last.
 
         Returns:
             [c; b], with the coefficients last.
 
         Raises:
-            ValidationError: If the last axis of ``rhs`` is not N + P.
+            ValidationError: If the last axis of ``rhs`` is not N + N_tail.
 
         Examples:
             A batch of right-hand sides, each solved on its own:
@@ -373,5 +373,5 @@ class KernelSolve(Fit):
         return solution[..., : -self.n_terms]
 
     def data_size(self, n_coefficients: int) -> int:
-        """N = (N + P) − P."""
+        """N = (N + N_tail) − N_tail."""
         return n_coefficients - self.n_terms

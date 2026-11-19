@@ -1,11 +1,13 @@
-"""Derivatives of Euclidean fields of x ∈ ℝ^D, by automatic differentiation.
+"""Derivatives of Euclidean fields of x ∈ ℝᴰ, by automatic differentiation.
 
 A continuous field is a function of its coordinates, so its spatial
 derivatives come from automatic differentiation rather than finite
 differences, and apply alike to a network, an `Interpolant` or a basis
-expansion. Each operator takes a field of one point and returns a callable that
-evaluates the derivative at one point; batch with ``jax.vmap`` and compile with
-``jax.jit`` at the top. Moved from geonnax ``diffops`` at ``be5537d``, where
+expansion. On this page ∇ := ∇_x is the gradient in the coordinates
+x = (x₀, …, x_{D−1}), and ∇² = ∇ · ∇ the Laplacian. Each operator takes a
+field of one point and returns a callable that evaluates the derivative at
+one point; batch with ``jax.vmap`` and compile with ``jax.jit`` at the top.
+Moved from geonnax ``diffops`` at ``be5537d``, where
 `gradient` was ``grad`` and `jacobian_field` was ``jacobian`` (renamed so they no
 longer shadow ``jax.grad`` and ``jax.jacobian``).
 """
@@ -56,7 +58,7 @@ def _check_point(x: Real[ArrayLike, "*shape"], name: str = "x") -> Float[Array, 
 def gradient(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, " dim"]]:
     """The gradient ∇f of a scalar field.
 
-    (∇f)_d = ∂f/∂x_d, by reverse mode (``jax.grad``).
+    (∇f)_d = ∂f/∂x_d for d = 0, …, D − 1, by reverse mode (``jax.grad``).
 
     Args:
         f: A scalar field of one point, (D,) → ().
@@ -68,7 +70,7 @@ def gradient(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, " 
         ValidationError: When the callable gets more than one point.
 
     Examples:
-        ∇‖x‖² = 2x:
+        ∇‖x‖₂² = 2x:
 
         >>> import einx
         >>> import jax.numpy as jnp
@@ -96,16 +98,17 @@ def gradient(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, " 
 def jacobian_field(
     u: VectorField,
 ) -> Callable[[Float[Array, " dim"]], Float[Array, "component dim"]]:
-    """The Jacobian J_kd = ∂u_k/∂x_d of a vector field.
+    """The Jacobian [J_u]_kd = ∂u_k/∂x_d of a vector field.
 
-    Computed in forward mode (``jax.jacfwd``), the cheaper mode when the
-    number of coordinates D is small, as it is for fields of space and time.
+    For k = 0, …, D_u − 1 and d = 0, …, D − 1. Computed in forward mode
+    (``jax.jacfwd``), the cheaper mode when the number of coordinates D is
+    small, as it is for fields of space and time.
 
     Args:
-        u: A vector field of one point, (D,) → (K,).
+        u: A vector field of one point, (D,) → (D_u,).
 
     Returns:
-        A callable (D,) → (K, D) that evaluates J.
+        A callable (D,) → (D_u, D) that evaluates J_u.
 
     Raises:
         ValidationError: When the callable gets more than one point.
@@ -120,7 +123,7 @@ def jacobian_field(
         >>> bool(jnp.allclose(jac(jnp.array([2.0, 3.0])), expected))
         True
 
-        K need not equal D: a field of three components of two coordinates:
+        D_u need not equal D: a field of three components of two coordinates:
 
         >>> tall = jacobian_field(lambda x: jnp.array([x[0], x[1], x[0] + x[1]]))
         >>> tall(jnp.ones(2)).shape
@@ -130,7 +133,7 @@ def jacobian_field(
     def _jacobian(x: Real[ArrayLike, "*shape"]) -> Float[Array, "component dim"]:
         x = _check_point(x)
         jacobian_u = jax.jacfwd(u)
-        # J_kd = ∂u_k/∂x_d
+        # [J_u]_kd = ∂u_k/∂x_d
         return jacobian_u(x)
 
     return _jacobian
@@ -171,25 +174,25 @@ def divergence(u: VectorField) -> Callable[[Float[Array, " dim"]], Float[Array, 
     def _divergence(x: Real[ArrayLike, "*shape"]) -> Float[Array, ""]:
         x = _check_point(x)
         jacobian_u = jax.jacfwd(u)
-        # J_kd = ∂u_k/∂x_d
+        # [J_u]_kd = ∂u_k/∂x_d
         jac = jacobian_u(x)
         if jac.shape != (x.shape[0], x.shape[0]):
             msg = (
                 f"divergence needs u: (D,) → (D,), got a Jacobian of shape {jac.shape}"
             )
             raise ValidationError(msg)
-        # ∇ · u = tr J
+        # ∇ · u = tr J_u
         return jnp.trace(jac)
 
     return _divergence
 
 
 def curl2d(u: VectorField) -> Callable[[Float[Array, " 2"]], Float[Array, ""]]:
-    """The scalar curl (vorticity) ∂_x u_y − ∂_y u_x of a planar field.
+    """The scalar curl (vorticity) ∂u₁/∂x₀ − ∂u₀/∂x₁ of a planar field.
 
     Args:
         u: A planar vector field of one point, (2,) → (2,), its inputs
-            ordered (x, y).
+            ordered (x₀, x₁).
 
     Returns:
         A callable (2,) → () that evaluates the curl.
@@ -199,7 +202,7 @@ def curl2d(u: VectorField) -> Callable[[Float[Array, " 2"]], Float[Array, ""]]:
             does not map (2,) to (2,).
 
     Examples:
-        Solid-body rotation u = (−y, x) has vorticity 2:
+        Solid-body rotation u = (−x₁, x₀) has vorticity 2:
 
         >>> import jax.numpy as jnp
         >>> from functax.diffops import curl2d
@@ -218,41 +221,41 @@ def curl2d(u: VectorField) -> Callable[[Float[Array, " 2"]], Float[Array, ""]]:
     def _curl(x: Real[ArrayLike, "*shape"]) -> Float[Array, ""]:
         x = _check_point(x)
         jacobian_u = jax.jacfwd(u)
-        # J_kd = ∂u_k/∂x_d
+        # [J_u]_kd = ∂u_k/∂x_d
         jac = jacobian_u(x)
         if jac.shape != (2, 2):
             msg = f"curl2d needs u: (2,) → (2,), got a Jacobian of shape {jac.shape}"
             raise ValidationError(msg)
-        # ∂_x u_y − ∂_y u_x
+        # ∂u₁/∂x₀ − ∂u₀/∂x₁
         return jac[1, 0] - jac[0, 1]
 
     return _curl
 
 
 def laplacian(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, ""]]:
-    """The Laplacian Δf = ∑_d ∂²f/∂x_d² of a scalar field.
+    """The Laplacian ∇²f = ∑_d ∂²f/∂x_d² of a scalar field.
 
-    Evaluated as ∑_d e_dᵀ ∇²f e_d with forward-over-reverse Hessian-vector
-    products (``jax.jvp`` of ``jax.grad``) along the D unit vectors, so the
-    dense Hessian is never formed.
+    Evaluated as ∑_d e_dᵀ (∂²f/∂x∂xᵀ) e_d, with e_d the d-th unit vector, by
+    forward-over-reverse Hessian-vector products (``jax.jvp`` of ``jax.grad``)
+    along the D unit vectors, so the dense Hessian is never formed.
 
     Algorithm:
         1. Build the reverse-mode gradient ∇f.
         2. For each unit vector e_d, push it forward through ∇f (``jax.jvp``)
-           to get ∇²f e_d, and take e_dᵀ ∇²f e_d.
+           to get (∂²f/∂x∂xᵀ) e_d, and take e_dᵀ (∂²f/∂x∂xᵀ) e_d.
         3. Sum the D curvatures.
 
     Args:
         f: A scalar field of one point, (D,) → ().
 
     Returns:
-        A callable (D,) → () that evaluates Δf.
+        A callable (D,) → () that evaluates ∇²f.
 
     Raises:
         ValidationError: When the callable gets more than one point.
 
     Examples:
-        Δ‖x‖² = 2D:
+        ∇²‖x‖₂² = 2D:
 
         >>> import einx
         >>> import jax.numpy as jnp
@@ -261,7 +264,7 @@ def laplacian(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, "
         >>> bool(jnp.allclose(lap(jnp.array([0.5, -1.0, 2.0])), 6.0))
         True
 
-        A harmonic function, x₀² − x₁², has Δf = 0:
+        A harmonic function, x₀² − x₁², has ∇²f = 0:
 
         >>> harmonic = laplacian(lambda x: x[0] ** 2 - x[1] ** 2)
         >>> bool(jnp.allclose(harmonic(jnp.array([0.3, 1.2])), 0.0))
@@ -273,9 +276,9 @@ def laplacian(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, "
         grad_f = jax.grad(f)
 
         def curvature_along(direction: Float[Array, " dim"]) -> Float[Array, ""]:
-            # ∇²f e_d, a Hessian-vector product, forward over reverse
+            # (∂²f/∂x∂xᵀ) e_d, a Hessian-vector product, forward over reverse
             _, hessian_direction = jax.jvp(grad_f, (x,), (direction,))
-            # e_dᵀ ∇²f e_d
+            # e_dᵀ (∂²f/∂x∂xᵀ) e_d
             return einx.dot("dim, dim ->", hessian_direction, direction)
 
         # e_d, the D unit vectors as rows
@@ -283,7 +286,7 @@ def laplacian(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, "
         curvature_batch = jax.vmap(curvature_along)
         # ∂²f/∂x_d² for each d
         curvatures = curvature_batch(directions)
-        # Δf = ∑_d ∂²f/∂x_d²
+        # ∇²f = ∑_d ∂²f/∂x_d²
         return einx.sum("[dim]", curvatures)
 
     return _laplacian

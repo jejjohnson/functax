@@ -2,10 +2,11 @@
 
 The columns are an orthonormal multiscale wavelet basis, Φ = Wᵀ for the
 periodic DWT analysis operator W built by cascading convolve-and-downsample
-levels, so Φᵀ Φ = I and a field is reconstructed exactly as Φ (Φᵀ f). This is
-the critically sampled counterpart of the overcomplete Gabor frames: periodic
-boundaries, power-of-two sizes, and the Haar, db2 and db4 filters, built once
-on the host. Moved from geonnax ``_wavelet`` at ``be5537d``.
+levels, so Φᵀ Φ = I and a field f on the grid is reconstructed exactly as
+Φ (Φᵀ f). This is the critically sampled counterpart of the overcomplete Gabor
+frames: periodic boundaries, power-of-two sizes, and the Haar, db2 and db4
+filters, built once on the host. Moved from geonnax ``_wavelet`` at
+``be5537d``.
 """
 
 from __future__ import annotations
@@ -29,8 +30,8 @@ __all__ = [
 ]
 
 
-# the orthonormal scaling (low-pass) filters, ∑h = √2 and ∑h² = 1, in the
-# PyWavelets ``dec_lo`` convention
+# the orthonormal scaling (low-pass) filters h, ∑ₖ hₖ = √2 and ∑ₖ hₖ² = 1, in
+# the PyWavelets ``dec_lo`` convention
 _FILTERS: dict[str, tuple[float, ...]] = {
     "haar": (0.7071067811865476, 0.7071067811865476),
     "db2": (
@@ -53,13 +54,16 @@ _FILTERS: dict[str, tuple[float, ...]] = {
 
 
 def _qmf(h: Float[np.ndarray, " tap"]) -> Float[np.ndarray, " tap"]:
-    """The high-pass quadrature-mirror filter g_k = (−1)^k h_{L−1−k}."""
+    """The high-pass quadrature-mirror filter g_k = (−1)ᵏ h_{L−1−k}.
+
+    For a scaling filter h of length L, with the taps k = 0, …, L − 1.
+    """
     taps = np.arange(h.shape[0])
-    # (−1)^k
+    # (−1)ᵏ
     signs = (-1.0) ** taps
     # h_{L−1−k}
     reversed_filter = h[::-1]
-    # g_k = (−1)^k h_{L−1−k}
+    # g_k = (−1)ᵏ h_{L−1−k}
     return signs * reversed_filter
 
 
@@ -92,9 +96,10 @@ def wavelet_basis_1d(
 ) -> Float[Array, "row col"]:
     """The orthonormal 1-D DWT synthesis basis on a periodic grid of length n.
 
-    Φ = Wᵀ with W = W_J ⋯ W₂ W₁, where level j applies the periodic
-    convolve-and-downsample matrix to the approximation block of size n/2^{j−1}
-    and leaves the details already split off unchanged.
+    Φ = Wᵀ with W = W_J ⋯ W₂ W₁ for J = ``levels``, where level j = 1, …, J
+    applies the periodic convolve-and-downsample matrix to the approximation
+    block of size n/2^{j−1} and leaves the details already split off
+    unchanged.
 
     Algorithm:
         1. Build the high-pass mirror g of the scaling filter h.
@@ -109,7 +114,8 @@ def wavelet_basis_1d(
             default, and capped there.
 
     Returns:
-        Φ, n × n with the orthonormal basis functions as columns (Φᵀ Φ = I).
+        Φ ∈ ℝ^{n×n}, with the orthonormal basis functions as columns
+        (Φᵀ Φ = I).
 
     Raises:
         ValidationError: If ``n`` is not a power of two of at least 2,
@@ -171,8 +177,9 @@ def wavelet_basis_2d(
 ) -> Float[Array, "row col"]:
     """The separable orthonormal 2-D DWT basis, the Kronecker product Φ_y ⊗ Φ_x.
 
-    Its rows index the row-major flattened (ny, nx) grid (row iy · nx + ix),
-    and it stays orthonormal.
+    Φ_y and Φ_x are the 1-D bases of `wavelet_basis_1d` along the rows and the
+    columns. Its rows index the row-major flattened (ny, nx) grid (row
+    iy · nx + ix), and it stays orthonormal.
 
     Args:
         ny: The number of rows, a power of two of at least 2.

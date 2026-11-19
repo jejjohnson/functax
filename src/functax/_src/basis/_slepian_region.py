@@ -1,10 +1,13 @@
 """Slepian bases for general regions of the sphere, and a spherical polygon test.
 
-The concentration matrix D_ij = ∫_R Y_i Y_j dΩ over the real harmonics up to
-l_max has the Slepian functions as eigenvectors and their concentrations
-λ_k in [0, 1] as eigenvalues; its trace, the Shannon number (l_max + 1)² A/(4π),
-counts the well-concentrated ones. A region comes as a quadrature over it or as
-the polar gap between two caps. Moved from geonnax ``_slepian_region`` at
+The concentration matrix D_ij = ∫_R Y_i Y_j dΩ of a region R ⊂ S² of area A,
+over the real harmonics Y_i, i = 1, …, (ℓ_max + 1)², up to degree ℓ_max (dΩ the
+area element of the unit sphere), has the harmonic coefficients of the Slepian
+functions as eigenvectors and their concentrations λ_k in [0, 1] as
+eigenvalues; its trace, the Shannon number (ℓ_max + 1)² A/(4π), counts the
+well-concentrated ones. On this page λ is always a concentration, so longitude
+and latitude are written out in words. A region comes as a quadrature over it
+or as the polar gap between two caps. Moved from geonnax ``_slepian_region`` at
 ``be5537d``.
 """
 
@@ -48,13 +51,14 @@ __all__ = [
 class SlepianBasis(eqx.Module):
     """The Slepian functions of a general region, in the real harmonic basis.
 
-    Each retained function is g_k = ∑_i C_ik Y_i, evaluated in the global
-    frame (no rotation, unlike `SlepianCapBasis`).
+    Each retained function is g_k = ∑_i C_ik Y_i, for k = 1, …, M with M the
+    number of retained modes, evaluated in the global frame (no rotation,
+    unlike `SlepianCapBasis`).
 
     Attributes:
-        l_max: The highest spherical-harmonic degree.
-        coeffs: C, one column per retained mode, sorted by decreasing
-            concentration.
+        l_max: ℓ_max, the highest spherical-harmonic degree.
+        coeffs: C ∈ ℝ^{(ℓ_max+1)²×M}, one column per retained mode, sorted by
+            decreasing concentration.
         eigenvalues: The concentration λ_k in [0, 1] of each mode.
 
     Examples:
@@ -115,7 +119,7 @@ def _finish(
     transposed = einx.id("row col -> col row", matrix)
     # D ← (D + Dᵀ)/2, symmetric against round-off
     symmetric = 0.5 * (matrix + transposed)
-    # D g = λ g
+    # D c = λ c
     values, vectors = jnp.linalg.eigh(symmetric)
     # descending λ
     ascending = jnp.argsort(values)
@@ -142,23 +146,25 @@ def slepian_region_basis(
 ) -> SlepianBasis:
     """The Slepian functions of a region given by a quadrature over it.
 
-    D_ij ≈ ∑_q w_q Y_i(x_q) Y_j(x_q) over the region's quadrature nodes. The
-    basis is as accurate as that quadrature: a rule exact to degree 2 l_max on
-    the region gives the exact Slepians, while a masked global grid (such as
-    `gauss_legendre_grid` filtered by `spherical_polygon_mask`) has an error set
-    by the grid spacing at the region's boundary.
+    D_ij ≈ ∑_q w_q Y_i(r̂_q) Y_j(r̂_q) over the region's quadrature nodes r̂_q
+    ∈ S² and weights w_q, q = 1, …, Q. The basis is as accurate as that
+    quadrature: a rule exact to degree 2 ℓ_max on the region gives the exact
+    Slepians, while a masked global grid (such as `gauss_legendre_grid`
+    filtered by `spherical_polygon_mask`) has an error set by the grid spacing
+    at the region's boundary.
 
     Algorithm:
         1. Evaluate the real harmonics at the region's quadrature nodes.
-        2. Form D = Yᵀ diag(w) Y by quadrature.
+        2. Form D = Yᵀ diag(w) Y by quadrature, with Y ∈ ℝ^{Q×(ℓ_max+1)²}
+           the harmonics at the nodes, entry (q, i) being Y_i(r̂_q).
         3. Diagonalise D, sort by decreasing concentration, and keep the
            selected modes.
 
     Args:
-        l_max: The highest spherical-harmonic degree.
-        region_points_xyz: The quadrature nodes inside the region, unit
+        l_max: ℓ_max, the highest spherical-harmonic degree.
+        region_points_xyz: The quadrature nodes r̂_q inside the region, unit
             vectors.
-        region_weights: Their weights, summing to the region's area.
+        region_weights: Their weights w_q, summing to the region's area.
         n_modes: The number of functions to keep; the Shannon number tr D by
             default, when ``eig_threshold`` is unset too.
         eig_threshold: Keep the functions with concentration above this value.
@@ -196,9 +202,9 @@ def slepian_region_basis(
         msg = f"'region_weights' must have shape {expected}, got {weights.shape}"
         raise ValidationError(msg)
     harmonics = real_spherical_harmonics(points, degree)
-    # w_q Y_i(x_q)
+    # w_q Y_i(r̂_q)
     weighted = einx.multiply("node harmonic, node", harmonics, weights)
-    # D_ij = ∑_q w_q Y_i(x_q) Y_j(x_q)
+    # D_ij = ∑_q w_q Y_i(r̂_q) Y_j(r̂_q)
     matrix = einx.dot("node row, node col -> row col", weighted, harmonics)
     return _finish(degree, matrix, n_modes, eig_threshold)
 
@@ -213,28 +219,29 @@ def slepian_polar_gap_basis(
 ) -> SlepianBasis:
     """The Slepian functions of the band between two polar caps (a polar gap).
 
-    The region is |z| < cos Θ with Θ = ``gap_colatitude``: the sphere minus two
-    caps of half-angle Θ around the poles, as for satellite data that miss the
-    poles. The region is zonal, so D is block-diagonal in m with blocks
-    D^m_ll′ = ∫_{−cos Θ}^{cos Θ} P̄_l^m P̄_l′^m dz, computed exactly by
+    The region is |z| < cos Θ, with z = cos θ for the colatitude θ and
+    Θ = ``gap_colatitude``: the sphere minus two caps of half-angle Θ around
+    the poles, as for satellite data that miss the poles. The region is zonal,
+    so D is block-diagonal in the order m with blocks
+    D^{(m)}_ℓℓ′ = ∫_{−cos Θ}^{cos Θ} P̄_ℓᵐ P̄_ℓ′ᵐ dz, computed exactly by
     Gauss–Legendre.
 
     Algorithm:
         1. Lay a Gauss–Legendre rule on z over [−cos Θ, cos Θ].
-        2. For each |m|, integrate the products of the P̄_l^m by quadrature,
+        2. For each |m|, integrate the products of the P̄_ℓᵐ by quadrature,
            and place the block at both orders ±m.
         3. Diagonalise D, sort by decreasing concentration, and keep the
            selected modes.
 
     Args:
-        l_max: The highest spherical-harmonic degree.
+        l_max: ℓ_max, the highest spherical-harmonic degree.
         gap_colatitude: Θ, the half-angle of each polar cap, in radians in
             (0, π/2).
         n_modes: The number of functions to keep; the Shannon number by
             default.
         eig_threshold: Keep the functions with concentration above this value.
-        num_quadrature: The Gauss–Legendre order; l_max + 2 by default, exact
-            for the degree-2 l_max integrands.
+        num_quadrature: The Gauss–Legendre order; ℓ_max + 2 by default, exact
+            for the integrands of degree 2ℓ_max.
 
     Returns:
         A `SlepianBasis`.
@@ -271,9 +278,9 @@ def slepian_polar_gap_basis(
     for m_abs in range(degree + 1):
         columns = [i for i, (_, order) in enumerate(pairs) if order == m_abs]
         block_p = p_bar[:, jnp.asarray(columns)]
-        # w_q P̄_l^m(z_q)
+        # w_q P̄_ℓᵐ(z_q)
         weighted = einx.multiply("node row, node", block_p, w)
-        # D^m_ll′ = ∑_q w_q P̄_l^m(z_q) P̄_l′^m(z_q)
+        # D^{(m)}_ℓℓ′ = ∑_q w_q P̄_ℓᵐ(z_q) P̄_ℓ′ᵐ(z_q)
         block = einx.dot("node row, node col -> row col", weighted, block_p)
         for m in {m_abs, -m_abs}:
             index = jnp.asarray([_sh_index(ell, m) for ell in range(m_abs, degree + 1)])
@@ -291,24 +298,27 @@ def spherical_polygon_mask(
     """Which points lie inside a spherical polygon.
 
     The edges are great-circle arcs between consecutive vertices (the ring
-    closes itself). A point p is inside when the polygon winds once
+    closes itself). A point r̂ ∈ S² is inside when the polygon winds once
     counter-clockwise around it: the signed angles
-    atan2((a × b) · p, a · b − (a · p)(b · p)) over the edges (a, b) sum to +2π.
+    atan2((a × b) · r̂, a · b − (a · r̂)(b · r̂)) over the edges, from vertex a to
+    its successor b as unit vectors, sum to +2π.
     The vertices must run counter-clockwise seen from outside the sphere
     (interior on the left, as in GeoJSON exterior rings), and the interior
     must fit in an open hemisphere, so a point and its antipode are never both
     inside.
 
     Args:
-        points_xyz: The unit vectors to classify.
-        polygon_lonlat: (λ, φ) of each vertex, at least 3.
+        points_xyz: The unit vectors r̂ to classify.
+        polygon_lonlat: The longitude and latitude of each vertex, at least
+            3 vertices.
         unit: ``"degrees"`` or ``"radians"``, the unit of ``polygon_lonlat``.
 
     Returns:
         Whether each point is inside.
 
     Raises:
-        ValidationError: If ``polygon_lonlat`` is not (P ≥ 3, 2).
+        ValidationError: If ``polygon_lonlat`` is not one (longitude,
+            latitude) row per vertex, with at least 3 vertices.
         GeometryError: If ``unit`` is unknown.
 
     Examples:
@@ -336,19 +346,19 @@ def spherical_polygon_mask(
     a = lonlat_to_unit(polygon, unit=unit)
     b = einx.roll("[edge] dim", a, shift=-1)
     p = jnp.asarray(points_xyz)
-    # --- the signed angle each edge subtends at p ---
+    # --- the signed angle each edge subtends at r̂ ---
     normal = jnp.cross(a, b)
-    # (a × b) · p
+    # (a × b) · r̂
     numerator = einx.dot("obs dim, edge dim -> obs edge", p, normal)
     # a · b
     a_dot_b = einx.dot("edge dim, edge dim -> edge", a, b)
-    # a · p
+    # a · r̂
     a_dot_p = einx.dot("obs dim, edge dim -> obs edge", p, a)
-    # b · p
+    # b · r̂
     b_dot_p = einx.dot("obs dim, edge dim -> obs edge", p, b)
-    # (a · p)(b · p)
+    # (a · r̂)(b · r̂)
     projection_product = a_dot_p * b_dot_p
-    # a · b − (a · p)(b · p)
+    # a · b − (a · r̂)(b · r̂)
     denominator = einx.subtract(
         "edge, obs edge -> obs edge", a_dot_b, projection_product
     )

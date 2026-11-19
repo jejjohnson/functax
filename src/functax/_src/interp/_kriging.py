@@ -42,16 +42,16 @@ __all__ = [
 
 
 type Drift = str | int | Callable[[Float[Array, "obs dim"]], Float[Array, "obs term"]]
-"""``"constant"``, a polynomial degree, or a callable F(x) giving the (n, P) drift."""
+"""``"constant"``, a polynomial degree, or a callable P(X) giving the drift matrix."""
 
 
 def _checked_drift(
     drift: Callable[[Float[Array, "obs dim"]], Float[Array, "obs term"]],
 ) -> Tail:
-    """F, raising unless it returns one row of drift terms per point."""
+    """P(X), raising unless it returns one row of drift terms per point of X."""
 
     def terms(points: Float[Array, "obs dim"]) -> Float[Array, "obs term"]:
-        # F(x)
+        # P(X)
         drift_terms = drift(points)
         values = jnp.asarray(drift_terms)
         if values.ndim != 2 or values.shape[0] != points.shape[0]:
@@ -68,21 +68,23 @@ def _checked_drift(
 class Kriging(Scheme):
     """Kriging: the best linear unbiased predictor under a covariance k and a drift.
 
-    With the covariance K + τ²I on the sources (the nugget τ² on the
-    diagonal), the (N, P) drift matrix F and the samples y, the mean solves
-    the saddle-point system of `RBF`,
+    With the N samples y ∈ ℝ^N at the sources X, their covariance
+    Σ_y = K_XX + σ_ε² I ∈ ℝ^{N×N} (the nugget σ_ε² on the diagonal, the K̃ of
+    `KernelSolve`) and the drift matrix P = P(X) ∈ ℝ^{N×N_tail}, the mean
+    solves the saddle-point system of `RBF`,
 
-        [[K + τ²I, F], [Fᵀ, 0]] [c; b] = [y; 0],  f̂(x*) = k*ᵀ c + f*ᵀ b,
+        [[Σ_y, P], [Pᵀ, 0]] [c; b] = [y; 0],  f̂(x_*) = k_*ᵀ c + p_*ᵀ b,
 
-    and with the cross-covariance k* = k(X, x*), the prior variance
-    k** = k(x*, x*) and u = f* − Fᵀ (K + τ²I)⁻¹ k*, the variance is
+    with c ∈ ℝ^N, b ∈ ℝ^{N_tail}, and at a target x_* the cross-covariance
+    k_* = k(X, x_*) ∈ ℝ^N and the drift p_* = P(x_*)ᵀ ∈ ℝ^{N_tail}. With the
+    drift's correction p̃_* = p_* − Pᵀ Σ_y⁻¹ k_*, the posterior variance is
 
-        σ²(x*) = k** − k*ᵀ (K + τ²I)⁻¹ k* + uᵀ (Fᵀ (K + τ²I)⁻¹ F)⁻¹ u.
+        σ_*² = k(x_*, x_*) − k_*ᵀ Σ_y⁻¹ k_* + p̃_*ᵀ (Pᵀ Σ_y⁻¹ P)⁻¹ p̃_*.
 
     Simple kriging (no drift, a known zero mean) is the Gaussian-process
-    posterior of the latent field; ordinary kriging (F a column of ones) has
+    posterior of the latent field; ordinary kriging (P a column of ones) has
     weights that sum to 1; universal kriging takes a polynomial or any drift
-    F(x). The plan
+    P(X). The plan
     is a `GaussianPlan` with a `KernelCovariance`, so ``plan(y)`` is the mean
     and ``plan.variance()``, ``covariance()`` and ``sample(y, key=…)`` add the
     uncertainty. The solve is Cholesky through lineax, in the dtype of the
@@ -91,10 +93,11 @@ class Kriging(Scheme):
     Args:
         kernel: k, a positive definite covariance: any `Kernel`.
         drift: ``None`` (simple), ``"constant"`` (ordinary, the default), a
-            polynomial degree d ≥ 0 (universal, monomials up to d in
+            polynomial degree ≥ 0 (universal, monomials up to that degree in
             coordinates scaled to the sources' bounding box), or a callable
-            F(x) returning the (n, P) drift at n points (universal).
-        nugget: τ² ≥ 0, the noise variance of the samples.
+            P(X) returning the drift matrix, one row per point of X
+            (universal).
+        nugget: σ_ε² ≥ 0, the noise variance of the samples.
 
     Raises:
         ValidationError: If ``kernel`` is not callable, ``drift`` is none of
@@ -149,7 +152,7 @@ class Kriging(Scheme):
         _check_smoothing(self.nugget, "nugget")
 
     def _tail_for(self, sources: Float[Array, "source dim"]) -> Tail | None:
-        """The drift F as a function of the points, or ``None`` for simple kriging."""
+        """The drift P(X) of the points X, or ``None`` for simple kriging."""
         drift = self.drift
         if drift is None:
             return None

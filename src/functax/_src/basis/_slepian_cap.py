@@ -1,10 +1,13 @@
 """Spherical Slepian functions of an axisymmetric cap.
 
 Slepian functions are band-limited combinations of the real spherical
-harmonics that concentrate the most energy inside a region. For a cap the
-concentration operator is block-diagonal in the azimuthal order m, so it is
-built and diagonalised block by block, and the retained modes are evaluated
-against `real_spherical_harmonics`. Moved from geonnax ``_slepian`` at
+harmonics Y_ℓm (degree ℓ ≤ ℓ_max, order m) that concentrate the most energy
+inside a region; the concentration λ ∈ [0, 1] of each is the eigenvalue of the
+concentration matrix D. For a cap of half-angle Θ the concentration operator
+is block-diagonal in the azimuthal order m, so it is built and diagonalised
+block by block, and the retained modes are evaluated against
+`real_spherical_harmonics`. On this page λ is always a concentration, so
+longitude and latitude are written out in words. Moved from geonnax ``_slepian`` at
 ``be5537d``.
 """
 
@@ -55,14 +58,14 @@ def _check_cap_radius(cap_radius: Any) -> None:
 
 
 def _sh_index(ell: int, m: int) -> int:
-    """The column of Y_lm in the layout of `real_spherical_harmonics`."""
+    """The column of Y_ℓm in the layout of `real_spherical_harmonics`."""
     return ell * ell + (m + ell)
 
 
 def _cap_quadrature(
     cap_radius: float | Float[Array, ""], num_quadrature: int
 ) -> tuple[Float[Array, " node"], Float[Array, " node"]]:
-    """Gauss–Legendre on z = cos θ over the cap, [cos Θ, 1].
+    """Gauss–Legendre on z = cos θ, θ the colatitude, over the cap [cos Θ, 1].
 
     The nodes and weights on [−1, 1] are host constants for each
     ``num_quadrature``; the scaling by Θ stays in JAX, so Θ may be traced.
@@ -86,10 +89,10 @@ def _slepian_block(
     m: int,
     num_quadrature: int,
 ) -> Float[Array, "row col"]:
-    """The block D^m_ll′ = ∫_cap Y_l^m Y_l′^m dΩ for l, l′ = |m|, …, l_max."""
+    """The block D^{(m)}_ℓℓ′ = ∫_cap Y_ℓm Y_ℓ′m dΩ for ℓ, ℓ′ = |m|, …, ℓ_max."""
     m_abs = abs(m)
     z, w = _cap_quadrature(cap_radius, num_quadrature)
-    # the orthonormal P̄_l^m (unit L² norm on [−1, 1]) for l = |m|, …, l_max; the
+    # the orthonormal P̄_ℓᵐ (unit L² norm on [−1, 1]) for ℓ = |m|, …, ℓ_max; the
     # real-harmonic normalisation is P̄/√(2π) for m = 0 and √2 P̄/√(2π) otherwise
     columns = [
         i
@@ -100,23 +103,23 @@ def _slepian_block(
     p_bar = legendre[:, jnp.asarray(columns)]
     factor = (math.sqrt(2.0) if m_abs > 0 else 1.0) / math.sqrt(2.0 * math.pi)
     transposed = einx.id("node row -> row node", p_bar)
-    # the latitude parts of Y_l^m
+    # the latitude parts of Y_ℓm
     rows = factor * transposed
-    # w_q P_l(z_q)
+    # w_q P̄_ℓᵐ(z_q), for the nodes q of the cap rule
     weighted = einx.multiply("row node, node", rows, w)
-    # the azimuthal integral: 2π for m = 0, π otherwise
+    # the azimuthal integral of cos² or sin²: 2π for m = 0, π otherwise
     phi_factor = 2.0 * jnp.pi if m_abs == 0 else jnp.pi
-    # ∫ P_l P_l′ dz ≈ ∑_q w_q P_l(z_q) P_l′(z_q)
+    # ∫ P̄_ℓᵐ P̄_ℓ′ᵐ dz ≈ ∑_q w_q P̄_ℓᵐ(z_q) P̄_ℓ′ᵐ(z_q)
     latitude_integral = einx.dot("row node, col node -> row col", weighted, rows)
-    # D^m_ll′ = (∫ dφ) ∫ P_l P_l′ dz
+    # D^{(m)}_ℓℓ′ = (azimuthal integral) ∫ P̄_ℓᵐ P̄_ℓ′ᵐ dz
     return phi_factor * latitude_integral
 
 
 def shannon_number(l_max: int, area: float | Float[Array, ""]) -> Float[Array, ""]:
-    """The Shannon number N = (l_max + 1)² A / (4π), the count of concentrated modes.
+    """The Shannon number N = (ℓ_max + 1)² A / (4π), the count of concentrated modes.
 
     Args:
-        l_max: The highest spherical-harmonic degree.
+        l_max: ℓ_max, the highest spherical-harmonic degree.
         area: A, the region's area on the unit sphere.
 
     Returns:
@@ -140,7 +143,7 @@ def shannon_number(l_max: int, area: float | Float[Array, ""]) -> Float[Array, "
     """
     degree = _check_degree(l_max, "l_max")
     area_array = jnp.asarray(area)
-    # N = (l_max + 1)² A / (4π)
+    # N = (ℓ_max + 1)² A / (4π)
     return ((degree + 1) ** 2) * area_array / (4.0 * jnp.pi)
 
 
@@ -152,22 +155,26 @@ def slepian_concentration_matrix(
 ) -> Float[Array, "row col"]:
     """The concentration matrix D_ij = ∫_cap Y_i Y_j dΩ of a north-pole cap.
 
-    The cap is axisymmetric, so D is block-diagonal in the order m.
+    Here Y_i, i = 1, …, (ℓ_max + 1)², are the real harmonics in the order of
+    `real_spherical_harmonics`, dΩ is the area element of the unit sphere, and
+    D ∈ ℝ^{(ℓ_max+1)²×(ℓ_max+1)²}. The cap is axisymmetric, so D is
+    block-diagonal in the order m, with blocks D^{(m)}.
 
     Algorithm:
-        1. Lay a Gauss–Legendre rule on z = cos θ over [cos Θ, 1].
-        2. For each order m, integrate the products of the P̄_l^m by
+        1. Lay a Gauss–Legendre rule on z = cos θ, θ the colatitude, over
+           [cos Θ, 1].
+        2. For each order m, integrate the products of the P̄_ℓᵐ by
            quadrature and scale by the azimuthal integral.
-        3. Scatter each block into the rows and columns of its Y_lm.
+        3. Scatter each block into the rows and columns of its Y_ℓm.
 
     Args:
-        l_max: The highest spherical-harmonic degree.
+        l_max: ℓ_max, the highest spherical-harmonic degree.
         cap_radius: Θ, the cap half-angle in radians, in (0, π].
         num_quadrature: The Gauss–Legendre order over cos θ; by default
-            max(2 l_max + 3, 8), exact for the products up to degree 2 l_max.
+            max(2ℓ_max + 3, 8), exact for the products up to degree 2ℓ_max.
 
     Returns:
-        D, over the (l_max + 1)² harmonics in the order of
+        D, over the (ℓ_max + 1)² harmonics in the order of
         `real_spherical_harmonics`.
 
     Raises:
@@ -211,23 +218,29 @@ def slepian_cap_eigh_per_m(
     *,
     num_quadrature: int | None = None,
 ) -> tuple[Float[Array, " feature"], Float[Array, "harmonic feature"]]:
-    """The cap Slepian eigenproblem D g = λ g, solved one azimuthal block at a time.
+    """The cap Slepian eigenproblem D c = λ c, solved one azimuthal block at a time.
+
+    D is the concentration matrix of `slepian_concentration_matrix`, each
+    eigenvector c ∈ ℝ^{(ℓ_max+1)²} holds the harmonic coefficients of one
+    Slepian function, and its eigenvalue λ ∈ [0, 1] is that function's
+    concentration.
 
     Algorithm:
-        1. For each order m, build the block D^m and solve D^m g = λ g.
+        1. For each order m, build the block D^{(m)} and solve
+           D^{(m)} c = λ c.
         2. Sort each block's pairs by decreasing λ, and scatter its
-           eigenvectors into the rows of its Y_lm.
+           eigenvectors into the rows of its Y_ℓm.
         3. Join the blocks, sort every pair by decreasing λ, and clip λ to
            [0, 1].
 
     Args:
-        l_max: The highest spherical-harmonic degree.
+        l_max: ℓ_max, the highest spherical-harmonic degree.
         cap_radius: Θ, the cap half-angle in radians, in (0, π].
         num_quadrature: The Gauss–Legendre order over cos θ (see
             `slepian_concentration_matrix`).
 
     Returns:
-        ``(eigenvalues, coeffs)``: the (l_max + 1)² concentrations λ in [0, 1],
+        ``(eigenvalues, coeffs)``: the (ℓ_max + 1)² concentrations λ in [0, 1],
         descending, and the harmonic coefficients of each Slepian function as
         the matching columns.
 
@@ -259,7 +272,7 @@ def slepian_cap_eigh_per_m(
     # these sorts leave (see `slepian_cap_basis`)
     for m in range(-degree, degree + 1):
         block = _slepian_block(degree, cap_radius, m, n_quad)
-        # D^m g = λ g
+        # D^{(m)} c = λ c
         values, vectors = jnp.linalg.eigh(block)
         # descending λ within the block
         ascending = jnp.argsort(values)
@@ -322,16 +335,17 @@ class SlepianCapBasis(eqx.Module):
     """A Slepian cap eigendecomposition in the real spherical-harmonic basis.
 
     Each retained Slepian function is g_k = ∑_i C_ik Y_i over the
-    (l_max + 1)² harmonics, evaluated in the frame where the cap centre is the
-    north pole.
+    (ℓ_max + 1)² harmonics Y_i, for k = 1, …, M with M the number of retained
+    modes, evaluated in the frame where the cap centre is the north pole.
 
     Attributes:
-        l_max: The highest spherical-harmonic degree.
-        coeffs: C, one column per retained mode, sorted by decreasing
-            concentration.
+        l_max: ℓ_max, the highest spherical-harmonic degree.
+        coeffs: C ∈ ℝ^{(ℓ_max+1)²×M}, one column per retained mode, sorted by
+            decreasing concentration.
         eigenvalues: The concentration λ_k of each mode.
         cap_radius: Θ, the cap half-angle in radians.
-        lonlat_centre: (λ, φ) of the cap centre, in radians.
+        lonlat_centre: The longitude and latitude of the cap centre, in
+            radians.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -414,7 +428,9 @@ class SlepianCapBasis(eqx.Module):
         )
 
     def rotate_to(self, lonlat_centre: Float[Array, " 2"]) -> SlepianCapBasis:
-        """The same cap basis centred at ``lonlat_centre`` ((λ, φ) in radians).
+        """The same cap basis centred at ``lonlat_centre``, in radians.
+
+        The centre is (longitude, latitude), as in `slepian_cap_basis`.
 
         Raises:
             ValidationError: If ``lonlat_centre`` is not (2,).
@@ -452,15 +468,15 @@ def slepian_cap_basis(
         3. Store the cap centre, the north pole by default.
 
     Args:
-        l_max: The highest spherical-harmonic degree.
+        l_max: ℓ_max, the highest spherical-harmonic degree.
         cap_radius: Θ, the cap half-angle in radians, in (0, π].
         n_modes: At most this many modes. With ``eig_threshold`` too, the
             basis is first trimmed by threshold and then cut to ``n_modes``;
             a threshold that leaves fewer than ``n_modes`` raises, since a
             silently smaller basis would break static shapes downstream.
         eig_threshold: Keep the modes with concentration above this value.
-        lonlat_centre: (λ, φ) of the cap centre in radians; the north pole by
-            default.
+        lonlat_centre: The longitude and latitude of the cap centre in
+            radians; the north pole by default.
         num_quadrature: The Gauss–Legendre order over cos θ.
 
     Returns:

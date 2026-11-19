@@ -51,6 +51,8 @@ _CONVEX_RTOL = 1e-12
 class CellOverlaps:
     """The overlap areas |cⱼ ∩ Cᵢ| > 0 of source and target cells, as pairs.
 
+    Source cell cⱼ and target cell Cᵢ have the areas |cⱼ| and |Cᵢ|.
+
     Attributes:
         target: i, the target cell of each pair.
         source: j, the source cell of each pair.
@@ -87,10 +89,11 @@ def clip_polygons(
     """Sutherland–Hodgman: each subject polygon cut to its convex clip polygon.
 
     Each clip polygon must be convex and counter-clockwise, so its inside is
-    on the left of every edge, d(p) = (q₁ − q₀) × (p − q₀) ≥ 0. For each clip
-    edge in turn, a subject edge from p to p′ keeps p′ when it is inside and
-    adds the crossing p + t (p′ − p), t = d(p) / (d(p) − d(p′)), when the two
-    ends lie on opposite sides. Subjects may be any simple polygon; a zero-length
+    on the left of every edge q₀ → q₁: the side d(p) = (q₁ − q₀) × (p − q₀)
+    of a point p is at least 0. For each clip edge in turn, a subject edge
+    from p to p′ keeps p′ when it is inside and adds the crossing
+    p + t (p′ − p), t = d(p) / (d(p) − d(p′)), when the two ends lie on
+    opposite sides. Subjects may be any simple polygon; a zero-length
     clip edge cuts nothing.
 
     Algorithm:
@@ -145,7 +148,7 @@ def clip_polygons(
         valid = einx.less("vertex, pair -> pair vertex", vertex, counts)
         # the previous vertex, cyclically within each polygon's own count
         safe_counts = np.maximum(counts, 1)
-        # k − 1 mod nₚ (einx has no remainder, so both sides are broadcast first)
+        # k − 1 mod N_vertex (einx has no remainder, so both sides are broadcast first)
         shifted = einx.id("vertex -> pair vertex", vertex - 1, pair=len(counts))
         period = einx.id("pair -> pair vertex", safe_counts, vertex=width)
         previous_index = np.mod(shifted, period)
@@ -216,8 +219,9 @@ def planar_polygon_area(
 ) -> Float[np.ndarray, " pair"]:
     """The signed shoelace area of padded polygons.
 
-    A = ½ ∑ₖ (xₖ yₖ₊₁ − xₖ₊₁ yₖ), the sum over each polygon's own ``counts``
-    vertices, with k + 1 taken cyclically; positive when counter-clockwise.
+    A = ½ ∑ₖ (xₖ yₖ₊₁ − xₖ₊₁ yₖ), the sum over the vertices (xₖ, yₖ),
+    k = 0, …, N_vertex − 1, of each polygon's own N_vertex = ``counts``, with
+    k + 1 taken cyclically; positive when counter-clockwise.
 
     Args:
         points: The vertices (x, y), padded past ``counts``.
@@ -240,7 +244,7 @@ def planar_polygon_area(
     width = points.shape[1]
     vertex = np.arange(width)
     safe_counts = np.maximum(counts, 1)
-    # k + 1 mod nₚ (einx has no remainder, so both sides are broadcast first)
+    # k + 1 mod N_vertex (einx has no remainder, so both sides are broadcast first)
     shifted = einx.id("vertex -> pair vertex", vertex + 1, pair=len(counts))
     period = einx.id("pair -> pair vertex", safe_counts, vertex=width)
     following_index = np.mod(shifted, period)
@@ -285,11 +289,11 @@ def _check_convex(polygons: Float[np.ndarray, "pair corner dim"], name: str) -> 
     forward = first[..., 0] * second[..., 1]
     backward = first[..., 1] * second[..., 0]
     turn = forward - backward
-    # s = (maxₖ |qₖ₊₁ − qₖ|_∞)²
+    # scale = (maxₖ ‖qₖ₊₁ − qₖ‖_∞)², over the corners qₖ
     magnitude = np.abs(first)
     longest = einx.max("pair [corner dim]", magnitude)
     scale = longest**2
-    # a right turn below −tol s
+    # a right turn below −tol · scale
     threshold = -_CONVEX_RTOL * scale
     turns_right = einx.less("pair corner, pair -> pair corner", turn, threshold)
     concave = einx.any("pair [corner]", turns_right)
@@ -302,8 +306,8 @@ def _check_convex(polygons: Float[np.ndarray, "pair corner dim"], name: str) -> 
 def _tangent_frames(
     centres: Float[np.ndarray, "pair 3"],
 ) -> tuple[Float[np.ndarray, "pair 3"], Float[np.ndarray, "pair 3"]]:
-    """Two unit vectors e₁, e₂ spanning the tangent plane at each centre n̂."""
-    # e₁ ∥ ẑ × n̂, or x̂ × n̂ near the poles
+    """Two unit vectors e₁, e₂ spanning the tangent plane at each unit centre o."""
+    # e₁ ∥ e_z × o, or e_x × o near the poles, with e_x, e_z the Cartesian axes
     height = np.abs(centres[:, 2])
     pole = height > 0.9
     x_axis = np.array([1.0, 0.0, 0.0])
@@ -314,7 +318,7 @@ def _tangent_frames(
     length = np.linalg.norm(first, axis=1)
     # e₁ / ‖e₁‖
     first = einx.divide("pair dim, pair -> pair dim", first, length)
-    # e₂ = n̂ × e₁
+    # e₂ = o × e₁
     second = np.cross(centres, first)
     return first, second
 
@@ -325,8 +329,8 @@ def _gnomonic(
     first: Float[np.ndarray, "pair 3"],
     second: Float[np.ndarray, "pair 3"],
 ) -> Float[np.ndarray, "pair vertex 2"]:
-    """(p · e₁, p · e₂) / (p · n̂), the gnomonic projection about n̂."""
-    # p · n̂
+    """p̃ = (p · e₁, p · e₂) / (p · o), the gnomonic projection about o."""
+    # p · o
     height = einx.dot("pair vertex dim, pair dim -> pair vertex", points, centre)
     if np.any(height <= 0):
         msg = (
@@ -342,9 +346,9 @@ def _gnomonic(
     second_component = einx.dot(
         "pair vertex dim, pair dim -> pair vertex", points, second
     )
-    # u = (p · e₁) / (p · n̂)
+    # p̃₁ = (p · e₁) / (p · o)
     along_first = first_component / height
-    # v = (p · e₂) / (p · n̂)
+    # p̃₂ = (p · e₂) / (p · o)
     along_second = second_component / height
     return einx.id(
         "pair vertex, pair vertex -> pair vertex (1 + 1)", along_first, along_second
@@ -359,7 +363,7 @@ def _spherical_areas(
     if counts is not None:
         # pad by repeating the last vertex, which adds zero-area triangles
         vertex = np.arange(polygons.shape[1])
-        # nₚ − 1
+        # N_vertex − 1
         last_vertex = counts - 1
         last = np.maximum(last_vertex, 0)
         index = einx.minimum("vertex, pair -> pair vertex", vertex, last)
@@ -381,22 +385,22 @@ def _spherical_areas(
 def _bounding_circles(
     polygons: Float[np.ndarray, "cell corner dim"], sphere: bool
 ) -> tuple[Float[np.ndarray, "cell dim"], Float[np.ndarray, " cell"]]:
-    """A centre and a radius whose ball holds each cell (chords on the sphere)."""
-    # c = (1/K) ∑ₖ qₖ
+    """A centre o and a radius r whose ball holds each cell (chords on the sphere)."""
+    # o = (1/N_corner) ∑ₖ qₖ, over the N_corner corners qₖ
     centres = einx.mean("cell [corner] dim", polygons)
     if sphere:
-        # c / ‖c‖
+        # o / ‖o‖
         length = np.linalg.norm(centres, axis=1)
         centres = einx.divide("cell dim, cell -> cell dim", centres, length)
     # every point of a convex cell (a spherical cap's, on the sphere) is no
     # farther from the centre than its farthest corner
-    # qₖ − c
+    # qₖ − o
     offsets = einx.subtract(
         "cell corner dim, cell dim -> cell corner dim", polygons, centres
     )
-    # ‖qₖ − c‖
+    # ‖qₖ − o‖
     distances = np.linalg.norm(offsets, axis=2)
-    # r = maxₖ ‖qₖ − c‖
+    # r = maxₖ ‖qₖ − o‖
     radii = einx.max("cell [corner]", distances)
     return centres, radii
 
@@ -411,7 +415,7 @@ def _candidate_pairs(
     source_centres, source_radii = _bounding_circles(source, sphere)
     target_centres, target_radii = _bounding_circles(target, sphere)
     tree = spatial.cKDTree(source_centres)
-    # rᵢ + maxⱼ rⱼ
+    # rᵢ + maxⱼ rⱼ, the radii of target i and source j
     largest_source = einx.max("[source]", source_radii)
     reach = target_radii + largest_source
     neighbours = tree.query_ball_point(target_centres, reach)
@@ -420,7 +424,7 @@ def _candidate_pairs(
     source_index = np.fromiter(
         (j for row in neighbours for j in row), dtype=np.int64, count=counts.sum()
     )
-    # ‖nᵢ − nⱼ‖ ≤ rᵢ + rⱼ, the test the tree's single reach overestimates
+    # ‖oᵢ − oⱼ‖ ≤ rᵢ + rⱼ, the test the tree's single reach overestimates
     separation = target_centres[target_index] - source_centres[source_index]
     gap = np.linalg.norm(separation, axis=1)
     pair_reach = target_radii[target_index] + source_radii[source_index]
@@ -527,19 +531,19 @@ def cell_overlaps(
 
         # --- measure ---
         if sphere:
-            # u e₁
+            # p̃₁ e₁
             along_first = einx.multiply(
                 "pair out, pair dim -> pair out dim", clipped[..., 0], first
             )
-            # v e₂
+            # p̃₂ e₂
             along_second = einx.multiply(
                 "pair out, pair dim -> pair out dim", clipped[..., 1], second
             )
-            # n̂ + u e₁
+            # o + p̃₁ e₁
             lifted = einx.add(
                 "pair dim, pair out dim -> pair out dim", centres, along_first
             )
-            # p = n̂ + u e₁ + v e₂, back on the sphere
+            # p = o + p̃₁ e₁ + p̃₂ e₂, back on the sphere
             lifted = lifted + along_second
             # ‖p‖
             length = np.linalg.norm(lifted, axis=2)

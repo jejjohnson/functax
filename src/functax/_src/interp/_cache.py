@@ -85,11 +85,12 @@ def plan_key(
 ) -> str:
     """sha256 hex of the scheme, the policies and both geometries' bytes.
 
-    key = sha256(J ‖ 0x00 ‖ b₁ ‖ … ‖ b_K), with J the stable JSON (sorted
-    keys, floats by ``repr``) of the functax version, the scheme's and the
-    policies' configs, and each geometry's class and fields, every array
-    there written as its dtype and shape; b₁, …, b_K are those arrays'
-    C-contiguous little-endian bytes in the same order. Equal inputs give
+    key = sha256(s_json + 0x00 + b₁ + … + b_N), the bytes concatenated, with
+    s_json the stable JSON (sorted keys, floats by ``repr``) of the functax
+    version, the scheme's and the policies' configs, and each geometry's
+    class and fields, every array there written as its dtype and shape;
+    b₁, …, b_N are those N arrays' C-contiguous little-endian bytes in the
+    same order. Equal inputs give
     the same key in any process; a change of one ULP in any coordinate, of
     a dtype, a shape, a static field (period, epoch, metric) or the functax
     version gives another. Runs on the host.

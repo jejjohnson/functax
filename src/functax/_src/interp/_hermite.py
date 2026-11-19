@@ -1,14 +1,15 @@
 """Cubic Hermite read-out on one axis, from values and slopes at the knots.
 
 On cell [xᵢ, xᵢ₊₁] of width hᵢ, at offset t, with values yᵢ, yᵢ₊₁ and slopes
-mᵢ, mᵢ₊₁,
+dᵢ, dᵢ₊₁,
 
-    f̂ = h₀₀(t) yᵢ + h₁₀(t) hᵢ mᵢ + h₀₁(t) yᵢ₊₁ + h₁₁(t) hᵢ mᵢ₊₁,
+    f̂ = φ₀₀(t) yᵢ + φ₁₀(t) hᵢ dᵢ + φ₀₁(t) yᵢ₊₁ + φ₁₁(t) hᵢ dᵢ₊₁,
 
-with h₀₀ = 2t³ − 3t² + 1, h₁₀ = t³ − 2t² + t, h₀₁ = −2t³ + 3t² and
-h₁₁ = t³ − t². The cubic spline, PCHIP, Akima and Steffen differ only in how
-the slopes m come from y; the fit returns [y; m], 2N coefficients, and the
-read-out is a 4-tap stencil on them.
+with the cubic Hermite basis φ₀₀ = 2t³ − 3t² + 1, φ₁₀ = t³ − 2t² + t,
+φ₀₁ = −2t³ + 3t² and φ₁₁ = t³ − t². The cubic spline, PCHIP, Akima and
+Steffen differ only in how the slopes d ∈ ℝᴺ come from the N samples y; the
+fit returns [y; d], 2N coefficients, and the read-out is a 4-tap stencil on
+them.
 """
 
 from __future__ import annotations
@@ -108,13 +109,13 @@ def ascending_axis(axis: Axis) -> tuple[Axis, bool]:
 
 
 class HermiteFit(Fit):
-    """[y; m] from y: the values in increasing-knot order and their slopes.
+    """[y; d] from y: the values in increasing-knot order and their slopes.
 
-    c = [y; 𝒮_m(y)], with m = 𝒮_m(y) the scheme's slopes at the knots.
+    c = [y; 𝒮_d(y)], with d = 𝒮_d(y) the scheme's slopes at the knots.
 
     Args:
         nodes: x, the N increasing knots.
-        slopes: m = slopes(x, y) for one vector y; batch dims are vectorised.
+        slopes: d = slopes(x, y) for one vector y; batch dims are vectorised.
         reversed: Whether the source axis decreases, so y is reversed first.
         linear: Whether the slopes are linear in y (the cubic spline), which
             makes `apply_adjoint` the linear transpose.
@@ -161,12 +162,12 @@ class HermiteFit(Fit):
     linear: bool = eqx.field(static=True, default=True)
 
     def apply(self, data: Float[Array, "*batch node"]) -> Float[Array, "*batch source"]:
-        """c = [y; m] with the values in increasing-knot order."""
+        """c = [y; d] with the values in increasing-knot order."""
         values = data[..., ::-1] if self.reversed else data
         vectorised = jnp.vectorize(self.slopes, signature="(n),(n)->(n)")
-        # m = 𝒮_m(y)
+        # d = 𝒮_d(y)
         slopes = vectorised(self.nodes, values)
-        # c = [y; m]
+        # c = [y; d]
         return einx.id("... node, ... node -> ... (node + node)", values, slopes)
 
     def apply_adjoint(
@@ -184,13 +185,13 @@ class HermiteFit(Fit):
         structure = jax.ShapeDtypeStruct(
             (*coefficients.shape[:-1], n_data), coefficients.dtype
         )
-        # 𝒮ᵀ g, by transposing the linear map y ↦ [y; m]
+        # 𝒮ᵀ g, by transposing the linear map y ↦ [y; d]
         transpose = jax.linear_transpose(self.apply, structure)
         (transposed,) = transpose(coefficients)
         return transposed
 
     def data_size(self, n_coefficients: int) -> int:
-        """N, half the 2N coefficients [y; m]."""
+        """N, half the 2N coefficients [y; d]."""
         return n_coefficients // 2
 
 
@@ -198,9 +199,10 @@ class HermiteGeometry(ReadGeometry):
     """What a 1-D series plan's Hermite read-out was built from.
 
     Kept on the plan, so `Plan.derivative` rebuilds the read-out weights at
-    the targets and differentiates them: on cell i, d/dx = (1/hᵢ) d/dt, so
-    order 1 reads h₀₀′/hᵢ, h₀₁′/hᵢ on the values and h₁₀′, h₁₁′ on the
-    slopes, f̂′(xₖ) = mₖ at a knot, and orders 4 and above are zero.
+    the targets and differentiates them: on cell i, ∂/∂x = (1/hᵢ) ∂/∂t, so
+    order 1 reads (∂φ₀₀/∂t)/hᵢ, (∂φ₀₁/∂t)/hᵢ on the values and ∂φ₁₀/∂t,
+    ∂φ₁₁/∂t on the slopes, ∂f̂/∂x = dᵢ at knot xᵢ, and orders 4 and above are
+    zero.
 
     Args:
         axis: The increasing source axis.
@@ -209,7 +211,7 @@ class HermiteGeometry(ReadGeometry):
             one period P = x_{N−1} − x₀.
 
     Examples:
-        The weights at a cell's midpoint, on [y; m]:
+        The weights at a cell's midpoint, on [y; d]:
 
         >>> import jax.numpy as jnp
         >>> from functax.geometry import Axis
@@ -239,7 +241,7 @@ class HermiteGeometry(ReadGeometry):
     def weights(
         self, coordinates: Float[Array, "target 1"], policies: Policies
     ) -> Float[Array, "target tap"]:
-        """The four Hermite weights of each target, on [y; m]."""
+        """The four Hermite weights of each target, on [y; d]."""
         positions = einx.id("target 1 -> target", coordinates)
         if self.periodic:
             first = self.axis.values[0]
@@ -257,17 +259,17 @@ def hermite_stencil(
     coordinates: Float[Array, " target"],
     policies: Policies,
 ) -> Stencil:
-    """The 4-tap stencil of the Hermite read-out on [y; m], at the targets.
+    """The 4-tap stencil of the Hermite read-out on [y; d], at the targets.
 
-    f̂ = h₀₀(t) yᵢ + h₁₀(t) hᵢ mᵢ + h₀₁(t) yᵢ₊₁ + h₁₁(t) hᵢ mᵢ₊₁ on cell i,
-    at offset t.
+    f̂ = φ₀₀(t) yᵢ + φ₁₀(t) hᵢ dᵢ + φ₀₁(t) yᵢ₊₁ + φ₁₁(t) hᵢ dᵢ₊₁ on cell i of
+    width hᵢ, at offset t.
 
     Algorithm:
         1. Locate each target: its index position, after the outside rule.
         2. Split it into a cell i (a real cell, with both knots) and an
            offset t.
-        3. Weight the two values by h₀₀, h₀₁ and the two slopes by h₁₀ hᵢ,
-           h₁₁ hᵢ, zeroing the rows that are not read.
+        3. Weight the two values by φ₀₀, φ₀₁ and the two slopes by φ₁₀ hᵢ,
+           φ₁₁ hᵢ, zeroing the rows that are not read.
 
     Args:
         axis: The increasing source axis.
@@ -337,13 +339,13 @@ def hermite_stencil(
     # t² and t³
     offset_squared = offset * offset
     offset_cubed = offset_squared * offset
-    # h₀₀ = 2t³ − 3t² + 1
+    # φ₀₀ = 2t³ − 3t² + 1
     left_value = 2.0 * offset_cubed - 3.0 * offset_squared + 1.0
-    # h₀₁ = −2t³ + 3t²
+    # φ₀₁ = −2t³ + 3t²
     right_value = -2.0 * offset_cubed + 3.0 * offset_squared
-    # h₁₀ hᵢ = (t³ − 2t² + t) hᵢ
+    # φ₁₀ hᵢ = (t³ − 2t² + t) hᵢ
     left_slope = (offset_cubed - 2.0 * offset_squared + offset) * width
-    # h₁₁ hᵢ = (t³ − t²) hᵢ
+    # φ₁₁ hᵢ = (t³ − t²) hᵢ
     right_slope = (offset_cubed - offset_squared) * width
     indices = einx.id(
         "target, target, target, target -> target (1 + 1 + 1 + 1)",

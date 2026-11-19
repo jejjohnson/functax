@@ -1,7 +1,8 @@
 """Divergence-free and curl-free vector bases on the box [−L, L]².
 
-A 2-D incompressible velocity is the skew gradient of a stream function,
-u = ∇^⊥ψ = (−∂_y ψ, ∂_x ψ). Expanding ψ in the box Laplacian eigenfunctions φ_j
+On the coordinates (x, y) ∈ [−L, L]², a 2-D incompressible velocity (u, v) is
+the skew gradient of a stream function ψ, (u, v) = ∇^⊥ψ = (−∂_y ψ, ∂_x ψ).
+Expanding ψ in the box Laplacian eigenfunctions φ_j, with eigenvalues λ_j,
 gives atoms that are divergence-free by construction, the natural reduced
 basis for nearly geostrophic ocean currents; their gradients are the curl-free
 companions. Each atom carries the eigenvalue λ_j + λ_k of its scalar mode, so
@@ -67,8 +68,11 @@ def divfree_basis(
 ) -> tuple[Float[Array, "obs feature 2"], Float[Array, " feature"]]:
     """Divergence-free vector atoms, the skew gradients of box stream functions.
 
-    φ_jk(x, y) = (−φ_j(x) φ_k′(y), φ_j′(x) φ_k(y)), so
-    ∂_x φ^(x) + ∂_y φ^(y) = −φ_j′φ_k′ + φ_j′φ_k′ = 0 identically.
+    φ_jk(x, y) = (−φ_j(x) φ_k′(y), φ_j′(x) φ_k(y)), with φ_j the 1-D
+    eigenfunctions of `fourier_basis_1d` along x (M_x of them), φ_k those along
+    y (M_y of them) and φ′ their derivatives. Its components φ_jk^{(x)} and
+    φ_jk^{(y)} have ∂_x φ_jk^{(x)} + ∂_y φ_jk^{(y)} = −φ_j′φ_k′ + φ_j′φ_k′ = 0
+    identically.
 
     Algorithm:
         1. Evaluate the 1-D eigenfunctions and their derivatives on each axis.
@@ -77,8 +81,9 @@ def divfree_basis(
 
     Args:
         xy: Points in [−L, L]².
-        num_basis_per_dim: The number of 1-D stream-function modes per axis;
-            an int applies to both, and there are M = M_x M_y atoms.
+        num_basis_per_dim: M_x and M_y, the number of 1-D stream-function
+            modes per axis; an int applies to both, and there are M = M_x M_y
+            atoms.
         L: The half-width per axis; a number applies to both.
         boundary: The stream functions' boundary condition, ``"dirichlet"``,
             ``"neumann"`` or ``"periodic"``, one value or one per axis.
@@ -141,8 +146,9 @@ def curlfree_basis(
     """Curl-free vector atoms, the gradients of the box Laplacian eigenfunctions.
 
     The companion of `divfree_basis`: φ_jk(x, y) = (φ_j′(x) φ_k(y), φ_j(x) φ_k′(y)),
-    the gradient of the potential φ_j ⊗ φ_k, so its scalar curl
-    ∂_x φ^(y) − ∂_y φ^(x) vanishes identically.
+    the gradient of the potential φ_j ⊗ φ_k, with the 1-D eigenfunctions and
+    indices of `divfree_basis`, so its scalar curl
+    ∂_x φ_jk^{(y)} − ∂_y φ_jk^{(x)} vanishes identically.
 
     Algorithm:
         1. Evaluate the 1-D eigenfunctions and their derivatives on each axis.
@@ -151,8 +157,8 @@ def curlfree_basis(
 
     Args:
         xy: Points in [−L, L]².
-        num_basis_per_dim: The number of 1-D modes per axis; an int applies to
-            both.
+        num_basis_per_dim: M_x and M_y, the number of 1-D modes per axis; an
+            int applies to both.
         L: The half-width per axis; a number applies to both.
         boundary: The potential's boundary condition, one value or one per
             axis.

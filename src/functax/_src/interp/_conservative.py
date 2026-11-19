@@ -1,11 +1,14 @@
 """First-order conservative remapping: area-weighted cell averages as one stencil.
 
-Target cell Cᵢ reads every source cell cⱼ it overlaps with the weight
-wᵢⱼ = |cⱼ ∩ Cᵢ| / |Cᵢ|, so ∑ᵢ |Cᵢ| ŷᵢ = ∑ⱼ |cⱼ| yⱼ whenever the target cells
-cover the source cells. On tensor-product grids the overlap of two cells is
-the product of their per-axis overlaps (`overlap_band`), so the stencil is the
-tensor product of one band per axis. Curvilinear and spherical cells are
-quadrilaterals whose pairwise overlaps are clipped on the host (`_clip`).
+Target cell Cᵢ, for i over the M target cells, reads every source cell cⱼ, for
+j over the N source cells, that it overlaps with the weight
+wᵢⱼ = |cⱼ ∩ Cᵢ| / |Cᵢ|, where |·| is a cell's area. The remapped values
+ŷᵢ = ∑ⱼ wᵢⱼ yⱼ of the samples yⱼ then keep ∑ᵢ |Cᵢ| ŷᵢ = ∑ⱼ |cⱼ| yⱼ whenever
+the target cells cover the source cells. On tensor-product grids the overlap
+of two cells is the product of their per-axis overlaps (`overlap_band`), so
+the stencil is the tensor product of one band per axis. Curvilinear and
+spherical cells are quadrilaterals whose pairwise overlaps are clipped on the
+host (`_clip`).
 
 It lives in its own module rather than in ``_schemes.py`` because it is not a
 `LocalScheme`: it reads cells, not a basis at located positions, and has no
@@ -56,8 +59,10 @@ def _cell_axes(
 ) -> list[tuple[Float[np.ndarray, " edge"], float | None]]:
     """The (edges, period) of each axis of a tensor-product grid of cells.
 
-    An `AffineGrid` must be north-up (b = d = 0): its cells are then the
-    tensor product of row edges f + e·i and column edges c + a·j.
+    An `AffineGrid` with transform coefficients (a, b, c, d, e, f) must be
+    north-up (b = d = 0): its cells are then the tensor product of the row
+    edges f + e·i and the column edges c + a·j, for row edge i and column
+    edge j.
     """
     if isinstance(geometry, Axis):
         edges = np.asarray(geometry.cell_edges())
@@ -187,16 +192,17 @@ def tensor_stencil_of_cells(source: Any, target: Any, *, policies: Policies) -> 
 def _node_corners(
     nodes: Float[np.ndarray, "row col dim"], sphere: bool
 ) -> Float[np.ndarray, "row_edge col_edge dim"]:
-    """The (R + 1, C + 1, D) cell corners of (R, C, D) nodes, each cell's centre a node.
+    """The (N_row + 1, N_col + 1, D) corners of (N_row, N_col, D) cell-centre nodes.
 
-    The nodes are extended by one row and column on each side by linear
-    extrapolation, x₋₁ = 2x₀ − x₁, and each corner is the mean of the four
-    nodes around it, so a tensor grid gets the midpoints of `Axis.cell_edges`.
+    The nodes x₀, …, x_{N_row−1} of a column are extended by one node on each
+    side by linear extrapolation, x₋₁ = 2x₀ − x₁, and the same along the
+    rows; each corner is the mean of the four nodes around it, so a tensor
+    grid gets the midpoints of `Axis.cell_edges`.
     On the sphere the means are of unit vectors, normalised, so the corners
     need no unwrapped longitudes.
     """
     # --- extrapolate one ring ---
-    # x₋₁ = 2x₀ − x₁, and xᵣ = 2xᵣ₋₁ − xᵣ₋₂ past the last row
+    # x₋₁ = 2x₀ − x₁, and x_{N_row} = 2x_{N_row−1} − x_{N_row−2} past the last row
     first_row = 2 * nodes[0] - nodes[1]
     last_row = 2 * nodes[-1] - nodes[-2]
     padded = einx.id(
@@ -225,9 +231,9 @@ def _node_corners(
     # ¼ (x₀₀ + x₁₀ + x₀₁ + x₁₁)
     corners = 0.25 * node_sum
     if sphere:
-        # ‖c‖
+        # ‖s‖ of each corner s
         length = np.linalg.norm(corners, axis=-1)
-        # c / ‖c‖
+        # s / ‖s‖
         corners = einx.divide("row col dim, row col -> row col dim", corners, length)
     return corners
 
@@ -235,7 +241,7 @@ def _node_corners(
 def _corner_cells(
     corners: Float[np.ndarray, "row_edge col_edge dim"],
 ) -> Float[np.ndarray, "cell 4 dim"]:
-    """(R C, 4, D) cells, row-major, from (R + 1, C + 1, D) corners."""
+    """(N_row N_col, 4, D) cells, row-major, from (N_row + 1, N_col + 1, D) corners."""
     below_left = corners[:-1, :-1]
     above_left = corners[1:, :-1]
     above_right = corners[1:, 1:]
@@ -253,13 +259,14 @@ def _corner_cells(
 def _polygon_cells(
     geometry: Any, name: str, unit: str | None
 ) -> Float[np.ndarray, "cell 4 dim"]:
-    """The quadrilateral cells of a 2-D grid: (x, y) corners, or unit vectors.
+    """The quadrilateral cells of a 2-D grid: (``x``, ``y``) corners, or unit vectors.
 
-    ``unit`` is that of (λ, φ) on the sphere, and ``None`` in the plane.
+    ``unit`` is that of the longitude and latitude (λ, φ) on the sphere, and
+    ``None`` in the plane.
 
     A `CurvilinearGrid` gives its cells by `_node_corners`; a 2-D
-    `RectilinearGrid` has its axes in (x, y) order, (λ, φ) on the sphere, as
-    a target read on a curvilinear source does.
+    `RectilinearGrid` has its axes in (``x``, ``y``) order, (λ, φ) on the
+    sphere, as a target read on a curvilinear source does.
     """
     if isinstance(geometry, CurvilinearGrid):
         node_x = np.asarray(geometry.x)
@@ -296,7 +303,8 @@ def polygon_stencil_of_cells(
 ) -> Stencil:
     """H of conservative remapping between quadrilateral cells, clipped pairwise.
 
-    ``unit`` is that of (λ, φ) on the sphere, and ``None`` in the plane.
+    ``unit`` is that of the longitude and latitude (λ, φ) on the sphere, and
+    ``None`` in the plane.
 
     Raises:
         GeometryError: If a geometry is unsupported, a target cell is not
@@ -314,7 +322,7 @@ def polygon_stencil_of_cells(
     overlaps = cell_overlaps(source_cells, target_cells, sphere=unit is not None)
     n_target = target_cells.shape[0]
 
-    # --- the pairs as rows of S taps, padded with zero weight ---
+    # --- the pairs as rows of S taps, Sᵢ in row i, padded with zero weight ---
     order = np.argsort(overlaps.target, kind="stable")
     rows = overlaps.target[order]
     columns = overlaps.source[order]
@@ -365,7 +373,8 @@ def polygon_stencil_of_cells(
 class Conservative(Scheme):
     """First-order conservative remapping: each target cell's area-weighted mean.
 
-    Target cell Cᵢ reads the source cells cⱼ it overlaps,
+    Target cell Cᵢ, i over the M target cells, reads the source cells cⱼ,
+    j over the N source cells, that it overlaps, with |·| a cell's area:
 
         ŷᵢ = ∑ⱼ wᵢⱼ yⱼ  with  wᵢⱼ = |cⱼ ∩ Cᵢ| / |Cᵢ|,
 
@@ -383,11 +392,12 @@ class Conservative(Scheme):
     and the overlap of each candidate pair (a k-d tree on bounding circles,
     SciPy's ``cKDTree``) is clipped on the host by Sutherland–Hodgman against
     the target cell, which must be convex. In the plane, coordinates are
-    (x, y) as given (a swath across the dateline needs unwrapped longitudes);
-    with ``sphere=True`` they are (λ, φ), cells have great-circle edges (as in
+    the grid's ``x`` and ``y`` as given (a swath across the dateline needs
+    unwrapped longitudes); with ``sphere=True`` they are the longitude and
+    latitude (λ, φ), cells have great-circle edges (as in
     ESMF), each pair is clipped in the gnomonic tangent plane of its target
     cell, and areas are spherical excesses (`spherical_polygon_area`). A 2-D
-    `RectilinearGrid` on this path has its axes in (x, y) order, as when it is
+    `RectilinearGrid` on this path has its axes in (``x``, ``y``) order, as when it is
     a target read on a curvilinear source; a target cell is covered when its
     overlaps sum to its area to 1e-9 relative.
 
@@ -408,8 +418,9 @@ class Conservative(Scheme):
         2. On each axis, find the band of source cells every target cell
            overlaps and their lengths |cⱼ ∩ Cᵢ| (two ``searchsorted``
            sweeps, `overlap_band`).
-        3. Divide by |Cᵢ| and take the tensor product of the bands: S = ∏_d
-           S_d taps per target, the most overlaps on each axis. On the
+        3. Divide by |Cᵢ| and take the tensor product of the bands:
+           S = ∏_d S_d taps per target over the axes d = 1, …, D, with S_d
+           the most overlaps on axis d. On the
            polygon path, S is the most source cells any target cell overlaps,
            and shorter rows are padded with zero weights.
 

@@ -40,38 +40,42 @@ def cotangent_laplacian_eigpairs(
 ]:
     """The smallest eigenpairs of the cotangent Laplace–Beltrami operator.
 
-    The cotangent Laplacian (Pinkall and Polthier 1993) weights each edge
-    (i, j) by the cotangents of the two angles α_ij, β_ij opposite it (one for
-    a boundary edge): L_ij = −½ (cot α_ij + cot β_ij) on an edge and
-    L_ii = −∑_{j ≠ i} L_ij, a symmetric positive semidefinite stiffness matrix
-    with the constants in its null space. With the lumped mass M = diag(a) of
-    `mesh_vertex_areas`, the eigenproblem is L φ = λ M φ, solved as
-    (M^{−½} L M^{−½}) ψ = λ ψ with φ = M^{−½} ψ, so the eigenvectors are
-    M-orthonormal: Φᵀ M Φ = I. On a closed mesh λ₀ = 0 with
-    φ₀ = 1/√(∑_v a_v); on the unit sphere λ → ℓ(ℓ + 1) with multiplicity
-    2ℓ + 1 under refinement. A mesh with a boundary gets natural (Neumann)
-    conditions. This is the eigenbasis behind NORM (Chen et al. 2024).
+    On a mesh of V vertices, the cotangent Laplacian L ∈ ℝ^{V×V} (Pinkall and
+    Polthier 1993) weights each edge (i, j) by the cotangents of the two angles
+    α_ij, β_ij opposite it (one for a boundary edge): L_ij = −½ (cot α_ij + cot
+    β_ij) on an edge and L_ii = −∑_{j ≠ i} L_ij, a symmetric positive
+    semidefinite stiffness matrix with the constants in its null space. With
+    the lumped mass M = diag(a) of `mesh_vertex_areas`, a ∈ ℝ^V the vertex
+    areas, the eigenproblem is L φ = λ M φ, solved as (M^{−½} L M^{−½}) ψ = λ ψ
+    with φ = M^{−½} ψ, so the eigenvectors are M-orthonormal: Φᵀ M Φ = I for Φ
+    ∈ ℝ^{V×N_basis} holding the N_basis eigenvectors φ_m, m = 0, …, N_basis −
+    1, as columns. On a closed mesh λ₀ = 0 with φ₀ = 1/√(∑_v a_v), summed over
+    the vertices v; on the unit sphere λ → ℓ(ℓ + 1) with multiplicity 2ℓ + 1
+    under refinement, for the spherical-harmonic degree ℓ. A mesh with a
+    boundary gets natural (Neumann) conditions. This is the eigenbasis behind
+    NORM (Chen et al. 2024).
 
     Algorithm:
         1. Check the mesh; compute each triangle's area and corner cotangents.
-        2. Assemble L, adding ½ cot θ to the edge opposite each corner.
+        2. Assemble L, adding half the cotangent of each corner's angle to the
+           edge opposite it.
         3. Diagonalise M^{−½} L M^{−½} densely on the host in float64, which
            is O(V³) time and O(V²) memory, practical up to a few thousand
            vertices.
-        4. Keep the M smallest pairs, clip round-off negatives to 0, and map
-           ψ back to φ = M^{−½} ψ.
+        4. Keep the N_basis smallest pairs, clip round-off negatives to 0, and
+           map ψ back to φ = M^{−½} ψ.
 
     Args:
         vertices: The vertex positions.
         triangles: Vertex indices, three per triangle, in either orientation.
             Every vertex must belong to a triangle.
-        num_basis: M, the number of eigenpairs, from 1 to V.
+        num_basis: N_basis, the number of eigenpairs, from 1 to V.
 
     Returns:
-        ``(eigvals, eigvecs, areas)``: the M eigenvalues ascending, the
+        ``(eigvals, eigvecs, areas)``: the N_basis eigenvalues ascending, the
         M-orthonormal eigenvectors (column m is φ_m at the vertices), and the
         vertex areas a, the mass diagonal and quadrature weights. The analysis
-        of a vertex field u is ``eigvecs.T @ (areas * u)`` and the synthesis
+        of a vertex field f is ``eigvecs.T @ (areas * f)`` and the synthesis
         ``eigvecs @ coefficients``.
 
     Raises:
@@ -137,7 +141,7 @@ def cotangent_laplacian_eigpairs(
     head = einx.id("triangle corner -> (triangle corner)", next_corner)
     tail = einx.id("triangle corner -> (triangle corner)", after_next)
     flat_cot = einx.id("triangle corner -> (triangle corner)", cot)
-    # ½ cot θ
+    # half the cotangent of each corner's angle
     half_cot = 0.5 * flat_cot
     weights = np.zeros((n_vertices, n_vertices))
     np.add.at(weights, (head, tail), half_cot)

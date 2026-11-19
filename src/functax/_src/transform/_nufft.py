@@ -1,14 +1,15 @@
 """Non-uniform Fourier transforms between point sets and a truncated rfft spectrum.
 
-`nonuniform_rfft` takes the low Fourier modes of a field from its values at
-arbitrary points of the torus [0, 1)^d, and `nonuniform_irfft` evaluates a
-truncated real Fourier series at arbitrary points, the scattered-point
-read-out of spectral interpolation. The forward transform takes quadrature
-weights w_n, so it approximates the continuous Fourier coefficient and
-converges as the points grow. The spectrum is stored as the 2^{d−1} low
-corners of an rfft spectrum, each (C, *n_modes); on a uniform grid of S nodes
-with w_n = 1/S the coefficients equal ``rfftn(u) / S`` on the retained modes.
-Moved from geonnax ``layers/_nonuniform`` at ``be5537d``.
+`nonuniform_rfft` takes the low Fourier modes of a field u from its values at N
+arbitrary points ξ_n of the torus [0, 1)^d, n = 1, …, N, and `nonuniform_irfft`
+evaluates a truncated real Fourier series at arbitrary points, the
+scattered-point read-out of spectral interpolation. The forward transform takes
+quadrature weights w_n, so it approximates the continuous Fourier coefficient
+at each integer wavenumber vector κ (d integers) and converges as the points
+grow. The spectrum is stored as the 2^{d−1} low corners of an rfft spectrum,
+each (C, *n_modes) for C channels; on a uniform grid of S nodes with w_n = 1/S
+the coefficients equal ``rfftn(u) / S`` on the retained modes. Moved from
+geonnax ``layers/_nonuniform`` at ``be5537d``.
 """
 
 from __future__ import annotations
@@ -53,8 +54,8 @@ def _corner_freqs(
 ) -> list[tuple[Int[np.ndarray, " _mode"], ...]]:
     """The integer wavenumbers of each corner block, in `_corner_slices` order.
 
-    Corner c holds one integer array per axis: 0, …, m − 1 or −m, …, −1 on an
-    axis but the last, 0, …, m − 1 on the last.
+    Each corner holds one integer array per axis: 0, …, m − 1 or −m, …, −1 on
+    an axis but the last, 0, …, m − 1 on the last.
     """
     per_axis = [[np.arange(m), np.arange(-m, 0)] for m in n_modes[:-1]]
     combos = itertools.product(*per_axis) if len(n_modes) > 1 else [()]
@@ -89,9 +90,9 @@ def _validate_points(xi: Float[Array, "*shape"], n_modes: tuple[int, ...]) -> No
 def _corner_phases(
     xi: Float[Array, "obs dim"], n_modes: tuple[int, ...]
 ) -> list[Float[Array, "obs ..."]]:
-    """The phases 2π k · ξ_n of every point against each corner's modes.
+    """The phases 2π κ · ξ_n of every point against each corner's modes.
 
-    k · ξ is reduced to [−½, ½] before the 2π scaling, which keeps float32
+    κ · ξ_n is reduced to [−½, ½] before the 2π scaling, which keeps float32
     arguments small; the gradient is unchanged.
     """
     modes = _modes_spec(len(n_modes))
@@ -99,17 +100,17 @@ def _corner_phases(
     phases = []
     for frequencies in _corner_freqs(n_modes):
         grids = np.meshgrid(*frequencies, indexing="ij")
-        # one d-vector k per mode; np.stack because d varies with n_modes
+        # one d-vector κ per mode; np.stack because d varies with n_modes
         table = np.stack(grids, axis=-1)
         wavenumbers = jnp.asarray(table, dtype=xi.dtype)
-        # k · ξ_n, in turns
+        # κ · ξ_n, in turns
         turns = einx.dot(f"obs dim, {modes} dim -> obs {modes}", xi, wavenumbers)
-        # the nearest integer is held constant, so the gradient is that of k · ξ_n
+        # the nearest integer is held constant, so the gradient is that of κ · ξ_n
         rounded = jnp.round(turns)
         nearest = jax.lax.stop_gradient(rounded)
-        # k · ξ_n − round(k · ξ_n), in [−½, ½]
+        # κ · ξ_n − round(κ · ξ_n), in [−½, ½]
         reduced = turns - nearest
-        # θ = 2π (k · ξ_n − round(k · ξ_n))
+        # α = 2π (κ · ξ_n − round(κ · ξ_n))
         phases.append(two_pi * reduced)
     return phases
 
@@ -123,28 +124,30 @@ def nonuniform_rfft(
     """The truncated Fourier coefficients of a field sampled at points of [0, 1)^d.
 
     A quadrature of the continuous Fourier coefficient on the unit torus, for
-    every retained wavenumber k (the rfft corner layout):
-    ĉ_k = ∑_n w_n u_n exp(−2πi k · ξ_n) ≈ ∫_{[0,1)^d} u(ξ) exp(−2πi k · ξ) dξ.
+    every retained integer wavenumber vector κ (the rfft corner layout), from
+    the values u_n = u(ξ_n) at the points n = 1, …, N:
+    ĉ_κ = ∑_n w_n u_n exp(−2πi κ · ξ_n) ≈ ∫_{[0,1)^d} u(ξ) exp(−2πi κ · ξ) dξ.
 
     The weights are used as given, never normalised: they should be
     non-negative and sum to about 1 (cell areas of a mesh, or 1/N for a
     stratified cloud). A point of weight 0 contributes nothing, so ragged
     clouds can be zero-padded to one N and ``vmap``-ed, as long as the padded
-    coordinates are finite. The cost is O(N |K| C) multiply-adds and an N × |K|
-    phase table per call, with |K| = 2^{d−1} ∏_a m_a; for very large clouds a
-    fast NUFFT (``jax-finufft``) computes the same sums and stays a user-side
-    substitute, not a dependency.
+    coordinates are finite. The cost is O(N N_modes C) multiply-adds for C
+    channels and an N × N_modes phase table per call, with
+    N_modes = 2^{d−1} ∏_a m_a retained modes and m_a the modes kept on axis a;
+    for very large clouds a fast NUFFT (``jax-finufft``) computes the same
+    sums and stays a user-side substitute, not a dependency.
 
     Algorithm:
         1. Weight each value by its quadrature weight, w_n u_n.
-        2. For each corner block, form the phases θ_nk = 2π k · ξ_n, with k · ξ_n
-           reduced to [−½, ½] first.
-        3. Contract the weighted values with cos θ and sin θ over the points:
-           ĉ_k = ∑_n w_n u_n cos θ_nk − i ∑_n w_n u_n sin θ_nk.
+        2. For each corner block, form the phases α_nκ = 2π κ · ξ_n, with
+           κ · ξ_n reduced to [−½, ½] first.
+        3. Contract the weighted values with cos α and sin α over the points:
+           ĉ_κ = ∑_n w_n u_n cos α_nκ − i ∑_n w_n u_n sin α_nκ.
 
     Args:
-        u: The field values, one row per channel.
-        xi: The coordinates in [0, 1)^d of the N points, d = len(n_modes).
+        u: The field values u_n, one row per channel.
+        xi: The coordinates ξ_n in [0, 1)^d of the N points, d = len(n_modes).
         weights: w_n, the quadrature weight of each point.
         n_modes: The retained modes per axis.
 
@@ -199,11 +202,11 @@ def nonuniform_rfft(
     for phase in _corner_phases(xi, n_modes):
         cosine = jnp.cos(phase)
         sine = jnp.sin(phase)
-        # Re ĉ_k = ∑_n w_n u_n cos θ_nk
+        # Re ĉ_κ = ∑_n w_n u_n cos α_nκ
         real_part = einx.dot(contraction, weighted, cosine)
-        # ∑_n w_n u_n sin θ_nk
+        # ∑_n w_n u_n sin α_nκ
         sine_sum = einx.dot(contraction, weighted, sine)
-        # Im ĉ_k = −∑_n w_n u_n sin θ_nk
+        # Im ĉ_κ = −∑_n w_n u_n sin α_nκ
         imag_part = -sine_sum
         blocks.append(jax.lax.complex(real_part, imag_part))
     return blocks
@@ -218,24 +221,26 @@ def nonuniform_irfft(
 
     The inverse of `nonuniform_rfft` on band-limited fields, with the
     Hermitian half-spectrum handled as ``irfftn`` does:
-    u(ξ) = ∑_k μ_k Re[ĉ_k exp(2πi k · ξ)], with μ_k = 1 where the last wavenumber
-    k_d is 0 and 2 elsewhere. Taking the real part drops the imaginary part of
-    the k_d = 0 plane, as ``irfftn`` does; no Nyquist term arises because the
-    modes stay below half of any grid. On grid nodes ξ = j/s this equals
-    ``irfftn`` of the corners scattered into a spectrum, times S. The cost is
+    u(ξ) = ∑_κ γ_κ Re[ĉ_κ exp(2πi κ · ξ)] over the retained integer wavenumbers
+    κ = (κ_1, …, κ_d), with the multiplicity γ_κ = 1 where the last component
+    κ_d is 0 and 2 elsewhere. Taking the real part drops the imaginary part of
+    the κ_d = 0 plane, as ``irfftn`` does; no Nyquist term arises because the
+    modes stay below half of any grid. On the nodes ξ = j/s of a uniform grid,
+    j ∈ {0, …, s − 1}^d and S = s^d nodes in all, this equals ``irfftn`` of the
+    corners scattered into a spectrum, times S. The cost is
     that of `nonuniform_rfft`.
 
     Algorithm:
-        1. Weight the real and imaginary parts of each block by μ_k.
-        2. For each corner block, form the phases θ_nk = 2π k · ξ_n as
+        1. Weight the real and imaginary parts of each block by γ_κ.
+        2. For each corner block, form the phases α_nκ = 2π κ · ξ_n as
            `nonuniform_rfft` does.
-        3. Sum Re[ĉ_k exp(iθ_nk)] = Re ĉ_k cos θ_nk − Im ĉ_k sin θ_nk over the
+        3. Sum Re[ĉ_κ exp(iα_nκ)] = Re ĉ_κ cos α_nκ − Im ĉ_κ sin α_nκ over the
            modes of every block.
 
     Args:
         coeffs: The 2^{d−1} corner blocks, each (C, *n_modes), as
             `nonuniform_rfft` returns them.
-        xi: The query coordinates in [0, 1)^d.
+        xi: The query coordinates ξ_n in [0, 1)^d.
         n_modes: The retained modes per axis.
 
     Returns:
@@ -286,7 +291,7 @@ def nonuniform_irfft(
     last = f"m{d - 1}"
     weighting = f"channel {modes}, {last}"
     contraction = f"channel {modes}, obs {modes} -> channel obs"
-    # μ_k = 1 on the k_d = 0 plane, 2 elsewhere
+    # γ_κ = 1 on the κ_d = 0 plane, 2 elsewhere
     multiplicity = np.full(n_modes[-1], 2.0)
     multiplicity[0] = 1.0
     n_channels = coeffs[0].shape[0]
@@ -294,17 +299,17 @@ def nonuniform_irfft(
     total = jnp.zeros((n_channels, xi.shape[0]), dtype=real_dtype)
     for block, phase in zip(coeffs, _corner_phases(xi, n_modes), strict=True):
         mu = jnp.asarray(multiplicity, dtype=block.real.dtype)
-        # μ_k Re ĉ_k
+        # γ_κ Re ĉ_κ
         weighted_real = einx.multiply(weighting, block.real, mu)
-        # μ_k Im ĉ_k
+        # γ_κ Im ĉ_κ
         weighted_imag = einx.multiply(weighting, block.imag, mu)
         cosine = jnp.cos(phase)
         sine = jnp.sin(phase)
-        # ∑_k μ_k Re ĉ_k cos θ_nk
+        # ∑_κ γ_κ Re ĉ_κ cos α_nκ
         cosine_sum = einx.dot(contraction, weighted_real, cosine)
-        # ∑_k μ_k Im ĉ_k sin θ_nk
+        # ∑_κ γ_κ Im ĉ_κ sin α_nκ
         sine_sum = einx.dot(contraction, weighted_imag, sine)
-        # Re[(a + ib)(cos θ + i sin θ)] = a cos θ − b sin θ
+        # Re[ĉ_κ (cos α + i sin α)] = Re ĉ_κ cos α − Im ĉ_κ sin α
         part = cosine_sum - sine_sum
         total = total + part
     return total

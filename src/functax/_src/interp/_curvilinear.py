@@ -1,13 +1,14 @@
 """Locate targets on a curvilinear grid: a nearest-cell search, then Newton steps.
 
-Cell (r, c) of a `CurvilinearGrid` maps the unit square onto its four corner
+Cell (i, j), at row i and column j, of a `CurvilinearGrid` with nodes
+x_{i,j} ∈ ℝ² maps the unit square (s, t) ∈ [0, 1]² onto its four corner
 nodes by the bilinear map
 
-    x(s, t) = (1 − s)(1 − t) x_{r,c} + s(1 − t) x_{r+1,c}
-              + (1 − s) t x_{r,c+1} + s t x_{r+1,c+1},
+    x(s, t) = (1 − s)(1 − t) x_{i,j} + s(1 − t) x_{i+1,j}
+              + (1 − s) t x_{i,j+1} + s t x_{i+1,j+1},
 
-so a target x* sits at the fractional index position u = (r + s, c + t)
-once x(s, t) = x* is solved, and (s, t) then play the role of the offset on a
+so a target x_* sits at the fractional index position u = (i + s, j + t)
+once x(s, t) = x_* is solved, and (s, t) then play the role of the offset on a
 regular axis. Past the edge of the grid the edge cell's map continues, as
 `index_positions` continues the end cells of an axis.
 """
@@ -47,7 +48,7 @@ N_NEWTON_STEPS: int = 4
 N_WALKS: int = 3
 """Moves to a neighbouring cell when (s, t) leaves the unit square."""
 
-# (a, b, d, e) of one coordinate in each target's cell, x(s, t) = a + b s + d t + e s t
+# (a, b, d, e) of one coordinate in each target's cell: x(s, t) = a + b s + d t + e s t
 _Terms = tuple[
     Float[Array, " target"],
     Float[Array, " target"],
@@ -57,10 +58,10 @@ _Terms = tuple[
 
 
 def _cell_centres(nodes: Float[Array, "row col"]) -> Float[Array, " cell"]:
-    """x̄_{r,c} = ¼ (x_{r,c} + x_{r+1,c} + x_{r,c+1} + x_{r+1,c+1}), flat row-major."""
-    # x_{r,c} + x_{r+1,c} + x_{r,c+1} + x_{r+1,c+1}
+    """x̄_{i,j} = ¼ (x_{i,j} + x_{i+1,j} + x_{i,j+1} + x_{i+1,j+1}), flat row-major."""
+    # x_{i,j} + x_{i+1,j} + x_{i,j+1} + x_{i+1,j+1}
     total = nodes[:-1, :-1] + nodes[1:, :-1] + nodes[:-1, 1:] + nodes[1:, 1:]
-    # x̄_{r,c} = ¼ (…)
+    # x̄_{i,j} = ¼ (…)
     centres = 0.25 * total
     return einx.id("row col -> (row col)", centres)
 
@@ -81,18 +82,18 @@ def _nearest_cell(
     n_cells = centres.shape[0]
 
     def nearest(target: Float[Array, " 2"]) -> Int[Array, ""]:
-        # x̄ − x* for every cell
+        # x̄ − x_* for every cell
         difference = einx.subtract("cell dim, dim -> cell dim", centres, target)
         squared_difference = difference**2
-        # ‖x̄ − x*‖²
+        # ‖x̄ − x_*‖²
         squared = einx.sum("cell [dim]", squared_difference)
-        # argmin over the cells of ‖x̄ − x*‖²
+        # argmin over the cells of ‖x̄ − x_*‖²
         index = einx.argmin("[cell]", squared)
         return einx.id("1 ->", index)
 
     batch_size = max(1, MAX_PAIRS // n_cells)
     flat = jax.lax.map(nearest, coordinates, batch_size=batch_size)
-    # flat cell k = r (N_c − 1) + c
+    # flat cell k = i (N_col − 1) + j, for N_col node columns
     row = flat // (n_cols - 1)
     col = flat % (n_cols - 1)
     return row, col
@@ -110,11 +111,11 @@ def _bilinear_terms(
     corner_10 = nodes[next_row, col]
     corner_01 = nodes[row, next_col]
     corner_11 = nodes[next_row, next_col]
-    # b = x_{r+1,c} − x_{r,c}
+    # b = x_{i+1,j} − x_{i,j}
     along_row = corner_10 - corner_00
-    # d = x_{r,c+1} − x_{r,c}
+    # d = x_{i,j+1} − x_{i,j}
     along_col = corner_01 - corner_00
-    # e = x_{r+1,c+1} − x_{r+1,c} − x_{r,c+1} + x_{r,c}, zero on a parallelogram
+    # e = x_{i+1,j+1} − x_{i+1,j} − x_{i,j+1} + x_{i,j}, zero on a parallelogram
     twist = corner_11 - corner_10 - corner_01 + corner_00
     return corner_00, along_row, along_col, twist
 
@@ -125,13 +126,13 @@ def _misfit(
     col_offset: Float[Array, " target"],
     target: Float[Array, " target"],
 ) -> Float[Array, " target"]:
-    """F = x(s, t) − x* for one coordinate."""
+    """Δx = x(s, t) − x_* for one coordinate."""
     origin, along_row, along_col, twist = terms
     # x(s, t) = a + b s + d t + e s t
     mapped = (
         origin + along_row * row_offset + along_col * col_offset
     ) + twist * row_offset * col_offset
-    # F = x(s, t) − x*
+    # Δx = x(s, t) − x_*
     return mapped - target
 
 
@@ -147,15 +148,15 @@ def _jacobian(
     Float[Array, " target"],
     Float[Array, " target"],
 ]:
-    """The entries of J = [∂x/∂s ∂x/∂t] at (s, t), and det J."""
+    """The entries of J_x = [∂x/∂s ∂x/∂t] at (s, t), and det J_x."""
     _, row_edge_x, col_edge_x, twist_x = terms_x
     _, row_edge_y, col_edge_y, twist_y = terms_y
-    # J = [b + e t, d + e s]
+    # J_x = [b + e t, d + e s]
     ds_x = row_edge_x + twist_x * col_offset
     ds_y = row_edge_y + twist_y * col_offset
     dt_x = col_edge_x + twist_x * row_offset
     dt_y = col_edge_y + twist_y * row_offset
-    # det J = ∂x/∂s ∂y/∂t − ∂x/∂t ∂y/∂s
+    # det J_x = (∂x/∂s)₁ (∂x/∂t)₂ − (∂x/∂t)₁ (∂x/∂s)₂, over the components of x
     determinant = ds_x * dt_y - dt_x * ds_y
     return ds_x, ds_y, dt_x, dt_y, determinant
 
@@ -167,7 +168,7 @@ def _newton(
     coordinates: Float[Array, "target 2"],
     n_steps: int,
 ) -> tuple[Float[Array, " target"], Float[Array, " target"], Bool[Array, " target"]]:
-    """(s, t) solving x(s, t) = x* in cell (row, col), and whether it converged."""
+    """(s, t) solving x(s, t) = x_* in cell (row, col), and whether it converged."""
     target_x = coordinates[:, 0]
     target_y = coordinates[:, 1]
     terms_x = _bilinear_terms(grid.x, row, col)
@@ -178,41 +179,42 @@ def _newton(
     col_offset = jnp.full(target_x.shape, 0.5, dtype=dtype)
     one = jnp.ones((), dtype)
     for _ in range(n_steps):
-        # F = x(s, t) − x*
+        # Δx = x(s, t) − x_*
         misfit_x = _misfit(terms_x, row_offset, col_offset, target_x)
         misfit_y = _misfit(terms_y, row_offset, col_offset, target_y)
         ds_x, ds_y, dt_x, dt_y, determinant = _jacobian(
             terms_x, terms_y, row_offset, col_offset
         )
-        # det J set to 1 where J is singular; such a target fails below
+        # det J_x set to 1 where J_x is singular; such a target fails below
         invertible = determinant != 0
         safe_determinant = jnp.where(invertible, determinant, one)
-        # (Δs, Δt) = J⁻¹ F, the closed-form 2 × 2 solve (Cramer's rule)
+        # (Δs, Δt) = J_x⁻¹ Δx, the closed-form 2 × 2 solve (Cramer's rule)
         row_step = (misfit_x * dt_y - misfit_y * dt_x) / safe_determinant
         col_step = (ds_x * misfit_y - ds_y * misfit_x) / safe_determinant
-        # (s, t) ← (s, t) − J⁻¹ F
+        # (s, t) ← (s, t) − J_x⁻¹ Δx
         row_offset = row_offset - row_step
         col_offset = col_offset - col_step
     misfit_x = _misfit(terms_x, row_offset, col_offset, target_x)
     misfit_y = _misfit(terms_y, row_offset, col_offset, target_y)
     *_, determinant = _jacobian(terms_x, terms_y, row_offset, col_offset)
-    # converged when |F| reaches √ε of the cell size, above the rounding
-    # floor 8 ε |x| of the coordinates themselves, with J invertible there
+    # converged when ‖Δx‖_∞ reaches √eps of the cell size, above the rounding
+    # floor 8 eps · x_size of the coordinates themselves, with J_x invertible,
+    # for eps the machine epsilon
     eps = jnp.finfo(dtype).eps
     _, row_edge_x, col_edge_x, _ = terms_x
     _, row_edge_y, col_edge_y, _ = terms_y
-    # h = max(|b_x|, |d_x|, |b_y|, |d_y|), the cell size
+    # Δ_cell = max(|b_x|, |d_x|, |b_y|, |d_y|), the cell size
     edge_size_x = jnp.maximum(jnp.abs(row_edge_x), jnp.abs(col_edge_x))
     edge_size_y = jnp.maximum(jnp.abs(row_edge_y), jnp.abs(col_edge_y))
     cell_size = jnp.maximum(edge_size_x, edge_size_y)
-    # |x| = max(|x*|, |a_x|, |y*|, |a_y|), the size of the coordinates
+    # x_size = max(|x_*|, |a|) over both components, the size of the coordinates
     magnitude_x = jnp.maximum(jnp.abs(target_x), jnp.abs(terms_x[0]))
     magnitude_y = jnp.maximum(jnp.abs(target_y), jnp.abs(terms_y[0]))
     magnitude = jnp.maximum(magnitude_x, magnitude_y)
-    # tol = √ε h + 8 ε |x|
+    # tol = √eps Δ_cell + 8 eps x_size
     sqrt_eps = jnp.sqrt(eps)
     tolerance = sqrt_eps * cell_size + 8 * eps * magnitude
-    # |F|_∞
+    # ‖Δx‖_∞
     misfit = jnp.maximum(jnp.abs(misfit_x), jnp.abs(misfit_y))
     within = misfit <= tolerance
     invertible = determinant != 0
@@ -236,7 +238,7 @@ def _walk(
     jump = jnp.floor(clipped)
     jump = jnp.where(leaves, jump, 0.0)
     whole_jump = jump.astype(jnp.int32)
-    # r ← r + ⌊s⌋, kept on the grid
+    # i ← i + ⌊s⌋, kept on the grid
     moved = cell + whole_jump
     return jnp.clip(moved, 0, n_cells - 1)
 
@@ -260,7 +262,7 @@ def curvilinear_positions(
     n_steps: int = N_NEWTON_STEPS,
     n_walks: int = N_WALKS,
 ) -> Float[Array, "target 2"]:
-    """The (M, 2) index positions u = (r + s, c + t) of targets (x, y) on a grid.
+    """The (M, 2) index positions u = (i + s, j + t) of the targets x_* on a grid.
 
     NaN where the locate failed: Newton did not converge, or the walk ran out
     with (s, t) still outside the unit square of an inner cell. The policies
@@ -281,7 +283,7 @@ def curvilinear_positions(
     row_settled = _settled(row, row_offset, n_rows - 1, slack)
     col_settled = _settled(col, col_offset, n_cols - 1, slack)
     found = converged & row_settled & col_settled
-    # u = (r + s, c + t)
+    # u = (i + s, j + t)
     row_position = row + row_offset
     col_position = col + col_offset
     positions = einx.id("target, target -> target (1 + 1)", row_position, col_position)
@@ -297,20 +299,20 @@ def locate_curvilinear(
     n_steps: int = N_NEWTON_STEPS,
     n_walks: int = N_WALKS,
 ) -> tuple[Int[Array, "target 2"], Float[Array, "target 2"], Bool[Array, " target"]]:
-    """The cell (r, c), the offset (s, t) and the inside flag of targets on a swath.
+    """The cell (i, j), the offset (s, t) and the inside flag of targets on a swath.
 
     Each cell maps the unit square onto its corners by the bilinear map
-    x(s, t) = (1 − s)(1 − t) x₀₀ + s(1 − t) x₁₀ + (1 − s) t x₀₁ + s t x₁₁, and
-    the target x* sits at index position u = (r + s, c + t) where
-    x(s, t) = x*. As in `locate`, the cell is ⌊u⌋ and the offset u − ⌊u⌋, and
-    a target is inside when u is finite and lies in the domain of ``extent``
-    on both indices.
+    x(s, t) = (1 − s)(1 − t) x₀₀ + s(1 − t) x₁₀ + (1 − s) t x₀₁ + s t x₁₁ of its
+    corner nodes x₀₀, x₁₀, x₀₁, x₁₁, and the target x_* sits at index position
+    u = (i + s, j + t) of cell (i, j) where x(s, t) = x_*. As in `locate`,
+    the cell is ⌊u⌋ and the offset u − ⌊u⌋, and a target is inside when u is
+    finite and lies in the domain of ``extent`` on both indices.
 
     Algorithm:
         1. Start each target in the cell whose centre is nearest, by a
            brute-force search over the cells (chunked, and traceable).
         2. Run ``n_steps`` Newton steps from (½, ½),
-           (s, t) ← (s, t) − J⁻¹ (x(s, t) − x*), with J = ∂x/∂(s, t).
+           (s, t) ← (s, t) − J_x⁻¹ (x(s, t) − x_*), with J_x = ∂x/∂(s, t).
         3. Where s or t leaves [0, 1], move ⌊s⌋ (or ⌊t⌋) cells, kept on the
            grid, and repeat, ``n_walks`` times; past the edge of the grid the
            edge cell's map is continued.
@@ -318,8 +320,9 @@ def locate_curvilinear(
            not converge or the walk ended outside an inner cell.
 
     Args:
-        grid: The `CurvilinearGrid` source, nodes x_{r,c} = (x, y)[r, c].
-        positions: x*, the M target coordinates (x, y).
+        grid: The `CurvilinearGrid` source, with nodes
+            x_{i,j} = (``x``[i, j], ``y``[i, j]).
+        positions: X_*, the M target coordinates in (``x``, ``y``) order.
         extent: ``"nodes"`` or ``"cells"`` (see `Policies`).
         n_steps: The Newton steps per cell, at least 1.
         n_walks: The moves to a neighbouring cell, at least 0.

@@ -1,9 +1,10 @@
-"""Point sets on the unit sphere with quadrature weights for ∫_{S²} f dΩ.
+"""Point sets on the unit sphere with quadrature weights for ∫_{S²} f dA.
 
 Each grid returns ``(points, weights)`` with weights summing to 4π: the
 Fibonacci lattice, the Gauss–Legendre grid, the cell-centred lon/lat grid and
-the HEALPix pixel centres. Points are unit vectors (``output="xyz"``) or
-(λ, φ) pairs (``output="lonlat"``, which needs ``unit``). The grids are built on
+the HEALPix pixel centres, with dA the area element of the unit sphere. Points
+are unit vectors (``output="xyz"``) or (λ, φ) pairs of longitude and latitude
+(``output="lonlat"``, which needs ``unit``). The grids are built on
 the host with NumPy, as in geonnax ``be5537d``, and returned as JAX arrays.
 """
 
@@ -94,8 +95,9 @@ def fibonacci_sphere(
 ) -> tuple[Float[Array, "node dim"], Float[Array, " node"]]:
     """The Fibonacci lattice: n near-uniform points on the unit sphere.
 
-    zᵢ = 1 − 2(i + ½)/n, φᵢ = arcsin zᵢ and λᵢ = 2πi/ϕ mod 2π with ϕ the golden
-    ratio, wrapped to [−π, π). Each point carries the weight 4π/n.
+    For i = 0, …, n − 1, zᵢ = 1 − 2(i + ½)/n, φᵢ = arcsin zᵢ and
+    λᵢ = 4πi/(1 + √5) mod 2π (2πi over the golden ratio), wrapped to [−π, π).
+    Each point carries the weight 4π/n.
 
     Args:
         n: The number of points.
@@ -123,13 +125,13 @@ def fibonacci_sphere(
     count = _check_count(n, "n")
     _check_output(output, unit)
     index = np.arange(count, dtype=float)
-    # ϕ = (1 + √5)/2
+    # the golden ratio (1 + √5)/2
     golden = (1.0 + math.sqrt(5.0)) / 2.0
     # zᵢ = 1 − 2(i + ½)/n
     z = 1.0 - 2.0 * (index + 0.5) / count
     # φᵢ = arcsin zᵢ
     lat = np.arcsin(z)
-    # λᵢ = 2πi/ϕ, wrapped to [−π, π)
+    # λᵢ = 4πi/(1 + √5), wrapped to [−π, π)
     angle = 2.0 * math.pi * index / golden
     wrapped = np.mod(angle + math.pi, 2.0 * math.pi)
     lon = wrapped - math.pi
@@ -148,11 +150,12 @@ def gauss_legendre_grid(
 ) -> tuple[Float[Array, "node dim"], Float[Array, " node"]]:
     """The Gauss–Legendre grid on the sphere, with its quadrature weights.
 
-    The sines of latitude are the n_lat Gauss–Legendre nodes tₖ on [−1, 1] and
-    the longitudes are uniform, λⱼ = −π + 2πj/n_lon; node (k, j) has weight
-    wₖ 2π/n_lon. The rule integrates a band-limited function of degree up to
-    min(2 n_lat − 1, n_lon − 1) exactly, so Y_lm Y_l′m′ when
-    l + l′ ≤ 2 n_lat − 1 and n_lon > l + l′.
+    The sines of latitude are the n_lat Gauss–Legendre nodes tₖ on [−1, 1],
+    with weights wₖ, and the longitudes are uniform, λⱼ = −π + 2πj/n_lon for
+    j = 0, …, n_lon − 1; node (k, j) has weight wₖ 2π/n_lon. The rule
+    integrates a band-limited function of degree up to
+    min(2 n_lat − 1, n_lon − 1) exactly, so Y_ℓm Y_ℓ′m′ when
+    ℓ + ℓ′ ≤ 2 n_lat − 1 and n_lon > ℓ + ℓ′.
 
     Args:
         n_lat: The number of latitudes.
@@ -257,9 +260,9 @@ def latlon_grid(
     return points, jnp.asarray(weights)
 
 
-# The base-face layout of HEALPix (Górski et al. 2005): for face f, the ring of
-# its southernmost-corner pixel is _JRLL[f]·nside − 1 and its longitude offset
-# is _JPLL[f]·π/4.
+# The base-face layout of HEALPix (Górski et al. 2005): for base face q, the ring
+# of its southernmost-corner pixel is _JRLL[q]·nside − 1 and its longitude
+# offset is _JPLL[q]·π/4.
 _JRLL = np.array([2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4])
 _JPLL = np.array([1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7])
 
@@ -301,7 +304,7 @@ def healpix_grid(
     ``healpy.pix2ang``. Longitudes are wrapped to [−π, π).
 
     Algorithm:
-        1. Enumerate every pixel by its face f and face-local (x, y).
+        1. Enumerate every pixel by its base face and face-local (x, y).
         2. Find its ring i and the ring's size, and from them z and λ in
            closed form (caps and belt apart).
         3. Number the pixels in the nested or the ring order, and sort by
@@ -364,7 +367,7 @@ def healpix_grid(
     face_y = einx.id("y -> (face x y)", np.arange(n), face=12, x=n)
 
     # --- ring and latitude ---
-    # the ring number, 1 to 4n − 1
+    # the ring number, 1 to 4 N_side − 1
     ring = _JRLL[face] * n - face_x - face_y - 1
     north = ring < n
     south = ring > 3 * n

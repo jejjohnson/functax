@@ -1,9 +1,10 @@
-"""Plans: a scheme frozen for one source and one target, f̂(X*) = H 𝒮(y).
+"""Plans: a scheme frozen for one source and one target, f̂(X_*) = H 𝒮(y).
 
-A plan holds a fit 𝒮, a read-out H and the policies. It is built once (the
-locate and the weights are paid then) and applied to every field, and its
-adjoint 𝒮ᵀ Hᵀ sends residuals back. Building may use the host; applying
-traces. Two plans compose into one (``outer @ inner``, a `ComposedPlan`), a
+A plan holds a fit c = 𝒮(y), from the N samples y to the coefficients c, a
+read-out H, from c to the values f̂ at the M targets X_*, and the policies. It
+is built once (the locate and the weights are paid then) and applied to every
+field, and its adjoint 𝒮ᵀ Hᵀ sends residuals back. Building may use the host;
+applying traces. Two plans compose into one (``outer @ inner``, a `ComposedPlan`), a
 plan on a grid target cuts to a window of it (``plan[window]``, a
 `WindowedPlan`), and a local plan exports its stencil for gaussx
 (`Plan.to_gaussx`).
@@ -47,7 +48,7 @@ __all__ = [
 
 
 class Plan(eqx.Module):
-    """f̂(X*) = H 𝒮(y), fitted once, applied to many fields.
+    """f̂(X_*) = H 𝒮(y), fitted once, applied to many fields.
 
     Invalid rows (targets outside the domain under ``outside="nan"``, or with
     no weight left under ``missing="renormalise"``) read ``fill_value``.
@@ -118,11 +119,12 @@ class Plan(eqx.Module):
     def to_gaussx(self) -> tuple[Int[Array, "target tap"], Float[Array, "target tap"]]:
         """The stencil arrays (iₖₛ, wₖₛ) in gaussx's row layout, invalid rows zeroed.
 
-        Row k of W has weights wₖₛ at source indices iₖₛ, repeated indices
-        adding: the ``(interp_indices, interp_values)`` of gaussx's
-        ``InterpolatedOperator`` (W K Wᵀ), and the rows of a ``SparseOperator``.
-        Invalid rows get index 0 and weight 0, so W is the linear map of
-        `operator`. Nothing from gaussx is imported.
+        Row k of H has weights wₖₛ at source indices iₖₛ for its S taps
+        s = 1, …, S, repeated indices adding: the ``(interp_indices,
+        interp_values)`` of gaussx's ``InterpolatedOperator`` (W K Wᵀ, with
+        W = H), and the rows of a ``SparseOperator``. Invalid rows get index 0
+        and weight 0, so H is the linear map of `operator`. Nothing from gaussx
+        is imported.
 
         Returns:
             The (M, S) indices and the (M, S) weights.
@@ -170,13 +172,13 @@ class Plan(eqx.Module):
         """Replace non-finite samples by ``fill_value`` under ``missing="fill"``."""
         fill = jnp.asarray(self.policies.fill_value, dtype=data.dtype)
         finite = jnp.isfinite(data)
-        # yᵢ ← y_fill where yᵢ is not finite
+        # yⱼ ← y_fill where yⱼ is not finite
         return jnp.where(finite, data, fill)
 
     def __call__(
         self, data: Float[Array, "*batch source"]
     ) -> Float[Array, "*batch target"]:
-        """f̂(X*) = H 𝒮(y) over any leading batch dims, ``fill_value`` at invalid rows.
+        """f̂(X_*) = H 𝒮(y) over any leading batch dims, ``fill_value`` at invalid rows.
 
         Algorithm:
             1. Under ``missing="fill"``, replace non-finite samples by
@@ -217,7 +219,7 @@ class Plan(eqx.Module):
     def _renormalised(
         self, data: Float[Array, "*batch source"]
     ) -> tuple[Float[Array, "*batch target"], Bool[Array, "*batch target"]]:
-        """∑ₛ wₖₛ yᵢ / ∑ₛ wₖₛ over the finite samples only, and where any are left."""
+        """∑ₛ wₖₛ y[iₖₛ] / ∑ₛ wₖₛ over the finite samples, where any are left."""
         stencil = self._local_stencil("missing='renormalise'")
         # y[iₖₛ]
         gathered = data[..., stencil.indices]
@@ -467,14 +469,16 @@ class Plan(eqx.Module):
         return plan
 
     def derivative(self, axis: int, order: int = 1) -> DerivativePlan:
-        """The plan of ∂ᵐf̂/∂x_cᵐ: H′ with H′ₖⱼ = ∂ᵐφⱼ/∂x_cᵐ at target k.
+        """The plan of ∂ᵐf̂/∂x_dᵐ, with read-out entries ∂ᵐφⱼ/∂x_dᵐ at target k.
 
-        c is a target coordinate (a column of ``Points.xy``: per source axis
-        on an `Axis` or a `RectilinearGrid`, (x, y) on an `AffineGrid`). The
-        result has the plan's fit, taps and validity, and its own adjoint.
+        x_d is the d-th target coordinate (a column of ``Points.xy``: one per
+        source axis on an `Axis` or a `RectilinearGrid`, the two map
+        coordinates on an `AffineGrid`), and φⱼ is the basis function that
+        coefficient j carries. The result has the plan's fit, taps and
+        validity, and its own adjoint.
 
         Args:
-            axis: c; negative counts from the end.
+            axis: d; negative counts from the end.
             order: m ≥ 1.
 
         Returns:
@@ -580,13 +584,13 @@ class Plan(eqx.Module):
 
 
 class DerivativePlan(Plan):
-    """A plan whose read-out holds basis derivatives: ∂ᵐf̂/∂x_cᵐ at the targets.
+    """A plan whose read-out holds basis derivatives: ∂ᵐf̂/∂x_dᵐ at the targets.
 
     It is linear in the data, with its own `adjoint` and `operator`, and
     passes the dot-product test like any plan. Made by `Plan.derivative`.
 
     Args:
-        axis: c, the target coordinate it differentiates along.
+        axis: d, the target coordinate x_d it differentiates along.
         order: m ≥ 1, the derivative order.
 
     Examples:

@@ -1,9 +1,10 @@
 """Interpolating cubic splines on one axis: slopes from one tridiagonal solve.
 
-With hₖ = xₖ₊₁ − xₖ and secants δₖ = (yₖ₊₁ − yₖ)/hₖ, the slopes of the C²
-cubic through the samples solve, at the interior knots,
+On N knots xₖ with samples yₖ, widths hₖ = xₖ₊₁ − xₖ and secants
+δₖ = (yₖ₊₁ − yₖ)/hₖ, the slopes dₖ of the C² cubic through the samples solve,
+at the interior knots,
 
-    hₖ mₖ₋₁ + 2(hₖ₋₁ + hₖ) mₖ + hₖ₋₁ mₖ₊₁ = 3(hₖ δₖ₋₁ + hₖ₋₁ δₖ),
+    hₖ dₖ₋₁ + 2(hₖ₋₁ + hₖ) dₖ + hₖ₋₁ dₖ₊₁ = 3(hₖ δₖ₋₁ + hₖ₋₁ δₖ),
 
 closed by the boundary condition in the first and last rows (natural,
 clamped, not-a-knot) or by wrapping around (periodic, a cyclic system solved
@@ -54,18 +55,18 @@ def solve_tridiagonal(
     upper: Float[Array, " row"],
     rhs: Float[Array, " row"],
 ) -> Float[Array, " row"]:
-    """x with T x = rhs, T tridiagonal (lower[0] and upper[-1] ignored).
+    """z with T z = rhs, T tridiagonal (lower[0] and upper[-1] ignored).
 
-    Row r of T x = rhs reads lᵣ xᵣ₋₁ + dᵣ xᵣ + uᵣ xᵣ₊₁ = rhsᵣ.
+    Row r of T z = rhs reads aᵣ zᵣ₋₁ + bᵣ zᵣ + cᵣ zᵣ₊₁ = rhsᵣ.
 
     Args:
-        lower: l, the sub-diagonal; its first entry is ignored.
-        diagonal: d, the main diagonal.
-        upper: u, the super-diagonal; its last entry is ignored.
+        lower: a, the sub-diagonal; its first entry is ignored.
+        diagonal: b, the main diagonal.
+        upper: c, the super-diagonal; its last entry is ignored.
         rhs: The right-hand side.
 
     Returns:
-        x, one entry per row.
+        z, one entry per row.
 
     Examples:
         A diagonal system divides:
@@ -90,7 +91,7 @@ def solve_tridiagonal(
     lower = lower.at[0].set(0.0)
     upper = upper.at[-1].set(0.0)
     column = einx.id("row -> row 1", rhs)
-    # x = T⁻¹ rhs, by the banded solve
+    # z = T⁻¹ rhs, by the banded solve
     solution = jax.lax.linalg.tridiagonal_solve(lower, diagonal, upper, column)
     return einx.id("row 1 -> row", solution)
 
@@ -106,7 +107,7 @@ def _interior(
     """Sub-, main and super-diagonals and right-hand sides of rows 1 … N − 2."""
     previous_width = widths[:-1]
     next_width = widths[1:]
-    # hₖ mₖ₋₁ + 2(hₖ₋₁ + hₖ) mₖ + hₖ₋₁ mₖ₊₁ = 3(hₖ δₖ₋₁ + hₖ₋₁ δₖ)
+    # hₖ dₖ₋₁ + 2(hₖ₋₁ + hₖ) dₖ + hₖ₋₁ dₖ₊₁ = 3(hₖ δₖ₋₁ + hₖ₋₁ δₖ)
     lower = next_width
     diagonal = 2.0 * (previous_width + next_width)
     upper = previous_width
@@ -117,9 +118,9 @@ def _interior(
 def spline_slopes(
     nodes: Float[Array, " node"], values: Float[Array, " node"], *, condition: str
 ) -> Float[Array, " node"]:
-    """The knot slopes m of the interpolating cubic spline with end ``condition``.
+    """The knot slopes d of the interpolating cubic spline with end ``condition``.
 
-    hₖ mₖ₋₁ + 2(hₖ₋₁ + hₖ) mₖ + hₖ₋₁ mₖ₊₁ = 3(hₖ δₖ₋₁ + hₖ₋₁ δₖ) at the
+    hₖ dₖ₋₁ + 2(hₖ₋₁ + hₖ) dₖ + hₖ₋₁ dₖ₊₁ = 3(hₖ δₖ₋₁ + hₖ₋₁ δₖ) at the
     interior knots, closed by the end condition.
 
     Algorithm:
@@ -136,7 +137,7 @@ def spline_slopes(
             slopes) or ``"periodic"``.
 
     Returns:
-        m, the N knot slopes.
+        d, the N knot slopes.
 
     Raises:
         ValidationError: If ``condition`` is unknown.
@@ -185,11 +186,11 @@ def spline_slopes(
     one = jnp.ones((1,), values.dtype)
     zero = jnp.zeros((1,), values.dtype)
     if condition == "natural":
-        # 2 m₀ + m₁ = 3 δ₀ and m_{N−2} + 2 m_{N−1} = 3 δ_{N−2}
+        # 2 d₀ + d₁ = 3 δ₀ and d_{N−2} + 2 d_{N−1} = 3 δ_{N−2}
         first = (zero, 2.0 * one, one, 3.0 * secants[:1])
         last = (one, 2.0 * one, zero, 3.0 * secants[-1:])
     elif condition == "clamped":
-        # m₀ = 0 and m_{N−1} = 0
+        # d₀ = 0 and d_{N−1} = 0
         first = (zero, one, zero, zero)
         last = (zero, one, zero, zero)
     else:
@@ -228,14 +229,14 @@ def spline_slopes(
 def _periodic_slopes(
     widths: Float[Array, " cell"], secants: Float[Array, " cell"]
 ) -> Float[Array, " node"]:
-    """Slopes of the periodic spline: a cyclic system on m₀ … m_{N−2}, m_{N−1} = m₀.
+    """Slopes of the periodic spline: a cyclic system on d₀ … d_{N−2}, d_{N−1} = d₀.
 
     Algorithm:
-        1. Build the cyclic rows; row k couples m_{k−1}, mₖ, m_{k+1}
+        1. Build the cyclic rows; row k couples d_{k−1}, dₖ, d_{k+1}
            (indices mod N − 1).
         2. Write the cyclic matrix as A = T + u vᵀ with T tridiagonal.
-        3. Solve T y = rhs and T z = u, then x = y − (vᵀ y)/(1 + vᵀ z) z
-           (Sherman-Morrison).
+        3. Solve T z₁ = rhs and T z₂ = u, then
+           d = z₁ − (vᵀ z₁)/(1 + vᵀ z₂) z₂ (Sherman-Morrison).
     """
     n_rows = widths.shape[0]
     # hₖ₋₁ and δₖ₋₁, indices mod N − 1
@@ -245,7 +246,7 @@ def _periodic_slopes(
     diagonal = 2.0 * (previous_width + widths)
     upper = previous_width
     rhs = 3.0 * (widths * previous_secant + previous_width * secants)
-    # corners: row 0 reads m_{n−1} with lower[0], row n − 1 reads m₀ with upper[n − 1]
+    # corners: row 0 reads d_{N−2} with lower[0], row N − 2 reads d₀ with upper[N − 2]
     corner_low = lower[0]
     corner_high = upper[n_rows - 1]
     gamma = -diagonal[0]
@@ -259,16 +260,16 @@ def _periodic_slopes(
     update_right = jnp.zeros(n_rows, widths.dtype)
     update_right = update_right.at[0].set(1.0)
     update_right = update_right.at[n_rows - 1].set(corner_low / gamma)
-    # y = T⁻¹ rhs and z = T⁻¹ u
+    # z₁ = T⁻¹ rhs and z₂ = T⁻¹ u
     base = solve_tridiagonal(lower, modified, upper, rhs)
     correction = solve_tridiagonal(lower, modified, upper, update_left)
-    # vᵀ y and vᵀ z
+    # vᵀ z₁ and vᵀ z₂
     projected_base = einx.dot("cell, cell ->", update_right, base)
     projected_correction = einx.dot("cell, cell ->", update_right, correction)
-    # x = y − (vᵀ y) / (1 + vᵀ z) z
+    # d = z₁ − (vᵀ z₁) / (1 + vᵀ z₂) z₂
     scale = projected_base / (1.0 + projected_correction)
     slopes = base - scale * correction
-    # m_{N−1} = m₀
+    # d_{N−1} = d₀
     return einx.id("cell, -> (cell + 1)", slopes, slopes[0])
 
 

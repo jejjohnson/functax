@@ -1,6 +1,6 @@
-"""The variational fit: x = (HᵀR⁻¹H + λLᵀL)⁻¹ HᵀR⁻¹y, matrix-free through lineax.
+"""The variational fit: c = (HᵀΛ_εH + βLᵀL)⁻¹ HᵀΛ_εy, matrix-free through lineax.
 
-H, R⁻¹ and L arrive as lineax operators, so a plan's ``operator()``, a
+H, Λ_ε and L arrive as lineax operators, so a plan's ``operator()``, a
 diagonal precision and a difference operator from finitevolX or spectraldiffx
 plug in without functax importing them.
 """
@@ -31,7 +31,10 @@ __all__ = [
 
 
 def default_solver(dtype: jnp.dtype) -> lx.CG:
-    """CG with rtol = atol = √ε of ``dtype``: 1.5e-8 in float64, 3.5e-4 in float32."""
+    """CG with rtol = atol = √eps of ``dtype``: 1.5e-8 in float64, 3.5e-4 in float32.
+
+    eps is the machine epsilon, ``jnp.finfo(dtype).eps``.
+    """
     # a host constant, so the default also works under jit
     tolerance = math.sqrt(float(jnp.finfo(dtype).eps))
     return lx.CG(rtol=tolerance, atol=tolerance)
@@ -46,36 +49,41 @@ def _vector_size(structure: object, name: str) -> int:
 
 
 class Variational(Fit):
-    """x = argmin (Hx − y)ᵀR⁻¹(Hx − y) + λ‖Lx‖², the variational smoothing fit.
+    """c = argmin_c (Hc − y)ᵀΛ_ε(Hc − y) + β‖Lc‖₂², the variational smoothing fit.
 
-    The minimiser solves the normal equations
+    Here c ∈ ℝᴺ are the grid values, y ∈ ℝᴹ the observations, H ∈ ℝ^{M×N}
+    the observation operator, Λ_ε = Σ_ε⁻¹ ∈ ℝ^{M×M} the observation-error
+    precision, L ∈ ℝ^{N_L×N} the roughness operator and β ≥ 0 the smoothing
+    weight. In 3D-Var and DIVA letters, Λ_ε is R⁻¹ and βLᵀL plays the role of
+    the prior precision B⁻¹. The minimiser solves the normal equations
 
-        (HᵀR⁻¹H + λLᵀL) x = HᵀR⁻¹y,
+        (HᵀΛ_εH + βLᵀL) c = HᵀΛ_εy,
 
     whose operator is applied matrix-free and tagged symmetric positive
     semi-definite, so lineax's CG solves it. lineax differentiates the solve
-    implicitly, so a gradient in y, λ or the operators' arrays costs one more
-    solve. The fit is linear in y, with adjoint 𝒮ᵀg = R⁻¹H A⁻¹g for
-    A = HᵀR⁻¹H + λLᵀL, so it sits in a `Plan` like any other fit.
+    implicitly, so a gradient in y, β or the operators' arrays costs one more
+    solve. The fit is linear in y, with adjoint 𝒮ᵀg = Λ_εH A⁻¹g for
+    A = HᵀΛ_εH + βLᵀL ∈ ℝ^{N×N} and a cotangent g ∈ ℝᴺ, so it sits in a
+    `Plan` like any other fit.
 
     Algorithm:
-        1. b = HᵀR⁻¹y.
-        2. x = A⁻¹b by ``solver`` with A applied as x ↦ HᵀR⁻¹Hx + λLᵀLx.
+        1. b = HᵀΛ_εy.
+        2. c = A⁻¹b by ``solver`` with A applied as c ↦ HᵀΛ_εHc + βLᵀLc.
 
     Args:
         observation: H, (M, N), from the grid to the observations (a plan's
             ``operator()``).
-        roughness: L, (G, N), the roughness operator (a difference operator).
-        observation_precision: R⁻¹, (M, M), symmetric positive definite; the
+        roughness: L, (N_L, N), the roughness operator (a difference operator).
+        observation_precision: Λ_ε, (M, M), symmetric positive definite; the
             identity when ``None``.
-        smoothing_weight: λ ≥ 0, the weight of the roughness penalty.
-        solver: The lineax solver for A; CG at √ε of the data dtype when
+        smoothing_weight: β ≥ 0, the weight of the roughness penalty.
+        solver: The lineax solver for A; CG at √eps of the data dtype when
             ``None``. A must be positive definite for CG (H and L share no
             null vector), or the solve fails.
 
     Raises:
         ValidationError: If an operator does not act on vectors, the sizes
-            disagree, or λ is negative (checked when concrete).
+            disagree, or β is negative (checked when concrete).
 
     Examples:
         >>> import jax.numpy as jnp
@@ -83,12 +91,12 @@ class Variational(Fit):
         >>> from functax.project import Variational
         >>> grid = jnp.zeros(4)
         >>> identity = lx.IdentityLinearOperator(grid)
-        >>> # H = I and λ = 0 return the data
+        >>> # H = I and β = 0 return the data
         >>> fit = Variational(identity, identity, smoothing_weight=0.0)
         >>> y = jnp.array([1.0, -2.0, 0.5, 3.0])
         >>> bool(jnp.allclose(fit(y), y))
         True
-        >>> # with L = I, x = y / (1 + λ)
+        >>> # with L = I, c = y / (1 + β)
         >>> ridge = Variational(identity, identity, smoothing_weight=1.0)
         >>> bool(jnp.allclose(ridge(y), y / 2.0))
         True
@@ -139,30 +147,30 @@ class Variational(Fit):
         return self.observation.out_size()
 
     def _precision(self, residual: Float[Array, " obs"]) -> Float[Array, " obs"]:
-        """R⁻¹ r, or r when R⁻¹ is the identity."""
+        """Λ_ε r, or r when Λ_ε is the identity."""
         if self.observation_precision is None:
             return residual
         return self.observation_precision.mv(residual)
 
     def normal_operator(self) -> lx.FunctionLinearOperator:
-        """A = HᵀR⁻¹H + λLᵀL, (N, N), matrix-free, tagged symmetric PSD."""
+        """A = HᵀΛ_εH + βLᵀL, (N, N), matrix-free, tagged symmetric PSD."""
         observation = self.observation
         observation_t = observation.transpose()
         roughness = self.roughness
         roughness_t = roughness.transpose()
 
         def normal(grid: Float[Array, " cell"]) -> Float[Array, " cell"]:
-            # Hx
+            # Hc
             predicted = observation.mv(grid)
-            # R⁻¹Hx
+            # Λ_εHc
             weighted = self._precision(predicted)
-            # HᵀR⁻¹Hx
+            # HᵀΛ_εHc
             data_term = observation_t.mv(weighted)
-            # Lx
+            # Lc
             rough = roughness.mv(grid)
-            # LᵀLx
+            # LᵀLc
             penalty = roughness_t.mv(rough)
-            # Ax = HᵀR⁻¹Hx + λLᵀLx
+            # Ac = HᵀΛ_εHc + βLᵀLc
             return data_term + self.smoothing_weight * penalty
 
         return lx.FunctionLinearOperator(
@@ -175,18 +183,18 @@ class Variational(Fit):
         """A⁻¹ b for one vector b."""
         solver = default_solver(rhs.dtype) if self.solver is None else self.solver
         normal = self.normal_operator()
-        # x = A⁻¹ b
+        # c = A⁻¹ b
         solution = lx.linear_solve(normal, rhs, solver)
         return solution.value
 
     def apply(self, data: Float[Array, "*batch obs"]) -> Float[Array, "*batch cell"]:
-        """x = A⁻¹HᵀR⁻¹y over any leading batch dims.
+        """c = A⁻¹HᵀΛ_εy over any leading batch dims.
 
         Args:
             data: y, the M observations, last.
 
         Returns:
-            x, the N grid values, last.
+            c, the N grid values, last.
 
         Raises:
             ValidationError: If the last axis of ``data`` is not M.
@@ -202,11 +210,11 @@ class Variational(Fit):
         observation_t = self.observation.transpose()
 
         def fit_one(observations: Float[Array, " obs"]) -> Float[Array, " cell"]:
-            # R⁻¹y
+            # Λ_εy
             weighted = self._precision(observations)
-            # b = HᵀR⁻¹y
+            # b = HᵀΛ_εy
             rhs = observation_t.mv(weighted)
-            # x = A⁻¹ b
+            # c = A⁻¹ b
             return self._solve(rhs)
 
         fit_batch = jnp.vectorize(fit_one, signature="(m)->(n)")
@@ -215,7 +223,7 @@ class Variational(Fit):
     def apply_adjoint(
         self, coefficients: Float[Array, "*batch cell"]
     ) -> Float[Array, "*batch obs"]:
-        """𝒮ᵀg = R⁻¹H A⁻¹g over any leading batch dims (A and R⁻¹ are symmetric).
+        """𝒮ᵀg = Λ_εH A⁻¹g over any leading batch dims (A and Λ_ε are symmetric).
 
         Args:
             coefficients: g, the N grid values, last.
@@ -227,7 +235,7 @@ class Variational(Fit):
             ValidationError: If the last axis of ``coefficients`` is not N.
 
         Examples:
-            The dot-product test ⟨𝒮y, g⟩ = ⟨y, 𝒮ᵀg⟩ for a ridge fit:
+            The dot-product test 𝒮(y)ᵀg = yᵀ𝒮ᵀg for a ridge fit:
 
             >>> import einx
             >>> import jax.numpy as jnp
@@ -256,12 +264,12 @@ class Variational(Fit):
             solved = self._solve(grid)
             # H A⁻¹g
             predicted = self.observation.mv(solved)
-            # 𝒮ᵀg = R⁻¹H A⁻¹g
+            # 𝒮ᵀg = Λ_εH A⁻¹g
             return self._precision(predicted)
 
         adjoint_batch = jnp.vectorize(adjoint_one, signature="(n)->(m)")
         return adjoint_batch(coefficients)
 
     def __call__(self, data: Float[Array, "*batch obs"]) -> Float[Array, "*batch cell"]:
-        """x = 𝒮(y), the same as `apply`."""
+        """c = 𝒮(y), the same as `apply`."""
         return self.apply(data)

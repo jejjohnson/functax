@@ -2,7 +2,7 @@
 
 Longitude λ and latitude φ lift to u = (cos φ cos λ, cos φ sin λ, sin φ), the
 convention of geonnax, so the spherical bases that move in during Wave 1 line
-up. The radius a is a plain argument: the WGS84 constants and the ellipsoid
+up. The radius R is a plain argument: the WGS84 constants and the ellipsoid
 belong to geophysix, not to functax.
 """
 
@@ -191,13 +191,13 @@ def chord_distance(
 ) -> Float[Array, "source target"]:
     """The straight-line distance through the sphere between every pair.
 
-    d_chord = a ‖u − v‖ for unit vectors u and v and radius a. The norm is
+    d_chord = R ‖u − v‖₂ for unit vectors u and v and radius R. The norm is
     guarded at u = v, so the gradient there is zero rather than NaN.
 
     Args:
         u: The M source unit vectors.
         v: The N target unit vectors.
-        radius: a, positive.
+        radius: R, positive.
 
     Returns:
         The M × N chord distances, in the units of ``radius``.
@@ -234,11 +234,11 @@ def chord_distance(
     difference = einx.subtract("source dim, target dim -> source target dim", u, v)
     # (u − v)²
     squared_difference = difference**2
-    # ‖u − v‖²
+    # ‖u − v‖₂²
     squared = einx.sum("source target [dim]", squared_difference)
-    # ‖u − v‖, guarded at u = v
+    # ‖u − v‖₂, guarded at u = v
     norm = _safe_norm(squared)
-    # d = a ‖u − v‖
+    # d = R ‖u − v‖₂
     return radius * norm
 
 
@@ -250,7 +250,7 @@ def geodesic_distance(
 ) -> Float[Array, "source target"]:
     """The great-circle distance between every pair.
 
-    d_geo = a · atan2(‖u × v‖, u · v) for unit vectors u and v and radius a.
+    d_geo = R · atan2(‖u × v‖₂, u · v) for unit vectors u and v and radius R.
     The atan2 form is accurate at every angle, where arccos(u · v) loses
     precision near 0 and π and has an infinite derivative at u = v. The cross
     product's norm is guarded at u = v, so the gradient there is zero.
@@ -258,7 +258,7 @@ def geodesic_distance(
     Args:
         u: The M source unit vectors.
         v: The N target unit vectors.
-        radius: a, positive.
+        radius: R, positive.
 
     Returns:
         The M × N geodesic distances, in the units of ``radius``.
@@ -279,7 +279,7 @@ def geodesic_distance(
         ... )
         True
 
-        Antipodes are half a great circle apart, π a:
+        Antipodes are half a great circle apart, πR:
 
         >>> poles = jnp.array([[0.0, 0.0, 1.0]]), jnp.array([[0.0, 0.0, -1.0]])
         >>> distance = geodesic_distance(*poles, radius=2.0)
@@ -309,13 +309,13 @@ def geodesic_distance(
     cross_z = xy - yx
 
     # --- angle ---
-    # ‖u × v‖²
+    # ‖u × v‖₂²
     cross_squared = cross_x**2 + cross_y**2 + cross_z**2
-    # ‖u × v‖, guarded at u = v
+    # ‖u × v‖₂, guarded at u = v
     cross_norm = _safe_norm(cross_squared)
     # u · v
     dot = einx.dot("source dim, target dim -> source target", u, v)
-    # d = a · atan2(‖u × v‖, u · v)
+    # d = R · atan2(‖u × v‖₂, u · v)
     return radius * jnp.arctan2(cross_norm, dot)
 
 
@@ -326,9 +326,10 @@ def spherical_polygon_area(
 ) -> Float[Array, "*batch"]:
     """The signed area of a spherical polygon with great-circle edges.
 
-    A = a² E with the spherical excess E = ∑ₖ αₖ − (n − 2)π of an n-gon with
-    interior angles αₖ. The angle sum loses all but a few digits on small
-    cells (E is the difference of numbers near (n − 2)π), so E is summed over
+    A = R² E with the spherical excess E = ∑ₖ αₖ − (N_vertex − 2)π of a polygon
+    with N_vertex vertices and interior angles αₖ, k = 0, …, N_vertex − 1. The
+    angle sum loses all but a few digits on small cells (E is the difference
+    of numbers near (N_vertex − 2)π), so E is summed over
     the fan of triangles (u₀, uₖ, uₖ₊₁) instead, each by the formula of Van
     Oosterom and Strackee,
 
@@ -343,15 +344,15 @@ def spherical_polygon_area(
 
     Algorithm:
         1. Split the polygon into the fan of triangles (u₀, uₖ, uₖ₊₁),
-           k = 1, …, n − 2.
+           k = 1, …, N_vertex − 2.
         2. Compute each triangle's excess Eₖ by Van Oosterom and Strackee's
            atan2 form.
-        3. Sum the Eₖ and scale by a².
+        3. Sum the Eₖ and scale by R².
 
     Args:
-        vertices: u, the n ≥ 3 vertices as unit vectors, in order, with any
+        vertices: u, the N_vertex ≥ 3 vertices as unit vectors, in order, with any
             leading batch dims.
-        radius: a, positive.
+        radius: R, positive.
 
     Returns:
         A, one area per polygon, in the units of ``radius`` squared.
@@ -387,7 +388,7 @@ def spherical_polygon_area(
         )
         raise GeometryError(msg)
     _check_radius(radius)
-    # the fan (u₀, uₖ, uₖ₊₁) for k = 1, …, n − 2
+    # the fan (u₀, uₖ, uₖ₊₁) for k = 1, …, N_vertex − 2
     apex = vertices[..., 0, :]
     left = vertices[..., 1:-1, :]
     right = vertices[..., 2:, :]
@@ -405,5 +406,5 @@ def spherical_polygon_area(
     half_excess = jnp.arctan2(triple, denominator)
     # E = 2 ∑ₖ Eₖ / 2
     excess = 2 * einx.sum("... [fan]", half_excess)
-    # A = a² E
+    # A = R² E
     return radius**2 * excess

@@ -31,7 +31,7 @@ _SEGMENT_RULES: tuple[str, ...] = ("gauss_legendre", "midpoint")
 
 
 class CurveRule(Rule):
-    """A rule on a curve L: ∫_L c dℓ ≈ ∑ₖ Δsₖ c(xₖ), with the unit normal nₖ.
+    """A rule on a curve L: ∫_L g ds ≈ ∑ₖ Δsₖ g(xₖ), with the unit normal nₖ.
 
     A `Rule` whose weights are arc lengths Δsₖ, so integrix sums with it like
     any other rule and ``nodes, weights = rule`` still unpacks. The normals
@@ -43,7 +43,7 @@ class CurveRule(Rule):
     Attributes:
         nodes: The nodes xₖ on the curve, one row of D coordinates per node.
         weights: The arc-length weights Δsₖ.
-        normals: The unit normals nₖ, (K, 2), or ``None`` when D ≠ 2.
+        normals: The unit normals nₖ, (N, 2), or ``None`` when D ≠ 2.
 
     Raises:
         ValidationError: As `Rule`, or if ``normals`` is given and does not
@@ -106,14 +106,14 @@ def polyline(
     weights Δsₖ = ℓⱼ ωᵢ, from a rule (τᵢ, ωᵢ) on [0, 1]:
 
     - ``"midpoint"``: τᵢ = (i + ½)/n and ωᵢ = 1/n, the composite midpoint
-      rule, exact for linear c along each segment;
-    - ``"gauss_legendre"``: the n-point Gauss–Legendre rule, exact for c
+      rule, exact for linear g along each segment;
+    - ``"gauss_legendre"``: the n-point Gauss–Legendre rule, exact for g
       polynomial along each segment up to degree 2n − 1.
 
     So ∑ₖ Δsₖ = ∑ⱼ ℓⱼ, the polyline's length. In 2-D every node of segment j
     carries the normal nⱼ = R₉₀ tⱼ = (−tⱼ,y, tⱼ,x), so the vertices' order
     sets its sign: reverse them to flip a flux. Each segment gets the same n,
-    so K = n (V − 1) is static and the rule traces and differentiates in the
+    so N = n (V − 1) is static and the rule traces and differentiates in the
     vertices. A zero-length segment has zero weights and a zero normal.
 
     Algorithm:
@@ -130,8 +130,8 @@ def polyline(
             ``"gauss_legendre"``.
 
     Returns:
-        A `CurveRule` of K = n (V − 1) nodes (K, D), weights (K,) and, in 2-D,
-        normals (K, 2), in the vertices' floating dtype.
+        A `CurveRule` of N = n (V − 1) nodes (N, D), weights (N,) and, in 2-D,
+        normals (N, 2), in the vertices' floating dtype.
 
     Raises:
         ValidationError: If ``vertices`` is not (V, D) with V ≥ 2 and D ≥ 1,

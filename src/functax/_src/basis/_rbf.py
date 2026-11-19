@@ -1,11 +1,12 @@
 """Placeable radial bases: Gaussian and compactly supported Wendland bumps.
 
-A radial basis puts a kernel at a centre c_a with a width ℓ_a and evaluates
-φ_a(x) = K(‖x − c_a‖/ℓ_a). Unlike the spectral bases, its columns are local
-bumps placed where the caller wants them (a river mouth, a front) without
-touching the rest of the domain. A Gaussian gives a smooth global bump; the
-Wendland kernels are exactly zero past their width, so the basis and its Gram
-matrix are sparse by construction. Moved from geonnax ``_rbf`` at ``be5537d``.
+A radial basis puts a radial profile ψ at a centre c_a with a width ℓ_a and
+evaluates φ_a(x) = ψ(‖x − c_a‖/ℓ_a), for the atoms a = 1, …, M. Unlike the
+spectral bases, its columns are local bumps placed where the caller wants them
+(a river mouth, a front) without touching the rest of the domain. A Gaussian
+gives a smooth global bump; the Wendland kernels are exactly zero past their
+width, so the basis and its Gram matrix are sparse by construction. Moved from
+geonnax ``_rbf`` at ``be5537d``.
 """
 
 from __future__ import annotations
@@ -41,15 +42,16 @@ def _check_kernel(kernel: str) -> None:
 
 
 def wendland_c2(r: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
-    """The Wendland C² kernel K(r) = (1 − r)₊⁴ (4r + 1).
+    """The Wendland C² kernel ψ(r) = (1 − r)₊⁴ (4r + 1).
 
-    Positive definite in dimensions d ≤ 3.
+    A radial profile of the scaled distance r, positive definite in
+    dimensions D ≤ 3.
 
     Args:
         r: Scaled distances, any shape.
 
     Returns:
-        K(r), with the shape of ``r``; zero for r ≥ 1.
+        ψ(r), with the shape of ``r``; zero for r ≥ 1.
 
     References:
         Wendland, H. (2004). Scattered Data Approximation. Cambridge
@@ -70,22 +72,23 @@ def wendland_c2(r: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
     decay = (1.0 - r) ** 4
     # 4r + 1
     polynomial = 4.0 * r + 1.0
-    # K(r) = (1 − r)⁴ (4r + 1)
+    # ψ(r) = (1 − r)⁴ (4r + 1)
     kernel = decay * polynomial
-    # the positive part: K(r) = 0 for r ≥ 1
+    # the positive part: ψ(r) = 0 for r ≥ 1
     return jnp.where(inside, kernel, 0.0)
 
 
 def wendland_c4(r: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
-    """The Wendland C⁴ kernel K(r) = (1 − r)₊⁶ (35r² + 18r + 3)/3.
+    """The Wendland C⁴ kernel ψ(r) = (1 − r)₊⁶ (35r² + 18r + 3)/3.
 
-    Positive definite in dimensions d ≤ 3.
+    A radial profile of the scaled distance r, positive definite in
+    dimensions D ≤ 3.
 
     Args:
         r: Scaled distances, any shape.
 
     Returns:
-        K(r), with the shape of ``r``; zero for r ≥ 1.
+        ψ(r), with the shape of ``r``; zero for r ≥ 1.
 
     References:
         Wendland, H. (2004). Scattered Data Approximation. Cambridge
@@ -106,9 +109,9 @@ def wendland_c4(r: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
     decay = (1.0 - r) ** 6
     # 35r² + 18r + 3
     polynomial = 35.0 * r**2 + 18.0 * r + 3.0
-    # K(r) = (1 − r)⁶ (35r² + 18r + 3)/3
+    # ψ(r) = (1 − r)⁶ (35r² + 18r + 3)/3
     kernel = decay * polynomial / 3.0
-    # the positive part: K(r) = 0 for r ≥ 1
+    # the positive part: ψ(r) = 0 for r ≥ 1
     return jnp.where(inside, kernel, 0.0)
 
 
@@ -121,18 +124,20 @@ def rbf_basis(
 ) -> Float[Array, "obs feature"]:
     """A placeable radial basis at given centres and widths.
 
-    Column a is φ_a(x) = K(‖x − c_a‖/ℓ_a). Only Φ is returned: the prior
-    variance per centre is the caller's choice, and the geometry (``centers``,
+    Column a is φ_a(x) = ψ(‖x − c_a‖/ℓ_a), with ψ the Gaussian profile
+    exp(−r²/2) or a Wendland profile. Only Φ ∈ ℝ^{N×M}, entry (n, a) being
+    φ_a(x_n), is returned: the prior variance per centre is the caller's
+    choice, and the geometry (``centers``,
     ``widths``) is already theirs. Wendland columns are exactly zero past
     their width.
 
     Args:
-        x: The evaluation points.
-        centers: c_a, the centre of each atom.
+        x: The N evaluation points x ∈ ℝ^D.
+        centers: c_a, the centre of each of the M atoms.
         widths: ℓ_a, the Gaussian length scale or the Wendland support radius
             of each atom.
         kernel: ``"gaussian"`` (a smooth global bump) or ``"wendland_c2"`` /
-            ``"wendland_c4"`` (compact support, positive definite for d ≤ 3).
+            ``"wendland_c4"`` (compact support, positive definite for D ≤ 3).
 
     Returns:
         Φ, each atom at each point.
@@ -177,11 +182,11 @@ def rbf_basis(
         # φ_a = exp(−‖x − c_a‖²/(2ℓ_a²))
         exponent = -0.5 * scaled_sq
         return jnp.exp(exponent)
-    # r = ‖x − c‖, with a zero gradient at r = 0 rather than NaN
+    # ‖x − c_a‖, with a zero gradient at the centre rather than NaN
     distance = _safe_norm(squared)
-    # r/ℓ_a
+    # ‖x − c_a‖/ℓ_a
     scaled = einx.divide("obs feature, feature", distance, widths)
-    # φ_a = K(‖x − c_a‖/ℓ_a)
+    # φ_a = ψ(‖x − c_a‖/ℓ_a)
     return wendland_c2(scaled) if kernel == "wendland_c2" else wendland_c4(scaled)
 
 
@@ -194,15 +199,16 @@ def spherical_rbf_basis(
 ) -> Float[Array, "obs feature"]:
     """A placeable radial basis on the unit sphere, in geodesic distance.
 
-    The spherical counterpart of `rbf_basis`: φ_a(x) = K(d(x, c_a)/ℓ_a) with d
-    the great-circle distance, so an atom's support is a geodesic cap,
-    rotation-invariant on the sphere. The distance is `geodesic_distance`'s
-    atan2(‖x × c‖, x · c), accurate at every angle and with a zero gradient at a
-    coincident centre (geonnax used a guarded arccos, which loses precision
-    near 0 and π). The inputs are assumed to lie on the unit sphere.
+    The spherical counterpart of `rbf_basis`: φ_a(r̂) = ψ(d(r̂, c_a)/ℓ_a) at r̂
+    ∈ S², with d the great-circle distance, so an atom's support is a geodesic
+    cap, rotation-invariant on the sphere. The distance is
+    `geodesic_distance`'s atan2(‖r̂ × c_a‖, r̂ · c_a), accurate at every angle
+    and with a zero gradient at a coincident centre (geonnax used a guarded
+    arccos, which loses precision near 0 and π). The inputs are assumed to lie
+    on the unit sphere.
 
     Args:
-        unit_xyz: The evaluation directions.
+        unit_xyz: The N evaluation directions r̂.
         centers: c_a, the centre of each atom, on the unit sphere.
         widths: ℓ_a, the geodesic length scale or Wendland cap radius of each
             atom, in radians.
@@ -228,7 +234,7 @@ def spherical_rbf_basis(
         True
     """
     _check_kernel(kernel)
-    # d(x, c_a)
+    # d(r̂, c_a)
     distance = geodesic_distance(unit_xyz, centers)
     if kernel == "gaussian":
         squared_distance = distance**2
@@ -237,10 +243,10 @@ def spherical_rbf_basis(
         scaled_sq = einx.divide(
             "obs feature, feature", squared_distance, squared_widths
         )
-        # φ_a = exp(−d(x, c_a)²/(2ℓ_a²))
+        # φ_a = exp(−d(r̂, c_a)²/(2ℓ_a²))
         exponent = -0.5 * scaled_sq
         return jnp.exp(exponent)
     # d/ℓ_a
     scaled = einx.divide("obs feature, feature", distance, widths)
-    # φ_a = K(d(x, c_a)/ℓ_a)
+    # φ_a = ψ(d(r̂, c_a)/ℓ_a)
     return wendland_c2(scaled) if kernel == "wendland_c2" else wendland_c4(scaled)

@@ -85,8 +85,8 @@ def _as_epoch(epoch: Any) -> str:
 class Axis(eqx.Module):
     """One strictly monotone coordinate axis, optionally periodic or in time.
 
-    A periodic axis with period P treats x and x + kP as the same point for
-    every integer k, so its nodes must span less than P. Descending axes are
+    A periodic axis with period P treats x and x + mP as the same point for
+    every integer m, so its nodes must span less than P. Descending axes are
     allowed (wavelength from wavenumber). Times are stored as float seconds
     since ``epoch``; `from_datetimes` converts them on the host.
 
@@ -101,21 +101,22 @@ class Axis(eqx.Module):
     no spacing, so it carries no direction and `cell_edges` needs explicit
     ``edges``. A scheme reads it with weight 1 on its node: under
     ``extent="nodes"`` a target is inside when x = x₀, and under
-    ``extent="cells"`` when e₀ ≤ x ≤ e₁.
+    ``extent="cells"`` when x_{−½} ≤ x ≤ x_{½}.
 
     Args:
-        values: x, the node coordinates, at least one, strictly increasing or
-            strictly decreasing. Kept in the dtype they arrive in.
+        values: x, the N node coordinates xₖ, k = 0, …, N − 1, at least one,
+            strictly increasing or strictly decreasing. Kept in the dtype they
+            arrive in.
         period: P, the period (360.0 for longitude in degrees), or ``None``
             for an axis that is not periodic.
         epoch: The time origin of ``values`` (a ``datetime64`` or an ISO 8601
             string), or ``None`` for an axis that is not time. Stored as an
             ISO 8601 string at nanosecond resolution.
-        edges: e, the n + 1 cell edges, node k owning the cell [eₖ, eₖ₊₁]
-            (CF ``bounds``), strictly monotone in the direction of
-            ``values`` and spanning at most P on a periodic axis; ``None``
-            for the midpoints between nodes (`cell_edges`). Kept in the dtype
-            they arrive in. Conservative remapping reads them.
+        edges: The N + 1 cell edges x_{k±½}, node k owning the cell
+            [x_{k−½}, x_{k+½}] (CF ``bounds``), strictly monotone in the
+            direction of ``values`` and spanning at most P on a periodic axis;
+            ``None`` for the midpoints between nodes (`cell_edges`). Kept in
+            the dtype they arrive in. Conservative remapping reads them.
         repeats: ``"forbid"`` (the default) for strictly monotone nodes, or
             ``"allow"`` for non-decreasing or non-increasing ones with
             repeats. The nodes must still span a positive width, and a
@@ -127,7 +128,7 @@ class Axis(eqx.Module):
             ``repeats="allow"``), or spans P or more; if ``repeats`` is
             unknown or set on a periodic axis; if ``period`` is
             not positive and finite; if ``epoch`` is not a time;
-            if ``edges`` is not 1-D with n + 1 floating entries, or (when
+            if ``edges`` is not 1-D with N + 1 floating entries, or (when
             concrete) is not strictly monotone in the direction of ``values``
             or spans more than P.
 
@@ -242,7 +243,7 @@ class Axis(eqx.Module):
             return
         edges = np.asarray(self.edges)
         values = np.asarray(self.values)
-        # eₖ₊₁ − eₖ, all of the sign of xₖ₊₁ − xₖ (either sign for one node)
+        # x_{k+½} − x_{k−½}, all of the sign of xₖ₊₁ − xₖ (either sign for one node)
         widths = np.diff(edges)
         steps = np.sign(widths)
         if values.shape[0] == 1:
@@ -261,16 +262,17 @@ class Axis(eqx.Module):
             raise GeometryError(msg)
 
     def cell_edges(self) -> Float[Array, " edge"]:
-        """The n + 1 cell edges: ``edges``, or the midpoints between nodes.
+        """The N + 1 cell edges: ``edges``, or the midpoints between nodes.
 
-        Without explicit edges, eₖ = ½ (xₖ₋₁ + xₖ) between nodes, and the end
-        cells are symmetric about their nodes, e₀ = x₀ − ½ (x₁ − x₀) (as
-        xrtoolz's ``_bounds_from_centres``). On a periodic axis the end edges
-        are instead the midpoint m of the wrap gap, between x_{n−1} and
-        x₀ ± P, so e₀ = m ∓ P and e_n = m, and the cells tile the circle.
+        Without explicit edges, x_{k−½} = ½ (xₖ₋₁ + xₖ) between nodes, and the
+        end cells are symmetric about their nodes, x_{−½} = x₀ − ½ (x₁ − x₀)
+        (as xrtoolz's ``_bounds_from_centres``). On a periodic axis the end
+        edges are instead the midpoint of the wrap gap between x_{N−1} and
+        x₀ ± P, so x_{N−½} = ½ (x_{N−1} + x₀ ± P) and x_{−½} = x_{N−½} ∓ P,
+        and the cells tile the circle.
 
         Returns:
-            e, in the dtype of ``values`` (or of ``edges``).
+            The edges x_{k±½}, in the dtype of ``values`` (or of ``edges``).
 
         Raises:
             GeometryError: If the axis has one node and no ``edges``, since
@@ -294,17 +296,17 @@ class Axis(eqx.Module):
         # ½ (xₖ₋₁ + xₖ) between nodes
         midpoints = 0.5 * (values[:-1] + values[1:])
         if self.period is None:
-            # e₀ = x₀ − ½ (x₁ − x₀)
+            # x_{−½} = x₀ − ½ (x₁ − x₀)
             first = values[0] - 0.5 * (values[1] - values[0])
-            # e_n = x_{n−1} + ½ (x_{n−1} − x_{n−2})
+            # x_{N−½} = x_{N−1} + ½ (x_{N−1} − x_{N−2})
             last = values[-1] + 0.5 * (values[-1] - values[-2])
         else:
-            # the wrap gap runs from x_{n−1} to x₀ ± P, the sign of the axis
+            # the wrap gap runs from x_{N−1} to x₀ ± P, the sign of the axis
             period = jnp.where(values[-1] > values[0], self.period, -self.period)
             period = period.astype(values.dtype)
-            # e_n = m = ½ (x_{n−1} + x₀ ± P)
+            # x_{N−½} = ½ (x_{N−1} + x₀ ± P)
             last = 0.5 * (values[-1] + values[0] + period)
-            # e₀ = m ∓ P
+            # x_{−½} = x_{N−½} ∓ P
             first = last - period
         return einx.id(", edge, -> (1 + edge + 1)", first, midpoints, last)
 
@@ -433,7 +435,7 @@ class Axis(eqx.Module):
         values = np.asarray(self.values)
         # Δₖ = xₖ₊₁ − xₖ
         spacing = np.diff(values)
-        # Δ̄ = (1/(n − 1)) ∑ₖ Δₖ
+        # Δ̄ = (1/(N − 1)) ∑ₖ Δₖ
         mean_spacing = spacing.mean()
         # max |Δₖ − Δ̄|
         absolute_deviation = np.abs(spacing - mean_spacing)
@@ -506,7 +508,7 @@ class AffineGrid(eqx.Module):
         self.shape = _as_grid_shape(shape)
 
         a, b, _, d, e, _ = (transform[k] for k in range(6))
-        # det = a·e − b·d ≠ 0, or the grid has no inverse
+        # det A = a·e − b·d ≠ 0 for the linear part A, or the grid has no inverse
         determinant = a * e - b * d
         finite = jnp.all(jnp.isfinite(transform))
         transform = _check_values(transform, ~finite, "'transform' must be finite")
@@ -560,7 +562,7 @@ def _as_grid_shape(shape: Any) -> tuple[int, int]:
 class RectilinearGrid(eqx.Module):
     """A tensor-product grid with one `Axis` per dimension.
 
-    A field on it has shape ``(*batch, n₁, …, n_D)``: the interpolated
+    A field on it has shape ``(*batch, N₁, …, N_D)``: the interpolated
     dimensions are last, in the order of ``axes``, and leading ones are batch.
 
     Args:
@@ -599,7 +601,7 @@ class RectilinearGrid(eqx.Module):
 
     @property
     def shape(self) -> tuple[int, ...]:
-        """``(n₁, …, n_D)``, the number of nodes along each axis."""
+        """``(N₁, …, N_D)``, the number of nodes along each axis."""
         return tuple(axis.values.shape[0] for axis in self.axes)
 
 

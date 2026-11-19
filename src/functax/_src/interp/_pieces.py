@@ -1,9 +1,10 @@
 """Hermite slopes on an axis with repeats: each piece between repeats on its own.
 
-A repeat xₖ = xₖ₊₁ splits the knots into pieces, and each piece gets the
-slopes its scheme gives it as an axis of its own, with the scheme's end rules
-at both of its ends. The repeats are data (they may be traced), so the pieces
-are found inside the trace and every array keeps its static shape:
+On N non-decreasing knots x₀, …, x_{N−1} with samples y, a repeat xₖ = xₖ₊₁
+splits the knots into pieces, and each piece gets the slopes dₖ its scheme
+gives it as an axis of its own, with the scheme's end rules at both of its
+ends. The repeats are data (they may be traced), so the pieces are found
+inside the trace and every array keeps its static shape:
 
 - the local schemes (PCHIP, Steffen, Akima) read each knot's slope off a
   window of 2r + 1 knots of its own piece, since a slope there depends on
@@ -127,7 +128,7 @@ def _window_slopes(
             knot's entry.
 
     Returns:
-        m, the N knot slopes.
+        d, the N knot slopes.
     """
     n_nodes = nodes.shape[0]
     index = jnp.arange(n_nodes, dtype=jnp.int32)
@@ -185,7 +186,7 @@ def piecewise_pchip_slopes(
         values: y, the N samples.
 
     Returns:
-        m, the N knot slopes.
+        d, the N knot slopes.
 
     Examples:
         Each piece equals PCHIP on its own knots:
@@ -216,7 +217,7 @@ def piecewise_steffen_slopes(
         values: y, the N samples.
 
     Returns:
-        m, the N knot slopes.
+        d, the N knot slopes.
 
     Examples:
         Each piece equals Steffen on its own knots:
@@ -260,7 +261,7 @@ def piecewise_akima_slopes(
         values: y, the N samples.
 
     Returns:
-        m, the N knot slopes.
+        d, the N knot slopes.
 
     Examples:
         Each piece equals Akima on its own knots:
@@ -294,7 +295,7 @@ def _safe(
 
 
 def _shift(array: Float[Array, " knot"], by: int) -> Float[Array, " knot"]:
-    """aₖ₊by at each k, 0 where k + by falls off the array."""
+    """vₖ₊by at each k for the array v, 0 where k + by falls off the array."""
     zero = jnp.zeros((abs(by),), array.dtype)
     if by > 0:
         return einx.id("kept, off -> (kept + off)", array[by:], zero)
@@ -306,11 +307,12 @@ def piecewise_spline_slopes(
 ) -> Float[Array, " node"]:
     """The cubic spline's slopes with end ``condition`` on each piece between repeats.
 
-    One tridiagonal system holds every piece: a knot inside a piece has the
-    interior row, hₖ mₖ₋₁ + 2(hₖ₋₁ + hₖ) mₖ + hₖ₋₁ mₖ₊₁ = 3(hₖ δₖ₋₁ + hₖ₋₁ δₖ),
+    With widths hₖ = xₖ₊₁ − xₖ and secants δₖ = (yₖ₊₁ − yₖ)/hₖ, one
+    tridiagonal system holds every piece: a knot inside a piece has the
+    interior row, hₖ dₖ₋₁ + 2(hₖ₋₁ + hₖ) dₖ + hₖ₋₁ dₖ₊₁ = 3(hₖ δₖ₋₁ + hₖ₋₁ δₖ),
     and a knot at a piece's end has the end row of ``condition``, which does
     not reach across the repeat, so the system splits into one block per
-    piece. A piece of two knots is a line (mₖ = δ), as `spline_slopes` gives
+    piece. A piece of two knots is a line (dₖ = δ), as `spline_slopes` gives
     two knots, and a not-a-knot piece of three is SciPy's parabola.
 
     Algorithm:
@@ -327,7 +329,7 @@ def piecewise_spline_slopes(
         condition: ``"not-a-knot"``, ``"natural"`` or ``"clamped"``.
 
     Returns:
-        m, the N knot slopes.
+        d, the N knot slopes.
 
     Raises:
         ValidationError: If ``condition`` is unknown or ``"periodic"``.
@@ -391,7 +393,7 @@ def piecewise_spline_slopes(
     zeros = jnp.zeros_like(values)
 
     # --- interior rows ---
-    # hₖ mₖ₋₁ + 2(hₖ₋₁ + hₖ) mₖ + hₖ₋₁ mₖ₊₁ = 3(hₖ δₖ₋₁ + hₖ₋₁ δₖ)
+    # hₖ dₖ₋₁ + 2(hₖ₋₁ + hₖ) dₖ + hₖ₋₁ dₖ₊₁ = 3(hₖ δₖ₋₁ + hₖ₋₁ δₖ)
     lower = right_width
     diagonal = 2.0 * (left_width + right_width)
     upper = left_width
@@ -399,11 +401,11 @@ def piecewise_spline_slopes(
 
     # --- the rows at each end of a piece ---
     if condition == "natural":
-        # 2 mₐ + mₐ₊₁ = 3 δₐ and m_{b−1} + 2 m_b = 3 δ_{b−1}
+        # 2 dₐ + dₐ₊₁ = 3 δₐ and d_{b−1} + 2 d_b = 3 δ_{b−1}
         head = (zeros, 2.0 * ones, ones, 3.0 * right_secant)
         tail = (ones, 2.0 * ones, zeros, 3.0 * left_secant)
     elif condition == "clamped":
-        # mₐ = 0 and m_b = 0
+        # dₐ = 0 and d_b = 0
         head = (zeros, ones, zeros, zeros)
         tail = (zeros, ones, zeros, zeros)
     else:
@@ -428,7 +430,7 @@ def piecewise_spline_slopes(
         )
         tail_rhs = tail_numerator / safe_end_span
         tail = (end_span, far_left_width, zeros, tail_rhs)
-        # a piece of three: mₐ + mₐ₊₁ = 2 δₐ and m_{b−1} + m_b = 2 δ_{b−1}
+        # a piece of three: dₐ + dₐ₊₁ = 2 δₐ and d_{b−1} + d_b = 2 δ_{b−1}
         three = length == 3
         head = tuple(
             jnp.where(three, short, long)
@@ -442,7 +444,7 @@ def piecewise_spline_slopes(
                 (ones, ones, zeros, 2.0 * left_secant), tail, strict=True
             )
         )
-    # a piece of two is a line, mₖ = δ; a piece of one gets mₖ = 0
+    # a piece of two is a line, dₖ = δ; a piece of one gets dₖ = 0
     two = length == 2
     head = tuple(
         jnp.where(two, line, row)

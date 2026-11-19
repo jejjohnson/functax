@@ -33,15 +33,17 @@ def eof_basis(
 ) -> tuple[Float[Array, "cell feature"], Float[Array, " feature"]]:
     """The leading ``n_modes`` empirical orthogonal functions of a data matrix.
 
-    The economy SVD X = U S Vᵀ of the data (centred on the sample mean of each
-    grid point by default) gives the spatial patterns as the columns of V,
-    orthonormal, with their singular values σ_a; the prior variance per mode is
-    σ_a²/(T − 1).
+    The economy SVD X = U S Vᵀ of the data X ∈ ℝ^{T×N} (centred on the sample
+    mean of each grid point by default) gives the spatial patterns as the
+    columns of V ∈ ℝ^{N×min(T, N)}, orthonormal, with their singular values
+    σ_a, a = 1, …, min(T, N); the prior variance per mode is σ_a²/(T − 1).
 
     Algorithm:
-        1. Optionally centre each grid point on its sample mean, X − x̄.
+        1. Optionally centre each grid point on its sample mean, X − x̄ with
+           x̄ ∈ ℝ^N.
         2. Take the economy SVD X = U S Vᵀ.
-        3. Keep the first M rows of Vᵀ as columns, with their singular values.
+        3. Keep the first M rows of Vᵀ as the columns of Φ ∈ ℝ^{N×M}, with
+           their singular values.
 
     Args:
         data: X, T samples (time snapshots, say) over N grid points.
@@ -95,13 +97,13 @@ def eof_basis(
         msg = f"'n_modes' must lie in [1, {max_modes}], got {n_modes!r}"
         raise ValidationError(msg)
     if center:
-        # x̄ = (1/T) ∑ₜ xₜ, at each grid point
+        # x̄ = (1/T) ∑ₜ xₜ, over the rows xₜ ∈ ℝ^N of X
         sample_mean = einx.mean("[sample] cell", data)
         # X − x̄
         data = einx.subtract("sample cell, cell", data, sample_mean)
     # X = U S Vᵀ, the economy SVD: the rows of Vᵀ are the spatial EOFs
     _, singular_values, right_vectors = jnp.linalg.svd(data, full_matrices=False)
     leading = right_vectors[:n_modes]
-    # Φ = V[:, :M]
+    # Φ, the first M columns of V
     patterns = einx.id("feature cell -> cell feature", leading)
     return patterns, singular_values[:n_modes]

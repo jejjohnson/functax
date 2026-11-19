@@ -1,8 +1,9 @@
 """Product bases on a spherical shell r₀ ≤ ‖x‖ ≤ r₁.
 
 For fields with depth or altitude, each basis function is a real spherical
-harmonic in direction times a polynomial in radius,
-φ_lmn(x) = Y_lm(x/‖x‖) R_n(‖x‖). Moved from geonnax ``_shell`` at ``be5537d``.
+harmonic in direction times a polynomial in radius: a point x ∈ ℝ³ has radius
+r = ‖x‖ and direction r̂ = x/‖x‖, and φ_ℓmk(x) = Y_ℓm(r̂) R_k(r) for the degree
+ℓ, order m and radial index k. Moved from geonnax ``_shell`` at ``be5537d``.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ _RADIAL: tuple[str, ...] = ("legendre", "chebyshev")
 
 
 def _chebyshev(s: Float[Array, " obs"], n_radial: int) -> Float[Array, "obs radial"]:
-    """T₀(s), …, T_{n−1}(s) by T_{k+1} = 2s T_k − T_{k−1}."""
+    """T₀(s), …, T_{N_radial−1}(s) by T_{k+1} = 2s T_k − T_{k−1}."""
     columns = [jnp.ones_like(s)]
     if n_radial > 1:
         columns.append(s)
@@ -57,34 +58,38 @@ def shell_basis(
 ) -> tuple[Float[Array, "obs feature"], Int[Array, "feature 2"]]:
     """Spherical harmonics times radial polynomials on a spherical shell.
 
-    With s = 2(‖x‖ − r₀)/(r₁ − r₀) − 1 in [−1, 1]:
+    Each column is φ_ℓmk(x) = Y_ℓm(r̂) R_k(r), for ℓ = 0, …, ℓ_max,
+    m = −ℓ, …, ℓ and k = 0, …, N_radial − 1, with the radius r = ‖x‖, the
+    direction r̂ = x/‖x‖ and the mapped radius s = 2(r − r₀)/(r₁ − r₀) − 1 in
+    [−1, 1]:
 
-    - ``radial="legendre"``: R_n = √(2/(r₁ − r₀)) √((2n + 1)/2) P_n(s), so the
-      basis is orthonormal in L² with the measure dΩ dr. This is not the
-      volume measure r² dr dΩ; for a thin shell the two differ by roughly r².
-    - ``radial="chebyshev"``: the Chebyshev polynomials T_n(s), unnormalised;
+    - ``radial="legendre"``: R_k = √(2/(r₁ − r₀)) √((2k + 1)/2) P_k(s), so the
+      basis is orthonormal in L² with the measure dΩ dr, dΩ the area element
+      of the unit sphere. This is not the volume measure r² dr dΩ; for a thin
+      shell the two differ by roughly r².
+    - ``radial="chebyshev"``: the Chebyshev polynomials T_k(s), unnormalised;
       well-conditioned, but not orthogonal under dr.
 
     The exact Laplacian eigenfunctions of the shell (spherical Bessel
     functions in radius) are out of scope.
 
     Algorithm:
-        1. Split each point into its radius r = ‖x‖ and direction x/‖x‖.
-        2. Evaluate Y_lm on the directions and R_n on the mapped radii s.
+        1. Split each point into its radius r = ‖x‖ and direction r̂ = x/‖x‖.
+        2. Evaluate Y_ℓm on the directions and R_k on the mapped radii s.
         3. Take the product of every harmonic with every radial polynomial,
            the radial index fastest.
 
     Args:
-        xyz: Points with radius in [r₀, r₁].
-        l_max: The highest spherical-harmonic degree.
-        n_radial: The number of radial polynomials, at least 1.
+        xyz: The N points x, with radius in [r₀, r₁].
+        l_max: ℓ_max, the highest spherical-harmonic degree.
+        n_radial: N_radial, the number of radial polynomials, at least 1.
         r_inner: r₀, at least 0.
         r_outer: r₁, above r₀.
         radial: ``"legendre"`` or ``"chebyshev"``.
 
     Returns:
-        ``(values, indices)``: (l_max + 1)² n_radial columns, harmonic-major
-        (the radial index varies fastest), and each column's (l, n).
+        ``(values, indices)``: (ℓ_max + 1)² N_radial columns, harmonic-major
+        (the radial index varies fastest), and each column's (ℓ, k).
 
     Raises:
         ValidationError: If ``xyz`` is not (N, 3), ``l_max`` or ``n_radial`` is
@@ -135,7 +140,7 @@ def shell_basis(
     radius = jnp.sqrt(squared_radius)
     # the unit direction is left as 0 at the origin
     safe_radius = jnp.where(radius > 0, radius, 1.0)
-    # x/‖x‖
+    # r̂ = x/‖x‖
     unit = einx.divide("obs dim, obs", xyz, safe_radius)
     harmonics = real_spherical_harmonics(unit, degree)
 
@@ -146,11 +151,11 @@ def shell_basis(
         orders = np.arange(count)
         # √(2/(r₁ − r₀))
         interval_scale = np.sqrt(2.0 / (r_outer - r_inner))
-        # √((2n + 1)/2)
+        # √((2k + 1)/2)
         order_scale = np.sqrt((2.0 * orders + 1.0) / 2.0)
         scale = interval_scale * order_scale
         polynomials = legendre_polynomials(s, count - 1)
-        # R_n = √(2/(r₁ − r₀)) √((2n + 1)/2) P_n(s)
+        # R_k = √(2/(r₁ − r₀)) √((2k + 1)/2) P_k(s)
         radial_values = einx.multiply(
             "obs radial, radial", polynomials, jnp.asarray(scale, dtype=s.dtype)
         )
@@ -158,7 +163,7 @@ def shell_basis(
         radial_values = _chebyshev(s, count)
 
     # --- products ---
-    # φ_lmn = Y_lm R_n, the radial index fastest
+    # φ_ℓmk = Y_ℓm R_k, the radial index fastest
     values = einx.multiply(
         "obs harmonic, obs radial -> obs (harmonic radial)", harmonics, radial_values
     )

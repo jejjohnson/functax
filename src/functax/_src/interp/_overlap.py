@@ -1,6 +1,8 @@
 """One-axis cell overlaps, the building block of conservative remapping on tensor grids.
 
-Source cell cⱼ = [eⱼ, eⱼ₊₁] and target cell Cᵢ = [Eᵢ, Eᵢ₊₁] overlap by
+Source cell cⱼ = [eⱼ, eⱼ₊₁], j = 0, …, N − 1, between the N + 1 source edges e,
+and target cell Cᵢ = [Eᵢ, Eᵢ₊₁], i = 0, …, M − 1, between the M + 1 target
+edges E, overlap by
 
     |cⱼ ∩ Cᵢ| = max(0, min(eⱼ₊₁, Eᵢ₊₁) − max(eⱼ, Eᵢ)),
 
@@ -8,7 +10,8 @@ and on a D-dimensional tensor grid the overlap of two cells is the product of
 their per-axis overlaps, so no polygon is ever clipped. Both sets of edges are
 monotone, so the source cells a target overlaps are contiguous and two
 ``searchsorted`` sweeps find them; the result is a band of S taps per target
-rather than a dense (M, N) matrix. Built on the host in NumPy.
+(S the most source cells any target overlaps) rather than a dense (M, N)
+matrix. Built on the host in NumPy.
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ __all__ = [
 ]
 
 
-# a source whose edges span P to this relative tolerance covers the circle
+# a source whose edges span the period P to this relative tolerance covers the circle
 _FULL_CIRCLE_RTOL = 1e-12
 
 
