@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.11](https://github.com/jejjohnson/functax/compare/v0.0.10...v0.0.11) (2026-11-19)
+
+
+### Features
+
+* **quad:** grid-shaped weights from cell_area ([#148](https://github.com/jejjohnson/functax/issues/148)) ([b513671](https://github.com/jejjohnson/functax/commit/b513671964e36212f396f6aa62d410192da37ff6)), closes [#147](https://github.com/jejjohnson/functax/issues/147)
+
 ## [0.0.10](https://github.com/jejjohnson/functax/compare/v0.0.9...v0.0.10) (2026-11-12)
 
 
