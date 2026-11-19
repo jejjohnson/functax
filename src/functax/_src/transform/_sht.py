@@ -34,7 +34,9 @@ from functax.exceptions import ValidationError
 __all__ = ["SphericalHarmonicTransform"]
 
 
-def _sht_grid(n_lat: int, n_lon: int) -> tuple[np.ndarray, np.ndarray]:
+def _sht_grid(
+    n_lat: int, n_lon: int
+) -> tuple[Float[np.ndarray, "node 3"], Float[np.ndarray, " node"]]:
     """The transform's grid: unit vectors and quadrature weights, latitude-major.
 
     The sines of latitude are the Gauss–Legendre nodes (ascending, south to
@@ -43,14 +45,22 @@ def _sht_grid(n_lat: int, n_lon: int) -> tuple[np.ndarray, np.ndarray]:
     every field by half a turn, so the transform keeps its own longitudes.
     """
     z, latitude_weights = gauss_legendre(n_lat)
-    cos_latitude = np.sqrt(np.clip(1.0 - z**2, 0.0, None))
+    # cos φ = √(1 − sin² φ), clipped against round-off
+    cos_squared = np.clip(1.0 - z**2, 0.0, None)
+    cos_latitude = np.sqrt(cos_squared)
+    # λ_j = 2πj / n_lon
     longitude = 2.0 * np.pi * np.arange(n_lon) / n_lon
-    # u = (cos φ cos λ, cos φ sin λ, sin φ) on the (lat, lon) grid
-    x = np.outer(cos_latitude, np.cos(longitude))
-    y = np.outer(cos_latitude, np.sin(longitude))
-    sin_latitude = np.repeat(z, n_lon).reshape(n_lat, n_lon)
-    xyz = np.stack([x, y, sin_latitude], axis=-1).reshape(-1, 3)
-    weights = np.repeat(latitude_weights * (2.0 * np.pi / n_lon), n_lon)
+    # --- unit vectors u = (cos φ cos λ, cos φ sin λ, sin φ), latitude-major ---
+    x = einx.multiply("lat, lon -> lat lon", cos_latitude, np.cos(longitude))
+    y = einx.multiply("lat, lon -> lat lon", cos_latitude, np.sin(longitude))
+    sin_latitude = einx.id("lat -> lat lon", z, lon=n_lon)
+    xyz = einx.id(
+        "lat lon, lat lon, lat lon -> (lat lon) (1 + 1 + 1)", x, y, sin_latitude
+    )
+    # --- weights w_q = w_φ · 2π/n_lon ---
+    longitude_weight = 2.0 * np.pi / n_lon
+    cell_weights = latitude_weights * longitude_weight
+    weights = einx.id("lat -> (lat lon)", cell_weights, lon=n_lon)
     return xyz, weights
 
 
@@ -108,6 +118,11 @@ class SphericalHarmonicTransform(eqx.Module):
         n_lat > l_max (it is exact to degree 2 n_lat − 1), and equispaced
         longitudes need n_lon > 2 l_max to hold every order m.
 
+        Algorithm:
+            1. Lay out the Gauss–Legendre grid: unit vectors x_q and weights w_q.
+            2. Tabulate the synthesis matrix Y_lm(x_q) in float64.
+            3. Weight it by w_q and transpose it into the analysis matrix.
+
         Args:
             n_lat: The number of Gauss–Legendre latitudes, above l_max.
             n_lon: The number of equispaced longitudes, above 2 l_max.
@@ -124,6 +139,15 @@ class SphericalHarmonicTransform(eqx.Module):
             >>> from functax.transform import SphericalHarmonicTransform
             >>> SphericalHarmonicTransform.init(5, 9, 4).synth.shape
             (45, 25)
+
+            A grid too coarse for the band limit is rejected:
+
+            >>> SphericalHarmonicTransform.init(
+            ...     4, 9, 4
+            ... )  # doctest: +IGNORE_EXCEPTION_DETAIL
+            Traceback (most recent call last):
+            ...
+            ValidationError: 'n_lat' must exceed l_max
         """
         degree = _check_degree(l_max, "l_max")
         if n_lat <= degree:
@@ -143,10 +167,13 @@ class SphericalHarmonicTransform(eqx.Module):
         # float64 (finite and orthonormal far past float32's limits) and cast
         # to the default dtype once
         with jax.enable_x64(True):
-            synth = np.asarray(
-                real_spherical_harmonics(jnp.asarray(xyz, dtype=jnp.float64), degree)
-            )
-        analy = (synth * weights[:, None]).T
+            points = jnp.asarray(xyz, dtype=jnp.float64)
+            # Y_lm(x_q)
+            harmonics = real_spherical_harmonics(points, degree)
+            synth = np.asarray(harmonics)
+        # w_q Y_lm(x_q)
+        weighted = einx.multiply("node feature, node -> node feature", synth, weights)
+        analy = einx.id("node feature -> feature node", weighted)
         return cls(
             synth=jnp.asarray(synth),
             analy=jnp.asarray(analy),
@@ -176,10 +203,16 @@ class SphericalHarmonicTransform(eqx.Module):
             >>> coefficients = sht.forward(jnp.ones((1, 4, 8)))
             >>> bool(jnp.allclose(coefficients[0, 0], math.sqrt(4 * math.pi)))
             True
+            >>> sht.forward(jnp.zeros((3, 4, 8))).shape
+            (3, 9)
         """
         flat = einx.id("channel lat lon -> channel (lat lon)", field)
         analysis = jax.lax.stop_gradient(self.analy)
-        return einx.dot("channel node, feature node -> channel feature", flat, analysis)
+        # c_lm = ∑_q w_q y(x_q) Y_lm(x_q)
+        coeffs = einx.dot(
+            "channel node, feature node -> channel feature", flat, analysis
+        )
+        return coeffs
 
     def inverse(
         self, coeffs: Float[Array, "channel feature"]
@@ -198,8 +231,14 @@ class SphericalHarmonicTransform(eqx.Module):
             >>> sht = SphericalHarmonicTransform.init(4, 8, 2)
             >>> sht.inverse(jnp.zeros((3, 9))).shape
             (3, 4, 8)
+            >>> # c₀₀ = √(4π) synthesises the constant 1
+            >>> import math
+            >>> constant = jnp.zeros((1, 9)).at[0, 0].set(math.sqrt(4 * math.pi))
+            >>> bool(jnp.allclose(sht.inverse(constant), 1.0))
+            True
         """
         synthesis = jax.lax.stop_gradient(self.synth)
+        # y(x_q) = ∑_lm c_lm Y_lm(x_q)
         flat = einx.dot(
             "channel feature, node feature -> channel node", coeffs, synthesis
         )

@@ -138,7 +138,7 @@ class Variational(Fit):
         del n_coefficients
         return self.observation.out_size()
 
-    def _precision(self, residual: jax.Array) -> jax.Array:
+    def _precision(self, residual: Float[Array, " obs"]) -> Float[Array, " obs"]:
         """R⁻¹ r, or r when R⁻¹ is the identity."""
         if self.observation_precision is None:
             return residual
@@ -151,12 +151,18 @@ class Variational(Fit):
         roughness = self.roughness
         roughness_t = roughness.transpose()
 
-        def normal(grid: jax.Array) -> jax.Array:
-            # HᵀR⁻¹H x
-            weighted = self._precision(observation.mv(grid))
+        def normal(grid: Float[Array, " cell"]) -> Float[Array, " cell"]:
+            # Hx
+            predicted = observation.mv(grid)
+            # R⁻¹Hx
+            weighted = self._precision(predicted)
+            # HᵀR⁻¹Hx
             data_term = observation_t.mv(weighted)
-            # λ LᵀL x
-            penalty = roughness_t.mv(roughness.mv(grid))
+            # Lx
+            rough = roughness.mv(grid)
+            # LᵀLx
+            penalty = roughness_t.mv(rough)
+            # Ax = HᵀR⁻¹Hx + λLᵀLx
             return data_term + self.smoothing_weight * penalty
 
         return lx.FunctionLinearOperator(
@@ -165,10 +171,13 @@ class Variational(Fit):
             (lx.symmetric_tag, lx.positive_semidefinite_tag),
         )
 
-    def _solve(self, rhs: jax.Array) -> jax.Array:
+    def _solve(self, rhs: Float[Array, " cell"]) -> Float[Array, " cell"]:
         """A⁻¹ b for one vector b."""
         solver = default_solver(rhs.dtype) if self.solver is None else self.solver
-        return lx.linear_solve(self.normal_operator(), rhs, solver).value
+        normal = self.normal_operator()
+        # x = A⁻¹ b
+        solution = lx.linear_solve(normal, rhs, solver)
+        return solution.value
 
     def apply(self, data: Float[Array, "*batch obs"]) -> Float[Array, "*batch cell"]:
         """x = A⁻¹HᵀR⁻¹y over any leading batch dims.
@@ -192,12 +201,16 @@ class Variational(Fit):
             raise ValidationError(msg)
         observation_t = self.observation.transpose()
 
-        def fit_one(observations: jax.Array) -> jax.Array:
+        def fit_one(observations: Float[Array, " obs"]) -> Float[Array, " cell"]:
+            # R⁻¹y
+            weighted = self._precision(observations)
             # b = HᵀR⁻¹y
-            rhs = observation_t.mv(self._precision(observations))
+            rhs = observation_t.mv(weighted)
+            # x = A⁻¹ b
             return self._solve(rhs)
 
-        return jnp.vectorize(fit_one, signature="(m)->(n)")(data)
+        fit_batch = jnp.vectorize(fit_one, signature="(m)->(n)")
+        return fit_batch(data)
 
     def apply_adjoint(
         self, coefficients: Float[Array, "*batch cell"]
@@ -212,6 +225,22 @@ class Variational(Fit):
 
         Raises:
             ValidationError: If the last axis of ``coefficients`` is not N.
+
+        Examples:
+            The dot-product test ⟨𝒮y, g⟩ = ⟨y, 𝒮ᵀg⟩ for a ridge fit:
+
+            >>> import einx
+            >>> import jax.numpy as jnp
+            >>> import lineax as lx
+            >>> from functax.project import Variational
+            >>> identity = lx.IdentityLinearOperator(jnp.zeros(3))
+            >>> fit = Variational(identity, identity, smoothing_weight=0.5)
+            >>> y = jnp.array([1.0, -2.0, 0.5])
+            >>> g = jnp.array([0.3, 0.1, -1.0])
+            >>> forward = einx.dot("cell, cell ->", fit.apply(y), g)
+            >>> adjoint = einx.dot("obs, obs ->", y, fit.apply_adjoint(g))
+            >>> bool(jnp.allclose(forward, adjoint))
+            True
         """
         coefficients = jnp.asarray(coefficients)
         n_cell = self.observation.in_size()
@@ -222,11 +251,16 @@ class Variational(Fit):
             )
             raise ValidationError(msg)
 
-        def adjoint_one(grid: jax.Array) -> jax.Array:
+        def adjoint_one(grid: Float[Array, " cell"]) -> Float[Array, " obs"]:
+            # A⁻¹g
             solved = self._solve(grid)
-            return self._precision(self.observation.mv(solved))
+            # H A⁻¹g
+            predicted = self.observation.mv(solved)
+            # 𝒮ᵀg = R⁻¹H A⁻¹g
+            return self._precision(predicted)
 
-        return jnp.vectorize(adjoint_one, signature="(n)->(m)")(coefficients)
+        adjoint_batch = jnp.vectorize(adjoint_one, signature="(n)->(m)")
+        return adjoint_batch(coefficients)
 
     def __call__(self, data: Float[Array, "*batch obs"]) -> Float[Array, "*batch cell"]:
         """x = 𝒮(y), the same as `apply`."""

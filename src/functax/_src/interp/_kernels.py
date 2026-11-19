@@ -48,6 +48,33 @@ class Kernel(Protocol):
     ``lineax.MatrixLinearOperator`` Gram, say), which the global schemes
     materialise with ``as_matrix()``. Distances, metrics and length scales are
     the kernel's own business; the schemes only pass coordinates.
+
+    Kₖⱼ = k(x*ₖ, xⱼ) for the M targets x* and the N sources x.
+
+    Examples:
+        A plain function is a kernel:
+
+        >>> import einx
+        >>> import jax.numpy as jnp
+        >>> from functax.interp import Kernel
+        >>> def exponential(targets, sources):
+        ...     difference = einx.subtract("t d, s d -> t s d", targets, sources)
+        ...     distance = jnp.sqrt(einx.sum("t s [d]", difference**2))
+        ...     return jnp.exp(-distance)
+        >>> isinstance(exponential, Kernel)
+        True
+        >>> exponential(jnp.zeros((2, 2)), jnp.ones((3, 2))).shape
+        (2, 3)
+
+        A kernel may return a lineax operator, which the schemes materialise:
+
+        >>> import lineax as lx
+        >>> from functax._src.interp._kernels import kernel_matrix
+        >>> def flat(targets, sources):
+        ...     ones = jnp.ones((targets.shape[0], sources.shape[0]))
+        ...     return lx.MatrixLinearOperator(ones)
+        >>> kernel_matrix(flat, jnp.zeros((2, 1)), jnp.zeros((4, 1))).shape
+        (2, 4)
     """
 
     def __call__(
@@ -77,6 +104,22 @@ def kernel_matrix(
     Raises:
         ValidationError: If the kernel returns anything but an (M, N) array or
             operator.
+
+    Examples:
+        A radial kernel, then a kernel that returns the wrong shape:
+
+        >>> import jax.numpy as jnp
+        >>> from functax._src.interp._kernels import kernel_matrix
+        >>> from functax.interp import Polyharmonic
+        >>> targets, sources = jnp.zeros((2, 1)), jnp.ones((3, 1))
+        >>> kernel_matrix(Polyharmonic(3), targets, sources).shape
+        (2, 3)
+        >>> kernel_matrix(
+        ...     lambda targets, sources: jnp.ones(3), targets, sources
+        ... )  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        ValidationError: 'kernel' must return the (2, 3) cross-kernel
     """
     value = kernel(targets, sources)
     if isinstance(value, lx.AbstractLinearOperator):
@@ -99,6 +142,23 @@ class RadialKernel(eqx.Module):
     positive definite, the lowest polynomial degree its tail needs. Radial
     kernels are configuration, so they round-trip through strict JSON with
     `get_config` and `from_config` inside a scheme's config.
+
+    Examples:
+        A subclass gives only the profile, here the Gaussian φ(r) = exp(−r²):
+
+        >>> import jax.numpy as jnp
+        >>> from functax.interp import Kernel, RadialKernel
+        >>> class Gaussian(RadialKernel):
+        ...     def profile(self, distance):
+        ...         return jnp.exp(-(distance**2))
+        >>> gram = Gaussian()(jnp.zeros((2, 2)), jnp.zeros((3, 2)))
+        >>> gram.shape, bool(jnp.allclose(gram, 1.0))
+        ((2, 3), True)
+
+        It is a `Kernel`, and positive definite, so it needs no tail:
+
+        >>> isinstance(Gaussian(), Kernel), Gaussian().min_degree
+        (True, -1)
     """
 
     @abc.abstractmethod
@@ -146,7 +206,9 @@ class RadialKernel(eqx.Module):
 def _conditional_order(order: int) -> int:
     """m, the order of conditional positive definiteness of r^k (k odd) or r^k log r."""
     if order % 2 == 1:
+        # m = ⌈k/2⌉
         return (order + 1) // 2
+    # m = k/2 + 1
     return order // 2 + 1
 
 
@@ -196,17 +258,24 @@ class Polyharmonic(RadialKernel):
 
     def profile(self, distance: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
         """φ(r) = (−1)ᵐ rᵏ, or (−1)ᵐ rᵏ log r for even k."""
-        sign = (-1.0) ** _conditional_order(self.order)
+        conditional_order = _conditional_order(self.order)
+        # (−1)ᵐ
+        sign = (-1.0) ** conditional_order
+        # rᵏ
         power = distance**self.order
         if self.order % 2 == 1:
+            # φ(r) = (−1)ᵐ rᵏ
             return sign * power
         # the double where: log never sees r = 0, so the gradient stays finite
         positive = distance > 0
-        safe_distance = jnp.where(positive, distance, jnp.ones((), distance.dtype))
+        one = jnp.ones((), distance.dtype)
+        zero = jnp.zeros((), distance.dtype)
+        safe_distance = jnp.where(positive, distance, one)
+        # log r
         logarithm = jnp.log(safe_distance)
         # φ(r) = (−1)ᵐ rᵏ log r, and φ(0) = 0
         value = sign * safe_distance**self.order * logarithm
-        return jnp.where(positive, value, jnp.zeros((), distance.dtype))
+        return jnp.where(positive, value, zero)
 
 
 class Wendland(RadialKernel):

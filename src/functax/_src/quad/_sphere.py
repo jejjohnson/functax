@@ -12,9 +12,8 @@ from functax._src._backend import require_jax
 
 require_jax(__name__)
 
-from typing import Any
-
 import equinox as eqx
+from jaxtyping import Array, Float
 
 from functax._src.geometry._sphere import _check_radius
 from functax._src.geometry._sphere_grids import (
@@ -64,6 +63,16 @@ class SphereRule(Rule):
         >>> nodes, weights = rule
         >>> math.isclose(float(weights.sum()), 4 * math.pi)
         True
+
+        The nodes must be (Q, 3) unit vectors:
+
+        >>> import jax.numpy as jnp
+        >>> SphereRule(  # doctest: +IGNORE_EXCEPTION_DETAIL
+        ...     jnp.zeros((2, 2)), jnp.ones(2), radius=1.0, degree=0
+        ... )
+        Traceback (most recent call last):
+        ...
+        ValidationError: 'nodes' must be (Q, 3) unit vectors on the sphere
     """
 
     radius: float = eqx.field(static=True, kw_only=True)
@@ -171,6 +180,11 @@ def sphere_latlon(n_lat: int, n_lon: int, *, radius: float = 1.0) -> SphereRule:
         ((648, 3), 1)
         >>> math.isclose(float(rule.weights.sum()), 4 * math.pi)
         True
+
+        A single longitude band integrates only constants exactly:
+
+        >>> sphere_latlon(4, 1).degree
+        0
     """
     points, weights = latlon_grid(n_lat, n_lon)
     degree = min(1, n_lon - 1)
@@ -212,6 +226,13 @@ def sphere_healpix(nside: int, *, nest: bool = True, radius: float = 1.0) -> Sph
         ((48, 3), 1)
         >>> math.isclose(float(rule.weights.sum()), 4 * math.pi)
         True
+
+        The nested order needs N_side a power of two:
+
+        >>> sphere_healpix(3)  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        GeometryError: 'nside' must be a power of two with nest=True
     """
     points, weights = healpix_grid(nside, nest=nest)
     return _sphere_rule(points, weights, radius=radius, degree=1)
@@ -249,16 +270,32 @@ def sphere_fibonacci(n: int, *, radius: float = 1.0) -> SphereRule:
         ((100, 3), 0)
         >>> math.isclose(float(rule.weights.sum()), 36 * math.pi)
         True
+
+        The mean of z over the sphere, ∑_q w_q z_q / 4π, is near zero:
+
+        >>> import jax.numpy as jnp
+        >>> unit_rule = sphere_fibonacci(200)
+        >>> mean_z = unit_rule.weights @ unit_rule.nodes[:, 2] / (4 * math.pi)
+        >>> bool(jnp.abs(mean_z) < 1e-2)
+        True
     """
     points, weights = fibonacci_sphere(n)
     return _sphere_rule(points, weights, radius=radius, degree=0)
 
 
-def _sphere_rule(points: Any, weights: Any, *, radius: Any, degree: int) -> SphereRule:
+def _sphere_rule(
+    points: Float[Array, "node 3"],
+    weights: Float[Array, " node"],
+    *,
+    radius: float,
+    degree: int,
+) -> SphereRule:
     """A `SphereRule` with the unit-sphere weights scaled by a²."""
     _check_radius(radius)
     # a static field, so a concrete Python float
     radius = float(radius)
+    # a²
+    squared_radius = radius**2
     # w_q a², the area element of a sphere of radius a
-    scaled = weights * radius**2
+    scaled = weights * squared_radius
     return SphereRule(points, scaled, radius=radius, degree=int(degree))

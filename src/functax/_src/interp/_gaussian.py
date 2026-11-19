@@ -91,6 +91,7 @@ class GaussianPlan(Plan):
         Returns:
             The posterior variance at each target.
         """
+        # diag Σ*
         variance = self.posterior.variance()
         nan = jnp.full((), jnp.nan, variance.dtype)
         return jnp.where(self.valid, variance, nan)
@@ -119,8 +120,11 @@ class GaussianPlan(Plan):
             One draw per leading batch entry, with the targets last;
             ``fill_value`` at invalid rows.
         """
+        # 𝔼[f ∣ y] = H 𝒮(y)
         mean = self(data)
-        noise = self.posterior.sample(mean.shape[:-1], key=key)
+        # ε ~ 𝒩(0, Σ*), one draw per field
+        batch_shape = mean.shape[:-1]
+        noise = self.posterior.sample(batch_shape, key=key)
         # f = 𝔼[f ∣ y] + ε, ε ~ 𝒩(0, Σ*)
         draw = mean + noise
         return einx.where(

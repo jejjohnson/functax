@@ -70,8 +70,12 @@ def _cap_quadrature(
     nodes, weights = gauss_legendre(num_quadrature)
     nodes = jnp.asarray(nodes)
     weights = jnp.asarray(weights)
-    z_min = jnp.cos(jnp.asarray(cap_radius))
+    radius = jnp.asarray(cap_radius)
+    # z_min = cos Θ
+    z_min = jnp.cos(radius)
+    # z = ½(1 − cos Θ) s + ½(1 + cos Θ), the nodes s mapped onto [cos Θ, 1]
     z = 0.5 * (1.0 - z_min) * nodes + 0.5 * (1.0 + z_min)
+    # w = ½(1 − cos Θ) w_s
     w = 0.5 * (1.0 - z_min) * weights
     return z, w
 
@@ -92,14 +96,20 @@ def _slepian_block(
         for i, (_, order) in enumerate(associated_legendre_indices(l_max))
         if order == m_abs
     ]
-    p_bar = associated_legendre(z, l_max)[:, jnp.asarray(columns)]
+    legendre = associated_legendre(z, l_max)
+    p_bar = legendre[:, jnp.asarray(columns)]
     factor = (math.sqrt(2.0) if m_abs > 0 else 1.0) / math.sqrt(2.0 * math.pi)
-    rows = factor * einx.id("node row -> row node", p_bar)
+    transposed = einx.id("node row -> row node", p_bar)
+    # the latitude parts of Y_l^m
+    rows = factor * transposed
+    # w_q P_l(z_q)
     weighted = einx.multiply("row node, node", rows, w)
     # the azimuthal integral: 2π for m = 0, π otherwise
     phi_factor = 2.0 * jnp.pi if m_abs == 0 else jnp.pi
-    # ∫ P_b P_c dz by quadrature
-    return phi_factor * einx.dot("row node, col node -> row col", weighted, rows)
+    # ∫ P_l P_l′ dz ≈ ∑_q w_q P_l(z_q) P_l′(z_q)
+    latitude_integral = einx.dot("row node, col node -> row col", weighted, rows)
+    # D^m_ll′ = (∫ dφ) ∫ P_l P_l′ dz
+    return phi_factor * latitude_integral
 
 
 def shannon_number(l_max: int, area: float | Float[Array, ""]) -> Float[Array, ""]:
@@ -117,14 +127,21 @@ def shannon_number(l_max: int, area: float | Float[Array, ""]) -> Float[Array, "
 
     Examples:
         >>> import math
+        >>> import jax.numpy as jnp
         >>> from functax.basis.slepian import shannon_number
-        >>> float(shannon_number(3, 4.0 * math.pi))
-        16.0
-        >>> float(shannon_number(3, math.pi))
-        4.0
+        >>> # the whole sphere holds all (l_max + 1)² modes
+        >>> bool(jnp.allclose(shannon_number(3, 4.0 * math.pi), 16.0))
+        True
+        >>> bool(jnp.allclose(shannon_number(3, math.pi), 4.0))
+        True
+        >>> # a traced area works too
+        >>> bool(jnp.allclose(shannon_number(0, jnp.asarray(2.0 * math.pi)), 0.5))
+        True
     """
     degree = _check_degree(l_max, "l_max")
-    return ((degree + 1) ** 2) * jnp.asarray(area) / (4.0 * jnp.pi)
+    area_array = jnp.asarray(area)
+    # N = (l_max + 1)² A / (4π)
+    return ((degree + 1) ** 2) * area_array / (4.0 * jnp.pi)
 
 
 def slepian_concentration_matrix(
@@ -134,6 +151,14 @@ def slepian_concentration_matrix(
     num_quadrature: int | None = None,
 ) -> Float[Array, "row col"]:
     """The concentration matrix D_ij = ∫_cap Y_i Y_j dΩ of a north-pole cap.
+
+    The cap is axisymmetric, so D is block-diagonal in the order m.
+
+    Algorithm:
+        1. Lay a Gauss–Legendre rule on z = cos θ over [cos Θ, 1].
+        2. For each order m, integrate the products of the P̄_l^m by
+           quadrature and scale by the azimuthal integral.
+        3. Scatter each block into the rows and columns of its Y_lm.
 
     Args:
         l_max: The highest spherical-harmonic degree.
@@ -157,6 +182,12 @@ def slepian_concentration_matrix(
         >>> whole = slepian_concentration_matrix(2, jnp.pi)
         >>> bool(jnp.allclose(whole, jnp.eye(9), atol=1e-12))
         True
+        >>> # its trace is the Shannon number of the cap, area 2π(1 − cos Θ)
+        >>> from functax.basis.slepian import shannon_number
+        >>> matrix = slepian_concentration_matrix(3, 0.5)
+        >>> area = 2 * jnp.pi * (1 - jnp.cos(0.5))
+        >>> bool(jnp.allclose(jnp.trace(matrix), shannon_number(3, area)))
+        True
     """
     degree = _check_degree(l_max, "l_max")
     _check_cap_radius(cap_radius)
@@ -169,7 +200,8 @@ def slepian_concentration_matrix(
     for m in range(-degree, degree + 1):
         block = _slepian_block(degree, cap_radius, m, n_quad)
         indices = jnp.asarray([_sh_index(ell, m) for ell in range(abs(m), degree + 1)])
-        matrix = matrix.at[jnp.ix_(indices, indices)].set(block)
+        rows_and_cols = jnp.ix_(indices, indices)
+        matrix = matrix.at[rows_and_cols].set(block)
     return matrix
 
 
@@ -180,6 +212,13 @@ def slepian_cap_eigh_per_m(
     num_quadrature: int | None = None,
 ) -> tuple[Float[Array, " feature"], Float[Array, "harmonic feature"]]:
     """The cap Slepian eigenproblem D g = λ g, solved one azimuthal block at a time.
+
+    Algorithm:
+        1. For each order m, build the block D^m and solve D^m g = λ g.
+        2. Sort each block's pairs by decreasing λ, and scatter its
+           eigenvectors into the rows of its Y_lm.
+        3. Join the blocks, sort every pair by decreasing λ, and clip λ to
+           [0, 1].
 
     Args:
         l_max: The highest spherical-harmonic degree.
@@ -203,6 +242,11 @@ def slepian_cap_eigh_per_m(
         ((4,), (4, 4))
         >>> bool((eigenvalues[:-1] >= eigenvalues[1:]).all())
         True
+        >>> # the whole sphere concentrates every mode fully
+        >>> import jax.numpy as jnp
+        >>> whole, _ = slepian_cap_eigh_per_m(1, jnp.pi)
+        >>> bool(jnp.allclose(whole, 1.0))
+        True
     """
     degree = _check_degree(l_max, "l_max")
     _check_cap_radius(cap_radius)
@@ -210,10 +254,16 @@ def slepian_cap_eigh_per_m(
     n_harmonics = (degree + 1) ** 2
     eigenvalue_blocks = []
     coeff_blocks = []
+    # the eigen-solves and sorts run in this order on purpose: in float32 the
+    # first concentrations round to exactly 1.0, so their ties keep the order
+    # these sorts leave (see `slepian_cap_basis`)
     for m in range(-degree, degree + 1):
         block = _slepian_block(degree, cap_radius, m, n_quad)
+        # D^m g = λ g
         values, vectors = jnp.linalg.eigh(block)
-        order = jnp.argsort(values)[::-1]
+        # descending λ within the block
+        ascending = jnp.argsort(values)
+        order = ascending[::-1]
         values = values[order]
         vectors = vectors[:, order]
         indices = jnp.asarray([_sh_index(ell, m) for ell in range(abs(m), degree + 1)])
@@ -224,8 +274,13 @@ def slepian_cap_eigh_per_m(
     # the blocks have different sizes, so they are joined as lists
     values = jnp.hstack(eigenvalue_blocks)
     coeffs = jnp.hstack(coeff_blocks)
-    order = jnp.argsort(values)[::-1]
-    return jnp.clip(values[order], 0.0, 1.0), coeffs[:, order]
+    # descending λ over every block
+    ascending = jnp.argsort(values)
+    order = ascending[::-1]
+    sorted_values = values[order]
+    # λ ∈ [0, 1], clipped against round-off
+    concentrations = jnp.clip(sorted_values, 0.0, 1.0)
+    return concentrations, coeffs[:, order]
 
 
 def _centered_coordinates(
@@ -244,9 +299,9 @@ def _select_modes(
 ) -> tuple[Float[Array, " kept"], Float[Array, "harmonic kept"]]:
     """The modes (by decreasing concentration) above the threshold, then the first n."""
     if eig_threshold is not None:
-        keep = jnp.nonzero(values > eig_threshold, size=values.shape[0], fill_value=-1)[
-            0
-        ]
+        above = values > eig_threshold
+        # padded to a static size with −1, then trimmed on the host
+        (keep,) = jnp.nonzero(above, size=values.shape[0], fill_value=-1)
         keep = keep[keep >= 0]
         if n_modes is not None and int(keep.shape[0]) < n_modes:
             msg = (
@@ -284,6 +339,8 @@ class SlepianCapBasis(eqx.Module):
         >>> basis = slepian_cap_basis(3, 0.35, n_modes=2, eig_threshold=0.0)
         >>> basis.evaluate(jnp.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])).shape
         (2, 2)
+        >>> basis.coeffs.shape, basis.eigenvalues.shape
+        ((16, 2), (2,))
     """
 
     l_max: int = eqx.field(static=True)
@@ -340,6 +397,14 @@ class SlepianCapBasis(eqx.Module):
             >>> xyz = jnp.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
             >>> basis.evaluate(xyz).shape
             (2, 2)
+
+            Moving the cap moves the functions with it:
+
+            >>> moved = basis.rotate_to(jnp.array([0.0, 0.0]))
+            >>> at_pole = basis.evaluate(jnp.array([[0.0, 0.0, 1.0]]))
+            >>> at_new_centre = moved.evaluate(jnp.array([[1.0, 0.0, 0.0]]))
+            >>> bool(jnp.allclose(at_pole, at_new_centre, atol=1e-6))
+            True
         """
         centered = self.centred_coordinates(unit_xyz)
         harmonics = real_spherical_harmonics(centered, self.l_max)
@@ -379,6 +444,13 @@ def slepian_cap_basis(
 ) -> SlepianCapBasis:
     """A Slepian basis for an axisymmetric spherical cap.
 
+    Algorithm:
+        1. Solve the cap eigenproblem block by block with
+           `slepian_cap_eigh_per_m`.
+        2. Keep the modes above ``eig_threshold``, then the first
+           ``n_modes``.
+        3. Store the cap centre, the north pole by default.
+
     Args:
         l_max: The highest spherical-harmonic degree.
         cap_radius: Θ, the cap half-angle in radians, in (0, π].
@@ -411,6 +483,13 @@ def slepian_cap_basis(
         >>> # by default every one of the (l_max + 1)² modes is kept
         >>> slepian_cap_basis(2, 0.5).num_modes
         9
+        >>> # a threshold that keeps too few modes is rejected
+        >>> slepian_cap_basis(
+        ...     2, 0.5, n_modes=9, eig_threshold=0.5
+        ... )  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        ValidationError: 'eig_threshold'=0.5 keeps only 2 modes
     """
     if n_modes is not None and n_modes < 1:
         msg = f"'n_modes' must be at least 1, got {n_modes!r}"

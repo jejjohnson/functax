@@ -25,7 +25,7 @@ import einx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array, Complex, Float
+from jaxtyping import Array, Complex, Float, Int
 
 from functax.exceptions import ValidationError
 
@@ -48,7 +48,9 @@ def _corner_slices(n_modes: tuple[int, ...]) -> list[tuple[slice, ...]]:
     return [(*combo, last) for combo in combos]
 
 
-def _corner_freqs(n_modes: tuple[int, ...]) -> list[tuple[np.ndarray, ...]]:
+def _corner_freqs(
+    n_modes: tuple[int, ...],
+) -> list[tuple[Int[np.ndarray, " _mode"], ...]]:
     """The integer wavenumbers of each corner block, in `_corner_slices` order.
 
     Corner c holds one integer array per axis: 0, …, m − 1 or −m, …, −1 on an
@@ -75,7 +77,7 @@ def _validate_modes(n_modes: tuple[int, ...]) -> tuple[int, ...]:
     return tuple(int(m) for m in n_modes)
 
 
-def _validate_points(xi: jax.Array, n_modes: tuple[int, ...]) -> None:
+def _validate_points(xi: Float[Array, "*shape"], n_modes: tuple[int, ...]) -> None:
     if xi.ndim != 2 or xi.shape[-1] != len(n_modes):
         msg = (
             f"'xi' must have shape (N, {len(n_modes)}) to match n_modes={n_modes}, "
@@ -86,7 +88,7 @@ def _validate_points(xi: jax.Array, n_modes: tuple[int, ...]) -> None:
 
 def _corner_phases(
     xi: Float[Array, "obs dim"], n_modes: tuple[int, ...]
-) -> list[jax.Array]:
+) -> list[Float[Array, "obs ..."]]:
     """The phases 2π k · ξ_n of every point against each corner's modes.
 
     k · ξ is reduced to [−½, ½] before the 2π scaling, which keeps float32
@@ -96,10 +98,19 @@ def _corner_phases(
     two_pi = jnp.asarray(2.0 * math.pi, dtype=xi.dtype)
     phases = []
     for frequencies in _corner_freqs(n_modes):
-        table = np.stack(np.meshgrid(*frequencies, indexing="ij"), axis=-1)
-        k = jnp.asarray(table, dtype=xi.dtype)
-        theta = einx.dot(f"obs dim, {modes} dim -> obs {modes}", xi, k)
-        phases.append(two_pi * (theta - jax.lax.stop_gradient(jnp.round(theta))))
+        grids = np.meshgrid(*frequencies, indexing="ij")
+        # one d-vector k per mode; np.stack because d varies with n_modes
+        table = np.stack(grids, axis=-1)
+        wavenumbers = jnp.asarray(table, dtype=xi.dtype)
+        # k · ξ_n, in turns
+        turns = einx.dot(f"obs dim, {modes} dim -> obs {modes}", xi, wavenumbers)
+        # the nearest integer is held constant, so the gradient is that of k · ξ_n
+        rounded = jnp.round(turns)
+        nearest = jax.lax.stop_gradient(rounded)
+        # k · ξ_n − round(k · ξ_n), in [−½, ½]
+        reduced = turns - nearest
+        # θ = 2π (k · ξ_n − round(k · ξ_n))
+        phases.append(two_pi * reduced)
     return phases
 
 
@@ -123,6 +134,13 @@ def nonuniform_rfft(
     phase table per call, with |K| = 2^{d−1} ∏_a m_a; for very large clouds a
     fast NUFFT (``jax-finufft``) computes the same sums and stays a user-side
     substitute, not a dependency.
+
+    Algorithm:
+        1. Weight each value by its quadrature weight, w_n u_n.
+        2. For each corner block, form the phases θ_nk = 2π k · ξ_n, with k · ξ_n
+           reduced to [−½, ½] first.
+        3. Contract the weighted values with cos θ and sin θ over the points:
+           ĉ_k = ∑_n w_n u_n cos θ_nk − i ∑_n w_n u_n sin θ_nk.
 
     Args:
         u: The field values, one row per channel.
@@ -152,6 +170,17 @@ def nonuniform_rfft(
         >>> blocks = nonuniform_rfft(u, xi, jnp.full((500,), 1 / 500), (4, 4))
         >>> len(blocks), blocks[0].shape
         (2, (1, 4, 4))
+
+        In one dimension there is a single block, and on a uniform grid with
+        w_n = 1/S it is the retained part of ``rfft(u) / S``:
+
+        >>> nodes = jnp.arange(8.0) / 8
+        >>> u = jnp.cos(2 * jnp.pi * nodes)[None]
+        >>> (block,) = nonuniform_rfft(
+        ...     u, nodes[:, None], jnp.full((8,), 1 / 8), (3,)
+        ... )
+        >>> bool(jnp.allclose(block, jnp.fft.rfft(u)[:, :3] / 8, atol=1e-12))
+        True
     """
     n_modes = _validate_modes(n_modes)
     _validate_points(xi, n_modes)
@@ -163,17 +192,20 @@ def nonuniform_rfft(
         msg = f"'weights' must have shape ({n},) to match xi, got {weights.shape}"
         raise ValidationError(msg)
     modes = _modes_spec(len(n_modes))
+    contraction = f"channel obs, obs {modes} -> channel {modes}"
+    # w_n u_n
     weighted = einx.multiply("channel obs, obs", u, weights)
     blocks = []
     for phase in _corner_phases(xi, n_modes):
-        # ∑_n w_n u_n (cos − i sin)(2π k · ξ_n)
-        re = einx.dot(
-            f"channel obs, obs {modes} -> channel {modes}", weighted, jnp.cos(phase)
-        )
-        im = einx.dot(
-            f"channel obs, obs {modes} -> channel {modes}", weighted, jnp.sin(phase)
-        )
-        blocks.append(jax.lax.complex(re, -im))
+        cosine = jnp.cos(phase)
+        sine = jnp.sin(phase)
+        # Re ĉ_k = ∑_n w_n u_n cos θ_nk
+        real_part = einx.dot(contraction, weighted, cosine)
+        # ∑_n w_n u_n sin θ_nk
+        sine_sum = einx.dot(contraction, weighted, sine)
+        # Im ĉ_k = −∑_n w_n u_n sin θ_nk
+        imag_part = -sine_sum
+        blocks.append(jax.lax.complex(real_part, imag_part))
     return blocks
 
 
@@ -192,6 +224,13 @@ def nonuniform_irfft(
     modes stay below half of any grid. On grid nodes ξ = j/s this equals
     ``irfftn`` of the corners scattered into a spectrum, times S. The cost is
     that of `nonuniform_rfft`.
+
+    Algorithm:
+        1. Weight the real and imaginary parts of each block by μ_k.
+        2. For each corner block, form the phases θ_nk = 2π k · ξ_n as
+           `nonuniform_rfft` does.
+        3. Sum Re[ĉ_k exp(iθ_nk)] = Re ĉ_k cos θ_nk − Im ĉ_k sin θ_nk over the
+           modes of every block.
 
     Args:
         coeffs: The 2^{d−1} corner blocks, each (C, *n_modes), as
@@ -221,6 +260,12 @@ def nonuniform_irfft(
         >>> exact = jnp.cos(2 * jnp.pi * (query[:, 0] + 2 * query[:, 1]))
         >>> values.shape, bool(jnp.allclose(values[0], exact, atol=1e-12))
         ((1, 300), True)
+
+        A zero spectrum synthesises zero everywhere:
+
+        >>> zero = [jnp.zeros((2, 4, 4), dtype=jnp.complex128)] * 2
+        >>> bool(jnp.allclose(nonuniform_irfft(zero, query, (4, 4)), 0.0))
+        True
     """
     n_modes = _validate_modes(n_modes)
     _validate_points(xi, n_modes)
@@ -239,20 +284,27 @@ def nonuniform_irfft(
             raise ValidationError(msg)
     modes = _modes_spec(d)
     last = f"m{d - 1}"
+    weighting = f"channel {modes}, {last}"
+    contraction = f"channel {modes}, obs {modes} -> channel obs"
     # μ_k = 1 on the k_d = 0 plane, 2 elsewhere
     multiplicity = np.full(n_modes[-1], 2.0)
     multiplicity[0] = 1.0
-    total = jnp.zeros((coeffs[0].shape[0], xi.shape[0]), dtype=coeffs[0].real.dtype)
+    n_channels = coeffs[0].shape[0]
+    real_dtype = coeffs[0].real.dtype
+    total = jnp.zeros((n_channels, xi.shape[0]), dtype=real_dtype)
     for block, phase in zip(coeffs, _corner_phases(xi, n_modes), strict=True):
         mu = jnp.asarray(multiplicity, dtype=block.real.dtype)
-        re = einx.multiply(f"channel {modes}, {last}", block.real, mu)
-        im = einx.multiply(f"channel {modes}, {last}", block.imag, mu)
-        # Re[(a + ib)(cos + i sin)] = a cos − b sin
-        part = einx.dot(
-            f"channel {modes}, obs {modes} -> channel obs", re, jnp.cos(phase)
-        )
-        part = part - einx.dot(
-            f"channel {modes}, obs {modes} -> channel obs", im, jnp.sin(phase)
-        )
+        # μ_k Re ĉ_k
+        weighted_real = einx.multiply(weighting, block.real, mu)
+        # μ_k Im ĉ_k
+        weighted_imag = einx.multiply(weighting, block.imag, mu)
+        cosine = jnp.cos(phase)
+        sine = jnp.sin(phase)
+        # ∑_k μ_k Re ĉ_k cos θ_nk
+        cosine_sum = einx.dot(contraction, weighted_real, cosine)
+        # ∑_k μ_k Im ĉ_k sin θ_nk
+        sine_sum = einx.dot(contraction, weighted_imag, sine)
+        # Re[(a + ib)(cos θ + i sin θ)] = a cos θ − b sin θ
+        part = cosine_sum - sine_sum
         total = total + part
     return total

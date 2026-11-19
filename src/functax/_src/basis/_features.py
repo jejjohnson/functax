@@ -66,15 +66,17 @@ def rff_forward(
         >>> bool(jnp.allclose(features @ features, 1.0))
         True
     """
+    # xᵀW
+    inner = einx.dot("dim, dim feature -> feature", x, W)
     # z = xᵀW / ℓ
-    projection = einx.dot("dim, dim feature -> feature", x, W) / lengthscale
+    projection = inner / lengthscale
+    # √(1/F)
     scale = jnp.sqrt(1.0 / n_features)
+    cosine = jnp.cos(projection)
+    sine = jnp.sin(projection)
+    # [cos z, sin z]
+    features = einx.id("feature, feature -> (feature + feature)", cosine, sine)
     # φ = √(1/F) [cos z, sin z]
-    features = einx.id(
-        "feature, feature -> (feature + feature)",
-        jnp.cos(projection),
-        jnp.sin(projection),
-    )
     return scale * features
 
 
@@ -112,10 +114,15 @@ def rff_cosine_forward(
         >>> bool(jnp.allclose(features, jnp.sqrt(2.0 / 3.0)))
         True
     """
+    # xᵀW
+    inner = einx.dot("dim, dim feature -> feature", x, W)
     # z = xᵀW / ℓ + b
-    projection = einx.dot("dim, dim feature -> feature", x, W) / lengthscale + b
+    projection = inner / lengthscale + b
+    # √(2/F)
+    scale = jnp.sqrt(2.0 / n_features)
+    cosine = jnp.cos(projection)
     # φ = √(2/F) cos z
-    return jnp.sqrt(2.0 / n_features) * jnp.cos(projection)
+    return scale * cosine
 
 
 def fourier_features(
@@ -149,8 +156,12 @@ def fourier_features(
         >>> fourier_features(jnp.linspace(0.0, 1.0, 5), max_degree=3).shape
         (5, 6)
         >>> features = fourier_features(jnp.array([0.0]), max_degree=2)
-        >>> features.tolist()
-        [[1.0, 1.0, 0.0, 0.0]]
+        >>> bool(jnp.allclose(features, jnp.array([[1.0, 1.0, 0.0, 0.0]])))
+        True
+        >>> # rescaling divides the pair of degree d by d + 1
+        >>> rescaled = fourier_features(jnp.array([0.0]), 2, rescale=True)
+        >>> bool(jnp.allclose(rescaled, jnp.array([[1.0, 0.5, 0.0, 0.0]])))
+        True
     """
     if max_degree < 0:
         msg = f"'max_degree' must be non-negative, got {max_degree}"
@@ -165,14 +176,17 @@ def fourier_features(
     frequencies = 2.0 * jnp.pi * 2.0**degrees
     # z = x ω_d
     phase = einx.multiply("sample, degree -> sample degree", x, frequencies)
+    cosine = jnp.cos(phase)
+    sine = jnp.sin(phase)
+    # [cos z_d, sin z_d]
     features = einx.id(
-        "sample degree, sample degree -> sample (degree + degree)",
-        jnp.cos(phase),
-        jnp.sin(phase),
+        "sample degree, sample degree -> sample (degree + degree)", cosine, sine
     )
     if rescale:
+        # d + 1, once for the cosines and once for the sines
         weights = degrees + 1
         divisor = einx.id("degree, degree -> (degree + degree)", weights, weights)
+        # φ_d / (d + 1)
         features = einx.divide("sample feature, feature", features, divisor)
     return features
 
@@ -257,6 +271,10 @@ def seasonal_features(
         (4, 6)
         >>> seasonal_features(x, [7.0], [0]).shape
         (4, 0)
+        >>> # at x = 0 every cosine is 1 and every sine 0
+        >>> features = seasonal_features(jnp.zeros(1), [7.0], [2])
+        >>> bool(jnp.allclose(features, jnp.array([[1.0, 1.0, 0.0, 0.0]])))
+        True
     """
     x = promote_integers(x)
     _, frequency_list = seasonal_frequencies(periods, harmonics)
@@ -265,23 +283,28 @@ def seasonal_features(
     # the frequencies in the dtype of x: a float64 time (seconds since an
     # epoch) keeps a float64 phase rather than a float32-rounded 1/τ
     frequencies = jnp.asarray(frequency_list, dtype=x.dtype)
+    # ω = 2π f
+    angular = 2.0 * jnp.pi * frequencies
     # z = 2π f x
-    phase = einx.multiply(
-        "sample, frequency -> sample frequency", x, 2.0 * jnp.pi * frequencies
-    )
+    phase = einx.multiply("sample, frequency -> sample frequency", x, angular)
+    cosine = jnp.cos(phase)
+    sine = jnp.sin(phase)
+    # [cos z, sin z]
     features = einx.id(
         "sample frequency, sample frequency -> sample (frequency + frequency)",
-        jnp.cos(phase),
-        jnp.sin(phase),
+        cosine,
+        sine,
     )
     if rescale:
         within: list[float] = []
         for count in harmonics:
             within.extend(range(1, int(count) + 1))
+        # h, once for the cosines and once for the sines
         weights = jnp.asarray(within, dtype=x.dtype)
         divisor = einx.id(
             "frequency, frequency -> (frequency + frequency)", weights, weights
         )
+        # φ_p,h / h
         features = einx.divide("sample feature, feature", features, divisor)
     return features
 
@@ -315,11 +338,20 @@ def gaussian_window_features(
         >>> window = gaussian_window_features(
         ...     jnp.array([5.0]), jnp.array([5.0]), jnp.array([2.0])
         ... )
-        >>> window.tolist()
-        [[1.0]]
+        >>> bool(jnp.allclose(window, 1.0))
+        True
+        >>> # one width from the centre the window is exp(−½)
+        >>> window = gaussian_window_features(
+        ...     jnp.array([7.0]), jnp.array([5.0]), jnp.array([2.0])
+        ... )
+        >>> bool(jnp.allclose(window, jnp.exp(-0.5)))
+        True
     """
-    # z = (t − τ_a) / T_a
+    # t − τ_a
     offset = einx.subtract("sample, feature -> sample feature", t, centers)
+    # z = (t − τ_a) / T_a
     scaled = einx.divide("sample feature, feature", offset, widths)
+    # −z²/2
+    exponent = -0.5 * scaled**2
     # χ = exp(−z²/2)
-    return jnp.exp(-0.5 * scaled**2)
+    return jnp.exp(exponent)

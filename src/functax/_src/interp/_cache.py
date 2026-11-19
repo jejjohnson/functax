@@ -21,6 +21,7 @@ from typing import Any
 import equinox as eqx
 import jax
 import numpy as np
+from jaxtyping import Shaped
 
 from functax import __version__
 from functax._src.interp._config import encode_json_value
@@ -34,7 +35,9 @@ __all__ = [
 ]
 
 
-def _describe(value: Any, name: str, arrays: list[np.ndarray]) -> Any:
+def _describe(
+    value: Any, name: str, arrays: list[Shaped[np.ndarray, "*_shape"]]
+) -> Any:
     """``value`` as strict JSON, with each array replaced by its dtype and shape.
 
     The array itself is appended to ``arrays`` (C-contiguous, little-endian),
@@ -91,6 +94,12 @@ def plan_key(
     a dtype, a shape, a static field (period, epoch, metric) or the functax
     version gives another. Runs on the host.
 
+    Algorithm:
+        1. Describe the version, the configs and both geometries as strict
+           JSON, replacing each array by its dtype and shape and keeping its
+           bytes aside.
+        2. Hash the sorted-key JSON, a zero byte, then the arrays' bytes.
+
     Args:
         scheme: The scheme the plan is built with.
         source: The source geometry (an `Axis`, a grid).
@@ -134,7 +143,7 @@ def plan_key(
                 f"{type(geometry).__name__}"
             )
             raise ValidationError(msg)
-    arrays: list[np.ndarray] = []
+    arrays: list[Shaped[np.ndarray, "*_shape"]] = []
     description = {
         "functax": __version__,
         "scheme": scheme.get_config(),

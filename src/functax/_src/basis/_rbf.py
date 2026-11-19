@@ -58,10 +58,22 @@ def wendland_c2(r: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
     Examples:
         >>> import jax.numpy as jnp
         >>> from functax.basis.local import wendland_c2
-        >>> wendland_c2(jnp.array([0.0, 1.5])).tolist()
-        [1.0, 0.0]
+        >>> values = wendland_c2(jnp.array([0.0, 1.5]))
+        >>> bool(jnp.allclose(values, jnp.array([1.0, 0.0])))
+        True
+        >>> # (1 − ½)⁴ (4 · ½ + 1) = 3/16
+        >>> bool(jnp.allclose(wendland_c2(jnp.array(0.5)), 3.0 / 16.0))
+        True
     """
-    return jnp.where(r < 1.0, (1.0 - r) ** 4 * (4.0 * r + 1.0), 0.0)
+    inside = r < 1.0
+    # (1 − r)⁴
+    decay = (1.0 - r) ** 4
+    # 4r + 1
+    polynomial = 4.0 * r + 1.0
+    # K(r) = (1 − r)⁴ (4r + 1)
+    kernel = decay * polynomial
+    # the positive part: K(r) = 0 for r ≥ 1
+    return jnp.where(inside, kernel, 0.0)
 
 
 def wendland_c4(r: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
@@ -82,12 +94,22 @@ def wendland_c4(r: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
     Examples:
         >>> import jax.numpy as jnp
         >>> from functax.basis.local import wendland_c4
-        >>> wendland_c4(jnp.array([0.0, 1.5])).tolist()
-        [1.0, 0.0]
+        >>> values = wendland_c4(jnp.array([0.0, 1.5]))
+        >>> bool(jnp.allclose(values, jnp.array([1.0, 0.0])))
+        True
+        >>> # (1 − ½)⁶ (35/4 + 9 + 3)/3 = 83/768
+        >>> bool(jnp.allclose(wendland_c4(jnp.array(0.5)), 83.0 / 768.0))
+        True
     """
-    return jnp.where(
-        r < 1.0, (1.0 - r) ** 6 * (35.0 * r**2 + 18.0 * r + 3.0) / 3.0, 0.0
-    )
+    inside = r < 1.0
+    # (1 − r)⁶
+    decay = (1.0 - r) ** 6
+    # 35r² + 18r + 3
+    polynomial = 35.0 * r**2 + 18.0 * r + 3.0
+    # K(r) = (1 − r)⁶ (35r² + 18r + 3)/3
+    kernel = decay * polynomial / 3.0
+    # the positive part: K(r) = 0 for r ≥ 1
+    return jnp.where(inside, kernel, 0.0)
 
 
 def rbf_basis(
@@ -142,17 +164,24 @@ def rbf_basis(
         True
     """
     _check_kernel(kernel)
+    # x − c_a
     difference = einx.subtract("obs dim, feature dim -> obs feature dim", x, centers)
     # ‖x − c_a‖²
     squared = einx.sum("obs feature [dim]", difference**2)
     if kernel == "gaussian":
-        # exp(−‖x − c‖²/(2ℓ²)) from the squared distance, so the gradient is
-        # clean at r = 0 with no square root
-        scaled_sq = einx.divide("obs feature, feature", squared, widths**2)
-        return jnp.exp(-0.5 * scaled_sq)
+        # the Gaussian works from the squared distance, so the gradient is clean
+        # at r = 0 with no square root
+        squared_widths = widths**2
+        # ‖x − c_a‖²/ℓ_a²
+        scaled_sq = einx.divide("obs feature, feature", squared, squared_widths)
+        # φ_a = exp(−‖x − c_a‖²/(2ℓ_a²))
+        exponent = -0.5 * scaled_sq
+        return jnp.exp(exponent)
     # r = ‖x − c‖, with a zero gradient at r = 0 rather than NaN
     distance = _safe_norm(squared)
+    # r/ℓ_a
     scaled = einx.divide("obs feature, feature", distance, widths)
+    # φ_a = K(‖x − c_a‖/ℓ_a)
     return wendland_c2(scaled) if kernel == "wendland_c2" else wendland_c4(scaled)
 
 
@@ -199,9 +228,19 @@ def spherical_rbf_basis(
         True
     """
     _check_kernel(kernel)
+    # d(x, c_a)
     distance = geodesic_distance(unit_xyz, centers)
     if kernel == "gaussian":
-        scaled_sq = einx.divide("obs feature, feature", distance**2, widths**2)
-        return jnp.exp(-0.5 * scaled_sq)
+        squared_distance = distance**2
+        squared_widths = widths**2
+        # d²/ℓ_a²
+        scaled_sq = einx.divide(
+            "obs feature, feature", squared_distance, squared_widths
+        )
+        # φ_a = exp(−d(x, c_a)²/(2ℓ_a²))
+        exponent = -0.5 * scaled_sq
+        return jnp.exp(exponent)
+    # d/ℓ_a
     scaled = einx.divide("obs feature, feature", distance, widths)
+    # φ_a = K(d(x, c_a)/ℓ_a)
     return wendland_c2(scaled) if kernel == "wendland_c2" else wendland_c4(scaled)

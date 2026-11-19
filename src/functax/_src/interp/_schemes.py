@@ -71,6 +71,26 @@ class Scheme(eqx.Module):
     `from_config` finds it by class name among the loaded subclasses. A
     nested `RadialKernel` or lineax solver (an `RBF`'s kernel and solver) is
     found the same way among its own kind.
+
+    Every plan a scheme builds reads f̂(X*) = H 𝒮(y), with the fit 𝒮 and the
+    read-out H fixed by the scheme, the source and the target.
+
+    Examples:
+        Every concrete scheme is a `Scheme`, and plans the same way:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis, Points
+        >>> from functax.interp import Linear, Scheme
+        >>> isinstance(Linear(), Scheme)
+        True
+        >>> plan = Linear().plan(Axis(jnp.arange(3.0)), Points(jnp.array([[0.5]])))
+        >>> bool(jnp.allclose(plan(jnp.array([0.0, 2.0, 4.0])), 1.0))
+        True
+
+        A scheme comes back from its config by class name:
+
+        >>> Scheme.from_config({"class": "Nearest"})
+        Nearest()
     """
 
     @abc.abstractmethod
@@ -133,7 +153,32 @@ class Scheme(eqx.Module):
 
 
 class LocalScheme(Scheme):
-    """A scheme with one local basis per axis and the identity fit."""
+    """A scheme with one local basis per axis and the identity fit.
+
+    H = ⊗_d B_d, the tensor product of the one-axis bases B_d of `bases`,
+    read after the prefilter that a B-spline basis needs (the identity fit
+    otherwise).
+
+    Examples:
+        A new local scheme supplies only its bases:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis, Points, RectilinearGrid
+        >>> from functax.interp import LinearBasis, LocalScheme
+        >>> class EveryAxisLinear(LocalScheme):
+        ...     def bases(self, n_axes):
+        ...         return (LinearBasis(),) * n_axes
+        >>> grid = RectilinearGrid((Axis(jnp.arange(2.0)), Axis(jnp.arange(3.0))))
+        >>> plan = EveryAxisLinear().plan(grid, Points(jnp.array([[0.5, 0.5]])))
+        >>> bool(jnp.allclose(plan(jnp.arange(6.0)), 2.0))
+        True
+
+        Its `fit` gives an interpolant that equals the plan's read-out:
+
+        >>> field = EveryAxisLinear().fit(grid, jnp.arange(6.0))
+        >>> bool(jnp.allclose(field(jnp.array([[0.5, 0.5]])), 2.0))
+        True
+    """
 
     @abc.abstractmethod
     def bases(self, n_axes: int) -> tuple[Basis, ...]:
@@ -232,8 +277,20 @@ class Nearest(LocalScheme):
         >>> plan = Nearest().plan(
         ...     Axis(jnp.arange(3.0)), Points(jnp.array([[0.4], [0.5], [1.6]]))
         ... )
-        >>> plan(jnp.array([10.0, 20.0, 30.0])).tolist()
-        [10.0, 10.0, 30.0]
+        >>> values = plan(jnp.array([10.0, 20.0, 30.0]))
+        >>> bool(jnp.allclose(values, jnp.array([10.0, 10.0, 30.0])))
+        True
+
+        Its gradient in the targets is zero:
+
+        >>> import einx
+        >>> import jax
+        >>> def read(position):
+        ...     points = Points(einx.id(" -> 1 1", position))
+        ...     plan = Nearest().plan(Axis(jnp.arange(3.0)), points)
+        ...     return plan(jnp.array([10.0, 20.0, 30.0]))[0]
+        >>> bool(jnp.allclose(jax.grad(read)(jnp.array(0.7)), 0.0))
+        True
     """
 
     def bases(self, n_axes: int) -> tuple[Basis, ...]:
@@ -277,14 +334,14 @@ class Linear(LocalScheme):
         >>> from functax.interp import Linear
         >>> grid = AffineGrid([1.0, 0.0, 0.0, 0.0, -1.0, 4.0], (4, 4))
         >>> plan = Linear().plan(grid, Points(jnp.array([[0.5, 3.5], [1.0, 3.0]])))
-        >>> plan(jnp.arange(16.0)).tolist()
-        [0.0, 2.5]
+        >>> bool(jnp.allclose(plan(jnp.arange(16.0)), jnp.array([0.0, 2.5])))
+        True
         >>> # σ² Δ t (1 − t) on cells of width 2
         >>> gaussian = Linear(prior_variance_rate=1.0).plan(
         ...     Axis(jnp.array([0.0, 2.0, 4.0])), Points(jnp.array([[1.0], [3.5]]))
         ... )
-        >>> gaussian.variance().tolist()
-        [0.5, 0.375]
+        >>> bool(jnp.allclose(gaussian.variance(), jnp.array([0.5, 0.375])))
+        True
     """
 
     # float | int rather than float, so an int reaches the check below
@@ -387,8 +444,13 @@ class Cubic(LocalScheme):
         >>> from functax.geometry import Axis, Points
         >>> from functax.interp import Cubic
         >>> plan = Cubic().plan(Axis(jnp.arange(6.0)), Points(jnp.array([[2.5]])))
-        >>> plan(jnp.arange(6.0) ** 2).tolist()
-        [6.25]
+        >>> bool(jnp.allclose(plan(jnp.arange(6.0) ** 2), 6.25))
+        True
+
+        Four taps per target on one axis:
+
+        >>> plan.read.weights.shape
+        (1, 4)
     """
 
     a: float = eqx.field(static=True, default=-0.5)
@@ -421,8 +483,15 @@ class BSpline(LocalScheme):
         >>> plan = BSpline(3).plan(
         ...     Axis(jnp.arange(6.0)), Points(jnp.array([[2.0], [3.0]]))
         ... )
-        >>> [round(v, 12) for v in plan(jnp.arange(6.0) ** 3).tolist()]
-        [8.0, 27.0]
+        >>> bool(jnp.allclose(plan(jnp.arange(6.0) ** 3), jnp.array([8.0, 27.0])))
+        True
+
+        An order outside [0, 5] is rejected:
+
+        >>> BSpline(6)  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        functax.exceptions.ValidationError: 'order' must be ...
     """
 
     order: int = eqx.field(static=True, default=3)
@@ -454,8 +523,16 @@ class Tensor(LocalScheme):
         >>> plan = Tensor((Nearest(), Linear())).plan(
         ...     grid, Points(jnp.array([[0.8, 0.5]]))
         ... )
-        >>> plan(jnp.arange(6.0)).tolist()
-        [3.5]
+        >>> bool(jnp.allclose(plan(jnp.arange(6.0)), 3.5))
+        True
+
+        A non-local scheme is rejected:
+
+        >>> from functax.interp import Fourier
+        >>> Tensor((Fourier(),))  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        functax.exceptions.ValidationError: 'schemes[0]' must be ...
     """
 
     schemes: tuple[LocalScheme, ...] = eqx.field(converter=tuple)

@@ -97,8 +97,19 @@ def cotangent_laplacian_eigpairs(
         ... )
         >>> eigvals.shape, eigvecs.shape, areas.shape
         ((9,), (642, 9), (642,))
-        >>> [round(float(v), 1) for v in eigvals]
-        [0.0, 2.0, 2.0, 2.0, 6.0, 6.0, 6.0, 6.0, 6.0]
+        >>> # ℓ(ℓ + 1) = 0, 2, 6 on the unit sphere, with multiplicity 2ℓ + 1
+        >>> import jax.numpy as jnp
+        >>> exact = jnp.array([0.0, 2.0, 2.0, 2.0, 6.0, 6.0, 6.0, 6.0, 6.0])
+        >>> bool(jnp.allclose(eigvals, exact, atol=0.05))
+        True
+
+        On a closed mesh the first eigenvector is the constant 1/√(∑_v a_v):
+
+        >>> vertices, triangles = icosphere(0)
+        >>> _, eigvecs, areas = cotangent_laplacian_eigpairs(vertices, triangles, 1)
+        >>> constant = 1.0 / jnp.sqrt(areas.sum())
+        >>> bool(jnp.allclose(jnp.abs(eigvecs[:, 0]), constant))
+        True
     """
     points, corners = _validate_mesh(vertices, triangles)
     n_vertices = points.shape[0]
@@ -120,21 +131,34 @@ def cotangent_laplacian_eigpairs(
         raise GeometryError(msg)
 
     # --- assemble L: corner k's cotangent weights the opposite edge ---
-    head = np.roll(corners, -1, axis=1).ravel()
-    tail = np.roll(corners, -2, axis=1).ravel()
-    half_cot = 0.5 * cot.ravel()
+    # the edge opposite corner k runs from corner k + 1 to corner k + 2
+    next_corner = einx.roll("triangle [corner]", corners, shift=-1)
+    after_next = einx.roll("triangle [corner]", corners, shift=-2)
+    head = einx.id("triangle corner -> (triangle corner)", next_corner)
+    tail = einx.id("triangle corner -> (triangle corner)", after_next)
+    flat_cot = einx.id("triangle corner -> (triangle corner)", cot)
+    # ½ cot θ
+    half_cot = 0.5 * flat_cot
     weights = np.zeros((n_vertices, n_vertices))
     np.add.at(weights, (head, tail), half_cot)
     np.add.at(weights, (tail, head), half_cot)
-    laplacian = np.diag(weights.sum(axis=1)) - weights
-    laplacian = 0.5 * (laplacian + einx.id("row col -> col row", laplacian))
+    # L_ii = −∑_{j ≠ i} L_ij
+    degree = einx.sum("row [col]", weights)
+    laplacian = np.diag(degree) - weights
+    transposed = einx.id("row col -> col row", laplacian)
+    # L ← (L + Lᵀ)/2
+    laplacian = 0.5 * (laplacian + transposed)
 
     # --- solve the symmetric problem M^{−½} L M^{−½} ψ = λ ψ ---
-    inverse_sqrt_mass = 1.0 / np.sqrt(areas)
+    sqrt_mass = np.sqrt(areas)
+    # M^{−½}
+    inverse_sqrt_mass = 1.0 / sqrt_mass
+    # M^{−½} L M^{−½}, the two-sided diagonal scaling written out
     symmetric = einx.multiply(
         "row, row col, col -> row col", inverse_sqrt_mass, laplacian, inverse_sqrt_mass
     )
-    symmetric = 0.5 * (symmetric + einx.id("row col -> col row", symmetric))
+    transposed = einx.id("row col -> col row", symmetric)
+    symmetric = 0.5 * (symmetric + transposed)
     eigvals, psi = np.linalg.eigh(symmetric)
     eigvals = np.maximum(eigvals[:count], 0.0)
     # φ = M^{−½} ψ

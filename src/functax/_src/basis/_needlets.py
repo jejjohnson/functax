@@ -38,9 +38,15 @@ _BUMP_NODES, _BUMP_WEIGHTS = gauss_legendre(64)
 
 
 def _bump(t: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
+    """The C^∞ bump f(t) = exp(−1/(1 − t²)) on (−1, 1), and 0 outside."""
     inside = jnp.abs(t) < 1.0
+    # t is replaced outside, so the exponent stays finite there and its gradient
+    # is not NaN
     safe = jnp.where(inside, t, 0.0)
-    return jnp.where(inside, jnp.exp(-1.0 / (1.0 - safe**2)), 0.0)
+    # −1/(1 − t²)
+    exponent = -1.0 / (1.0 - safe**2)
+    bump = jnp.exp(exponent)
+    return jnp.where(inside, bump, 0.0)
 
 
 def _smooth_step(u: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
@@ -48,12 +54,23 @@ def _smooth_step(u: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
     u = jnp.clip(u, -1.0, 1.0)
     nodes = jnp.asarray(_BUMP_NODES, dtype=u.dtype)
     weights = jnp.asarray(_BUMP_WEIGHTS, dtype=u.dtype)
+    # h = (u + 1)/2, the half-length of [−1, u]
     half = 0.5 * (u + 1.0)
-    # the Gauss–Legendre nodes mapped from [−1, 1] onto [−1, u], for every u
+    # --- the Gauss–Legendre nodes mapped from [−1, 1] onto [−1, u] ---
+    # h sₙ
     scaled = einx.multiply("..., node -> ... node", half, nodes)
+    # tₙ = h sₙ + h − 1
     t = einx.add("..., ... node", half - 1.0, scaled)
-    partial = half * einx.dot("... node, node -> ...", _bump(t), weights)
-    total = einx.dot("node, node ->", _bump(nodes), weights)
+    # --- the two integrals ---
+    bump_values = _bump(t)
+    # ∑ₙ wₙ f(tₙ)
+    weighted_sum = einx.dot("... node, node -> ...", bump_values, weights)
+    # ∫₋₁ᵘ f ≈ h ∑ₙ wₙ f(tₙ)
+    partial = half * weighted_sum
+    bump_nodes = _bump(nodes)
+    # ∫₋₁¹ f ≈ ∑ₙ wₙ f(sₙ)
+    total = einx.dot("node, node ->", bump_nodes, weights)
+    # ψ(u) = ∫₋₁ᵘ f / ∫₋₁¹ f
     return partial / total
 
 
@@ -80,23 +97,41 @@ def needlet_window(
         >>> import jax.numpy as jnp
         >>> from functax.basis.sphere import needlet_window
         >>> window = needlet_window(2.0)
-        >>> [round(float(v), 4) for v in window(jnp.array([0.4, 1.0, 2.5]))]
-        [0.0, 1.0, 0.0]
+        >>> values = window(jnp.array([0.4, 1.0, 2.5]))
+        >>> bool(jnp.allclose(values, jnp.array([0.0, 1.0, 0.0]), atol=1e-6))
+        True
+
+        The squared windows over three scales sum to 1 on [1, B²]:
+
+        >>> xi = jnp.linspace(1.0, 4.0, 7)
+        >>> total = window(xi) ** 2 + window(xi / 2) ** 2 + window(xi / 4) ** 2
+        >>> bool(jnp.allclose(total, 1.0))
+        True
     """
     if not B > 1.0:
         msg = f"'B' must be above 1, got {B!r}"
         raise ValidationError(msg)
 
     def phi(t: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
-        ramp = _smooth_step(1.0 - 2.0 * B / (B - 1.0) * (t - 1.0 / B))
-        return jnp.where(t <= 1.0 / B, 1.0, jnp.where(t >= 1.0, 0.0, ramp))
+        # u = 1 − 2B/(B − 1) (t − 1/B), from 1 at t = 1/B down to −1 at t = 1
+        argument = 1.0 - 2.0 * B / (B - 1.0) * (t - 1.0 / B)
+        # ψ(u)
+        ramp = _smooth_step(argument)
+        # φ(t) = 0 for t ≥ 1, ψ(u) between
+        falling = jnp.where(t >= 1.0, 0.0, ramp)
+        # φ(t) = 1 for t ≤ 1/B
+        return jnp.where(t <= 1.0 / B, 1.0, falling)
 
     def window(xi: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
         xi = jnp.asarray(xi)
         if not jnp.issubdtype(xi.dtype, jnp.floating):
             xi = xi.astype(jnp.float32)
+        # φ(ξ/B) − φ(ξ)
+        difference = phi(xi / B) - phi(xi)
+        # clipped against round-off below 0
+        clipped = jnp.maximum(difference, 0.0)
         # b(ξ) = √(φ(ξ/B) − φ(ξ))
-        return jnp.sqrt(jnp.maximum(phi(xi / B) - phi(xi), 0.0))
+        return jnp.sqrt(clipped)
 
     return window
 
@@ -120,6 +155,14 @@ def needlet_basis(
     The first column is the constant Y₀₀ = 1/√(4π) (level −1, centre (0, 0, 0)),
     which the needlets omit since b(0) = 0. With it,
     ∑_m ⟨f, ψ_m⟩ ψ_m = f for every f of degree at most B^{j_max}.
+
+    Algorithm:
+        1. Start with the constant column Y₀₀ = 1/√(4π).
+        2. For each scale j, lay out the Gauss–Legendre grid exact to degree
+           2L_j and weight the degrees by b(l/B^j) (2l + 1)/(4π).
+        3. Sum the weighted Legendre series at ξ_jk · x and scale each centre's
+           column by √λ_jk.
+        4. Join the scales, whose numbers of centres differ.
 
     Args:
         unit_xyz: The evaluation points on the unit sphere.
@@ -146,6 +189,11 @@ def needlet_basis(
         >>> values, levels, centres = needlet_basis(pole, j_max=1)
         >>> values.shape, sorted(set(levels.tolist()))
         ((1, 69), [-1, 0, 1])
+        >>> # the first column is the constant Y₀₀ = 1/√(4π)
+        >>> bool(jnp.allclose(values[:, 0], 1 / jnp.sqrt(4 * jnp.pi)))
+        True
+        >>> centres.shape
+        (69, 3)
     """
     finest = _check_degree(j_max, "j_max")
     unit_xyz = jnp.asarray(unit_xyz)
@@ -161,19 +209,28 @@ def needlet_basis(
         nodes, weights = gauss_legendre_grid(degree + 1, 2 * degree + 2)
         nodes, weights = nodes.astype(dtype), weights.astype(dtype)
         ells = np.arange(degree + 1)
+        # --- the degree weights ---
+        # l/B^j
+        relative_degree = jnp.asarray(ells / B**scale, dtype=dtype)
+        # b(l/B^j)
+        windows = window(relative_degree)
+        # (2l + 1)/(4π)
+        addition = jnp.asarray((2.0 * ells + 1.0) / (4.0 * math.pi), dtype=dtype)
         # b(l/B^j) (2l + 1)/(4π)
-        coefficients = window(jnp.asarray(ells / B**scale, dtype=dtype)) * jnp.asarray(
-            (2.0 * ells + 1.0) / (4.0 * math.pi), dtype=dtype
-        )
-        cosines = jnp.clip(
-            einx.dot("obs dim, centre dim -> obs centre", unit_xyz, nodes), -1.0, 1.0
-        )
+        coefficients = windows * addition
+        # --- the kernel at each centre ---
+        # ξ_jk · x
+        inner = einx.dot("obs dim, centre dim -> obs centre", unit_xyz, nodes)
+        # clipped against round-off outside [−1, 1]
+        cosines = jnp.clip(inner, -1.0, 1.0)
+        polynomials = legendre_polynomials(cosines, degree)
+        # ∑ₗ b(l/B^j) (2l + 1)/(4π) P_l(ξ_jk · x)
         kernel = einx.dot(
-            "obs centre degree, degree -> obs centre",
-            legendre_polynomials(cosines, degree),
-            coefficients,
+            "obs centre degree, degree -> obs centre", polynomials, coefficients
         )
-        columns.append(einx.multiply("obs centre, centre", kernel, jnp.sqrt(weights)))
+        sqrt_weights = jnp.sqrt(weights)
+        # ψ_jk = √λ_jk ∑ₗ b(l/B^j) (2l + 1)/(4π) P_l(ξ_jk · x)
+        columns.append(einx.multiply("obs centre, centre", kernel, sqrt_weights))
         levels += [scale] * int(nodes.shape[0])
         centres.append(nodes)
     # the scales have different numbers of centres, so they are joined as a list

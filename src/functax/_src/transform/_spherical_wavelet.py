@@ -30,7 +30,7 @@ from functax._src.transform._sht import SphericalHarmonicTransform
 __all__ = ["SphericalWaveletTransform"]
 
 
-def _meyer_nu(t: np.ndarray) -> np.ndarray:
+def _meyer_nu(t: Float[np.ndarray, "*batch"]) -> Float[np.ndarray, "*batch"]:
     """The Meyer polynomial ν: 0 for t ≤ 0, 1 for t ≥ 1, smooth in between.
 
     ν(t) = t⁴ (35 − 84t + 70t² − 20t³) on [0, 1], and ν(t) + ν(1 − t) = 1,
@@ -38,10 +38,15 @@ def _meyer_nu(t: np.ndarray) -> np.ndarray:
     partition of unity.
     """
     t = np.clip(t, 0.0, 1.0)
-    return t**4 * (35.0 - 84.0 * t + 70.0 * t**2 - 20.0 * t**3)
+    # 35 − 84t + 70t² − 20t³
+    polynomial = 35.0 - 84.0 * t + 70.0 * t**2 - 20.0 * t**3
+    # ν(t) = t⁴ (35 − 84t + 70t² − 20t³)
+    return t**4 * polynomial
 
 
-def _partition_filters(l_max: int, n_scales: int | None = None) -> np.ndarray:
+def _partition_filters(
+    l_max: int, n_scales: int | None = None
+) -> Float[np.ndarray, "scale degree"]:
     """Dyadic harmonic windows hⱼ(l) over the degrees l = 0, …, l_max.
 
     With x = log₂ max(l, 1) and u = x − j, scale j rises as
@@ -56,23 +61,28 @@ def _partition_filters(l_max: int, n_scales: int | None = None) -> np.ndarray:
         The windows, (n_scales, l_max + 1), non-negative, in float64.
     """
     degrees = np.arange(l_max + 1)
-    x = np.log2(np.maximum(degrees, 1))
-    j_max = int(np.ceil(np.log2(max(l_max, 2))))
-    n = j_max + 1 if n_scales is None else n_scales
+    # x = log₂ max(l, 1)
+    octave = np.log2(np.maximum(degrees, 1))
+    # j_max = ⌈log₂ max(l_max, 2)⌉
+    finest = int(np.ceil(np.log2(max(l_max, 2))))
+    count = finest + 1 if n_scales is None else n_scales
 
-    filters = np.zeros((n, l_max + 1))
-    for k in range(n):
-        u = x - k
-        g = np.zeros_like(x)
-        # the hand-off from the coarser scale
-        rising = (u > -1.0) & (u <= 0.0)
-        g[rising] = np.sin(0.5 * np.pi * _meyer_nu(u[rising] + 1.0))
-        # the hand-off to the finer scale
-        falling = (u > 0.0) & (u < 1.0)
-        g[falling] = np.cos(0.5 * np.pi * _meyer_nu(u[falling]))
-        if k == 0:
-            g[x <= 0.0] = 1.0
-        filters[k] = g
+    filters = np.zeros((count, l_max + 1))
+    for scale in range(count):
+        # u = x − j
+        offset = octave - scale
+        window = np.zeros_like(octave)
+        # the hand-off from the coarser scale: hⱼ = sin(π/2 · ν(u + 1))
+        rising = (offset > -1.0) & (offset <= 0.0)
+        rising_taper = _meyer_nu(offset[rising] + 1.0)
+        window[rising] = np.sin(0.5 * np.pi * rising_taper)
+        # the hand-off to the finer scale: hⱼ = cos(π/2 · ν(u))
+        falling = (offset > 0.0) & (offset < 1.0)
+        falling_taper = _meyer_nu(offset[falling])
+        window[falling] = np.cos(0.5 * np.pi * falling_taper)
+        if scale == 0:
+            window[octave <= 0.0] = 1.0
+        filters[scale] = window
     return filters
 
 
@@ -85,6 +95,12 @@ class SphericalWaveletTransform(eqx.Module):
     squared windows partition unity, so synthesis after analysis is the
     identity on fields band-limited to l_max, up to the SHT's own error. The
     windows pass through ``lax.stop_gradient``, as the SHT tables do.
+
+    Algorithm:
+        1. Analysis: c = SHT(y), then each scale's windowed coefficients
+           hⱼ(l) c_lm are synthesised back to a map bⱼ.
+        2. Synthesis: each map is analysed again, windowed once more and
+           summed over the scales, ∑ⱼ hⱼ(l) SHT(bⱼ)_lm, before one inverse SHT.
 
     Attributes:
         sht: The spherical-harmonic transform it wraps.
@@ -144,6 +160,7 @@ class SphericalWaveletTransform(eqx.Module):
             ValidationError: If ``n_scales`` is not an integer of at least 1.
 
         Examples:
+            >>> import jax.numpy as jnp
             >>> from functax.transform import (
             ...     SphericalHarmonicTransform,
             ...     SphericalWaveletTransform,
@@ -151,6 +168,12 @@ class SphericalWaveletTransform(eqx.Module):
             >>> sht = SphericalHarmonicTransform.init(5, 9, 4)
             >>> SphericalWaveletTransform.init(sht).filters.shape
             (3, 5)
+            >>> # the squared windows partition unity, ∑ⱼ hⱼ(l)² = 1
+            >>> filters = SphericalWaveletTransform.init(sht).filters
+            >>> bool(jnp.allclose((filters**2).sum(0), 1.0))
+            True
+            >>> SphericalWaveletTransform.init(sht, n_scales=2).n_scales
+            2
         """
         if n_scales is not None:
             n_scales = _check_degree(n_scales, "n_scales", minimum=1)
@@ -165,7 +188,8 @@ class SphericalWaveletTransform(eqx.Module):
 
     def _windows(self, dtype: jnp.dtype) -> Float[Array, "scale feature"]:
         """hⱼ(l) at each harmonic coefficient in ``dtype``, the gradient stopped."""
-        filters = jax.lax.stop_gradient(self.filters).astype(dtype)
+        constant = jax.lax.stop_gradient(self.filters)
+        filters = constant.astype(dtype)
         return einx.get_at(
             "scale [degree], feature -> scale feature", filters, self.degree_index
         )
@@ -194,15 +218,18 @@ class SphericalWaveletTransform(eqx.Module):
             >>> bool(jnp.allclose(bands[0], 1.0)), bool(jnp.allclose(bands[1:], 0.0))
             (True, True)
         """
-        # c = SHT(y), (channel, feature)
+        # c = SHT(y)
         coeffs = self.sht.forward(field)
+        windows = self._windows(coeffs.dtype)
         # hⱼ(l) c_lm for each scale
         windowed = einx.multiply(
             "scale feature, channel feature -> scale channel feature",
-            self._windows(coeffs.dtype),
+            windows,
             coeffs,
         )
-        return jax.vmap(self.sht.inverse)(windowed)
+        # bⱼ = SHT⁻¹(hⱼ · c)
+        synthesis = jax.vmap(self.sht.inverse)
+        return synthesis(windowed)
 
     def inverse(
         self, scales: Float[Array, "scale channel lat lon"]
@@ -225,13 +252,20 @@ class SphericalWaveletTransform(eqx.Module):
             >>> swt = SphericalWaveletTransform.init(sht)
             >>> swt.inverse(jnp.zeros((3, 2, 5, 9))).shape
             (2, 5, 9)
+            >>> # synthesis after analysis returns a constant field
+            >>> field = jnp.ones((1, 5, 9))
+            >>> bool(jnp.allclose(swt.inverse(swt.forward(field)), field))
+            True
         """
-        # SHT(bⱼ), (scale, channel, feature)
-        coeffs = jax.vmap(self.sht.forward)(scales)
+        analysis = jax.vmap(self.sht.forward)
+        # SHT(bⱼ)
+        coeffs = analysis(scales)
+        windows = self._windows(coeffs.dtype)
         # ∑ⱼ hⱼ(l) SHT(bⱼ)_lm
         combined = einx.dot(
             "scale feature, scale channel feature -> channel feature",
-            self._windows(coeffs.dtype),
+            windows,
             coeffs,
         )
+        # y = SHT⁻¹(∑ⱼ hⱼ · SHT(bⱼ))
         return self.sht.inverse(combined)

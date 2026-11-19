@@ -57,6 +57,14 @@ def vector_spherical_harmonics(
     each is divided by √(l(l + 1)), an orthonormal set of 2((l_max + 1)² − 1)
     tangent fields.
 
+    Algorithm:
+        1. Differentiate `real_spherical_harmonics` at each point with
+           ``jax.jacfwd``, the ambient gradient ∇Ỹ_lm.
+        2. Project out the radial part, Ψ_lm = ∇Ỹ_lm − (u · ∇Ỹ_lm) u.
+        3. Rotate by a quarter turn, Φ_lm = u × Ψ_lm.
+        4. Optionally divide both by √(l(l + 1)), and project onto the east and
+           north directions for ``"enu"``.
+
     Args:
         unit_xyz: Points on the unit sphere.
         l_max: The highest degree, at least 1.
@@ -83,6 +91,13 @@ def vector_spherical_harmonics(
         ((2, 8, 3), (2, 8, 3), [1, 1, 1, 2, 2, 2, 2, 2])
         >>> vector_spherical_harmonics(xyz, 1, output="enu")[0].shape
         (2, 3, 2)
+        >>> # both fields are tangent: u · Ψ = u · Φ = 0
+        >>> import einx
+        >>> radial = "obs feature dim, obs dim -> obs feature"
+        >>> bool(jnp.allclose(einx.dot(radial, psi, xyz), 0.0, atol=1e-12))
+        True
+        >>> bool(jnp.allclose(einx.dot(radial, phi, xyz), 0.0, atol=1e-12))
+        True
     """
     degree = _check_degree(l_max, "l_max", minimum=1)
     if output not in _OUTPUTS:
@@ -93,27 +108,46 @@ def vector_spherical_harmonics(
 
     def harmonics(point: Float[Array, " 3"]) -> Float[Array, " feature"]:
         row = einx.id("dim -> 1 dim", point)
-        return real_spherical_harmonics(row, degree)[0, 1:]
+        values = real_spherical_harmonics(row, degree)
+        # drop Y₀₀, whose gradient is zero
+        return values[0, 1:]
 
-    # the ambient gradient of each harmonic at each point
-    gradient = jax.vmap(jax.jacfwd(harmonics))(unit_xyz)
+    # --- gradient harmonics Ψ ---
+    jacobian = jax.jacfwd(harmonics)
+    batched_jacobian = jax.vmap(jacobian)
+    # ∇Ỹ_lm, the ambient gradient of each harmonic at each point
+    gradient = batched_jacobian(unit_xyz)
+    # u · ∇Ỹ_lm
     radial = einx.dot("obs feature dim, obs dim -> obs feature", gradient, unit_xyz)
-    # Ψ = (I − u uᵀ) ∇Ỹ
-    psi = gradient - einx.multiply(
+    # (u · ∇Ỹ_lm) u
+    normal_part = einx.multiply(
         "obs feature, obs dim -> obs feature dim", radial, unit_xyz
     )
+    # Ψ = (I − u uᵀ) ∇Ỹ
+    psi = gradient - normal_part
+
+    # --- toroidal harmonics Φ ---
+    column = einx.id("obs dim -> obs 1 dim", unit_xyz)
     # Φ = u × Ψ
-    phi = jnp.cross(einx.id("obs dim -> obs 1 dim", unit_xyz), psi)
+    phi = jnp.cross(column, psi)
 
     degrees = np.asarray(harmonic_degrees(degree)[1:])
     if normalized:
-        scale = jnp.asarray(1.0 / np.sqrt(degrees * (degrees + 1.0)), dtype=psi.dtype)
+        # √(l(l + 1))
+        norm = np.sqrt(degrees * (degrees + 1.0))
+        scale = jnp.asarray(1.0 / norm, dtype=psi.dtype)
+        # Ψ / √(l(l + 1))
         psi = einx.multiply("obs feature dim, feature", psi, scale)
+        # Φ / √(l(l + 1))
         phi = einx.multiply("obs feature dim, feature", phi, scale)
     if output == "enu":
+        # λ = atan2(y, x)
         longitude = jnp.arctan2(unit_xyz[:, 1], unit_xyz[:, 0])
-        latitude = jnp.arcsin(jnp.clip(unit_xyz[:, 2], -1.0, 1.0))
-        east_north = _enu(longitude, latitude)[:, :2, :]
+        sin_latitude = jnp.clip(unit_xyz[:, 2], -1.0, 1.0)
+        # φ = arcsin z
+        latitude = jnp.arcsin(sin_latitude)
+        frame = _enu(longitude, latitude)
+        east_north = frame[:, :2, :]
         psi = einx.dot(
             "obs feature dim, obs axis dim -> obs feature axis", psi, east_north
         )

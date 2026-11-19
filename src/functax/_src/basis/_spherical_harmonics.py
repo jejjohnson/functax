@@ -19,7 +19,7 @@ import einx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Float, Int, Shaped
 
 from functax._src.basis._legendre import (
     _check_degree,
@@ -36,7 +36,7 @@ __all__ = [
 ]
 
 
-def _check_unit_points(points: jax.Array, name: str) -> None:
+def _check_unit_points(points: Shaped[Array, "*shape"], name: str) -> None:
     if points.ndim != 2 or points.shape[-1] != 3:
         msg = f"'{name}' must have shape (N, 3), got {points.shape}"
         raise ValidationError(msg)
@@ -68,6 +68,10 @@ def harmonic_degrees(l_max: int) -> tuple[int, ...]:
     return tuple(ell for ell in range(degree + 1) for _ in range(2 * ell + 1))
 
 
+# the carry of `_xy_powers`: the mantissas of Re and Im, and their shared exponent
+_PowerCarry = tuple[Float[Array, " obs"], Float[Array, " obs"], Int[Array, " obs"]]
+
+
 def _xy_powers(
     x: Float[Array, " obs"], y: Float[Array, " obs"], m_max: int
 ) -> tuple[
@@ -81,19 +85,27 @@ def _xy_powers(
     value is (re + i im) · 2^exp.
     """
 
-    def step(
-        carry: tuple[jax.Array, jax.Array, jax.Array], unused: None
-    ) -> tuple[tuple[jax.Array, jax.Array, jax.Array], tuple[jax.Array, ...]]:
+    def step(carry: _PowerCarry, unused: None) -> tuple[_PowerCarry, _PowerCarry]:
         re, im, exponent = carry
-        # (x + iy)(re + i im) = (x re − y im) + i (x im + y re)
-        new_re, new_im = x * re - y * im, x * im + y * re
+        # Re[(x + iy)(re + i im)] = x re − y im
+        new_re = x * re - y * im
+        # Im[(x + iy)(re + i im)] = x im + y re
+        new_im = x * im + y * re
+        # --- renormalise both parts by one power of two ---
         biggest = jnp.maximum(jnp.abs(new_re), jnp.abs(new_im))
+        # 2^shift ≥ max(|re|, |im|), so the mantissas stay in [½, 1)
         _, shift = jnp.frexp(biggest)
+        # a zero value keeps its exponent
         shift = jnp.where(biggest > 0, shift, 0)
+        # re · 2^−shift, im · 2^−shift, exp + shift
         new_carry = (_ldexp(new_re, -shift), _ldexp(new_im, -shift), exponent + shift)
         return new_carry, carry
 
-    init = (jnp.ones_like(x), jnp.zeros_like(x), jnp.zeros(x.shape, dtype=jnp.int32))
+    # (x + iy)⁰ = 1 · 2⁰
+    one = jnp.ones_like(x)
+    zero = jnp.zeros_like(x)
+    zero_exponent = jnp.zeros(x.shape, dtype=jnp.int32)
+    init = (one, zero, zero_exponent)
     _, (re, im, exponent) = jax.lax.scan(step, init, None, length=m_max + 1)
     return re, im, exponent
 
@@ -157,6 +169,17 @@ def real_spherical_harmonics(
         >>> y00 = real_spherical_harmonics(jnp.array([[0.0, 0.0, 1.0]]), 0)
         >>> bool(jnp.allclose(y00, 1 / math.sqrt(4 * math.pi)))
         True
+
+        Orthonormal under a Gauss–Legendre rule exact to degree 2 l_max:
+
+        >>> from functax.geometry import gauss_legendre_grid
+        >>> points, weights = gauss_legendre_grid(5, 10)
+        >>> harmonics = real_spherical_harmonics(points, 4)
+        >>> import einx
+        >>> weighted = einx.multiply("obs col, obs", harmonics, weights)
+        >>> gram = einx.dot("obs row, obs col -> row col", harmonics, weighted)
+        >>> bool(jnp.allclose(gram, jnp.eye(25), atol=1e-12))
+        True
     """
     degree = _check_degree(l_max, "l_max")
     unit_xyz = jnp.asarray(unit_xyz)
@@ -169,35 +192,44 @@ def real_spherical_harmonics(
     y = unit_xyz[:, 1]
     z = unit_xyz[:, 2]
 
-    # the pole-free Q̄_l^m: the orthonormal recurrence seeded with the sectoral
-    # constants instead of P̄_m^m = c_m (1 − z²)^{m/2}
+    # --- the pole-free Q̄_l^m ---
+    # the orthonormal recurrence seeded with the sectoral constants c_m instead
+    # of P̄_m^m = c_m (1 − z²)^{m/2}
     seeds = jnp.asarray(_sectoral_scale(degree), dtype=dtype)
-    sectoral = einx.multiply("obs, order -> obs order", jnp.ones_like(z), seeds)
-    q_mantissa, q_exponent = _legendre_table_carry(
-        z, sectoral, jnp.zeros(sectoral.shape, dtype=jnp.int32), degree
-    )
+    ones = jnp.ones_like(z)
+    sectoral = einx.multiply("obs, order -> obs order", ones, seeds)
+    seed_exponent = jnp.zeros(sectoral.shape, dtype=jnp.int32)
+    q_mantissa, q_exponent = _legendre_table_carry(z, sectoral, seed_exponent, degree)
+    # --- (x + iy)^m ---
     re, im, xy_exponent = _xy_powers(x, y, degree)
 
-    # the host-side column layout: l outer, m = −l, …, l inner
+    # --- the host-side column layout: l outer, m = −l, …, l inner ---
     ell = np.asarray(harmonic_degrees(degree))
     order = np.concatenate([np.arange(-l, l + 1) for l in range(degree + 1)])
     absolute_order = np.abs(order)
+    # 1/√(2π) for m = 0, 1/√π otherwise
     scale = np.where(
         order == 0, 1.0 / math.sqrt(2.0 * math.pi), 1.0 / math.sqrt(math.pi)
     )
 
+    # --- combine ---
     q_columns = q_mantissa[ell, :, absolute_order]
     # the m = 0 branch is exactly 1 with exponent 0
     positive = einx.id("feature -> feature 1", jnp.asarray(order > 0))
     negative = einx.id("feature -> feature 1", jnp.asarray(order < 0))
-    trig = jnp.where(
-        positive, re[absolute_order], jnp.where(negative, im[absolute_order], 1.0)
-    )
+    # Im[(x + iy)^m] for m < 0, and 1 for m = 0
+    sine_or_one = jnp.where(negative, im[absolute_order], 1.0)
+    # Re[(x + iy)^m] for m > 0
+    trig = jnp.where(positive, re[absolute_order], sine_or_one)
+    # the exponent of Q̄_l^m (x + iy)^m
     exponent = q_exponent[ell, :, absolute_order] + xy_exponent[absolute_order]
+    # Y_lm mantissa = Q̄_l^m {Re, Im}[(x + iy)^m] / √(2π or π)
     mantissa = einx.multiply(
         "feature obs, feature obs, feature -> feature obs",
         q_columns,
         trig,
         jnp.asarray(scale, dtype=dtype),
     )
-    return einx.id("feature obs -> obs feature", _ldexp(mantissa, exponent))
+    # Y_lm = mantissa · 2^exponent
+    harmonics = _ldexp(mantissa, exponent)
+    return einx.id("feature obs -> obs feature", harmonics)

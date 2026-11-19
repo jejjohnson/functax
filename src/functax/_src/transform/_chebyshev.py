@@ -20,7 +20,6 @@ from typing import Any
 
 import einx
 import equinox as eqx
-import jax
 import jax.numpy as jnp
 from jaxtyping import Array, ArrayLike, Float, Real
 
@@ -47,7 +46,9 @@ def _node_count(degree: int, kind: str) -> int:
     return degree + 1 if kind == "lobatto" else degree
 
 
-def _as_real(values: Any, shape: tuple[int, ...], name: str) -> jax.Array:
+def _as_real(
+    values: Any, shape: tuple[int, ...], name: str
+) -> Float[Array, "*batch _size"]:
     """``values`` as a real floating array whose trailing axes are ``shape``."""
     array = promote_integers(jnp.asarray(values))
     if not jnp.issubdtype(array.dtype, jnp.floating):
@@ -59,7 +60,9 @@ def _as_real(values: Any, shape: tuple[int, ...], name: str) -> jax.Array:
     return array
 
 
-def _lobatto(values: jax.Array, degree: int, *, inverse: bool) -> jax.Array:
+def _lobatto(
+    values: Float[Array, "*batch node"], degree: int, *, inverse: bool
+) -> Float[Array, "*batch node"]:
     """The DCT-I Chebyshev transform on the N + 1 Gauss–Lobatto nodes, last axis.
 
     Forward: aₖ = (2 / (N cₖ)) ∑ⱼ'' uⱼ cos(πjk/N), with c₀ = c_N = 2 and
@@ -77,18 +80,30 @@ def _lobatto(values: jax.Array, degree: int, *, inverse: bool) -> jax.Array:
             extended = einx.id(
                 "... node, ... interior -> ... (node + interior)", values, reflected
             )
+        # X = rfft(ũ), the DCT-I of u as the FFT of its even extension
+        spectrum = jnp.fft.rfft(extended)
         # rfft/N gives the 2/cₖ-weighted values: halve the two end modes
-        coefficients = jnp.fft.rfft(extended).real / degree
-        return coefficients.at[..., 0].multiply(0.5).at[..., degree].multiply(0.5)
+        weighted = spectrum.real / degree
+        # a₀ = X₀ / (2N)
+        halved_first = weighted.at[..., 0].multiply(0.5)
+        # a_N = X_N / (2N)
+        return halved_first.at[..., degree].multiply(0.5)
     # irfft(X, n=2N)[j] = (1/2N)[X₀ + X_N(−1)ʲ + 2 ∑_{0<k<N} Xₖ cos(πjk/N)], so
     # X = N a with the end modes doubled gives ∑ₖ aₖ cos(πjk/N)
-    doubled = values.at[..., 0].multiply(2.0).at[..., degree].multiply(2.0)
+    doubled_first = values.at[..., 0].multiply(2.0)
+    doubled = doubled_first.at[..., degree].multiply(2.0)
+    # X = N a, end modes doubled
     spectrum = degree * doubled
-    synthesis = jnp.fft.irfft(spectrum + 0j, n=2 * degree)
+    # irfft needs a complex input
+    complex_spectrum = spectrum + 0j
+    # uⱼ = ∑ₖ aₖ cos(πjk/N), the first N + 1 samples of the length-2N inverse
+    synthesis = jnp.fft.irfft(complex_spectrum, n=2 * degree)
     return synthesis[..., : degree + 1]
 
 
-def _gauss(values: jax.Array, degree: int, *, inverse: bool) -> jax.Array:
+def _gauss(
+    values: Float[Array, "*batch node"], degree: int, *, inverse: bool
+) -> Float[Array, "*batch node"]:
     """The DCT-II Chebyshev transform on the N Gauss nodes, last axis.
 
     Forward: a₀ = (1/N) ∑ⱼ uⱼ and aₖ = (2/N) ∑ⱼ uⱼ cos(πk(2j + 1)/(2N)) for
@@ -103,27 +118,37 @@ def _gauss(values: jax.Array, degree: int, *, inverse: bool) -> jax.Array:
     if not inverse:
         # Zₖ = ∑ⱼ uⱼ exp(−iπ(2j + 1)k/(2N)): the FFT of the zero-padded samples,
         # shifted by half a sample
-        spectrum = jnp.fft.rfft(values.astype(real_dtype), n=2 * degree)
+        real_values = values.astype(real_dtype)
+        spectrum = jnp.fft.rfft(real_values, n=2 * degree)
         modes = jnp.arange(degree + 1, dtype=real_dtype)
-        phase = jnp.exp((-1j * jnp.pi * modes / (2 * degree)).astype(complex_dtype))
+        # −iπk/(2N)
+        exponent = (-1j * jnp.pi * modes / (2 * degree)).astype(complex_dtype)
+        # exp(−iπk/(2N)), the half-sample shift
+        phase = jnp.exp(exponent)
         shifted = einx.multiply("... mode, mode -> ... mode", spectrum, phase)
-        # aₖ = (2/N) Re Zₖ, with a₀ halved to (1/N) ∑ⱼ uⱼ
-        coefficients = shifted[..., :degree].real * (2.0 / degree)
+        real_part = shifted[..., :degree].real
+        # aₖ = (2/N) Re Zₖ
+        coefficients = real_part * (2.0 / degree)
+        # a₀ halved to (1/N) ∑ⱼ uⱼ
         return coefficients.at[..., 0].multiply(0.5)
     # uₙ = Re ∑ₖ aₖ exp(iπk(2n + 1)/(2N)) = Re[2N IFFT_{2N}(h ⊕ 0)ₙ] with
     # hₖ = aₖ exp(iπk/(2N)); a₀ is not doubled, as the forward halved it
     modes = jnp.arange(degree, dtype=real_dtype)
-    phase = jnp.exp((1j * jnp.pi * modes / (2 * degree)).astype(complex_dtype))
-    shifted = einx.multiply(
-        "... mode, mode -> ... mode", values.astype(complex_dtype), phase
-    )
+    # iπk/(2N)
+    exponent = (1j * jnp.pi * modes / (2 * degree)).astype(complex_dtype)
+    phase = jnp.exp(exponent)
+    complex_values = values.astype(complex_dtype)
+    # hₖ = aₖ exp(iπk/(2N))
+    shifted = einx.multiply("... mode, mode -> ... mode", complex_values, phase)
     synthesis = jnp.fft.ifft(shifted, n=2 * degree)
-    return (2 * degree * synthesis.real)[..., :degree]
+    # uₙ = 2N Re IFFT_{2N}(h ⊕ 0)ₙ, for n < N
+    scaled = 2 * degree * synthesis.real
+    return scaled[..., :degree]
 
 
 def _transform_last(
-    values: jax.Array, degree: int, kind: str, *, inverse: bool
-) -> jax.Array:
+    values: Float[Array, "*batch node"], degree: int, kind: str, *, inverse: bool
+) -> Float[Array, "*batch node"]:
     """The 1-D transform of either kind along the last axis."""
     if kind == "lobatto":
         return _lobatto(values, degree, inverse=inverse)
@@ -215,6 +240,17 @@ class ChebyshevTransform1D(eqx.Module):
         Raises:
             ValidationError: If ``u`` is complex or its last axis is not the
                 node count.
+
+        Examples:
+            >>> import jax.numpy as jnp
+            >>> from functax.transform import ChebyshevTransform1D
+            >>> transform = ChebyshevTransform1D(4)
+            >>> # a constant c maps to (c, 0, …, 0)
+            >>> coefficients = transform.to_spectral(jnp.full(5, 3.0))
+            >>> bool(jnp.allclose(coefficients, jnp.array([3.0, 0, 0, 0, 0])))
+            True
+            >>> transform.to_spectral(jnp.ones((2, 3, 5))).shape
+            (2, 3, 5)
         """
         values = _as_real(u, (self.n_nodes,), "u")
         return _transform_last(values, self.n, self.kind, inverse=False)
@@ -233,6 +269,17 @@ class ChebyshevTransform1D(eqx.Module):
         Raises:
             ValidationError: If ``a`` is complex or its last axis is not the
                 node count.
+
+        Examples:
+            >>> import jax.numpy as jnp
+            >>> from functax.transform import ChebyshevTransform1D
+            >>> transform = ChebyshevTransform1D(4, kind="gauss")
+            >>> # a₀ = 1 alone synthesises the constant 1
+            >>> values = transform.from_spectral(jnp.eye(4)[0])
+            >>> bool(jnp.allclose(values, 1.0))
+            True
+            >>> transform.from_spectral(jnp.zeros((3, 4))).shape
+            (3, 4)
         """
         coefficients = _as_real(a, (self.n_nodes,), "a")
         return _transform_last(coefficients, self.n, self.kind, inverse=True)
@@ -302,7 +349,9 @@ class ChebyshevTransform2D(eqx.Module):
         """The grid shape (y, x): N + 1 per axis on Lobatto nodes, N on Gauss."""
         return (_node_count(self.ny, self.kind), _node_count(self.nx, self.kind))
 
-    def _along_y(self, values: jax.Array, *, inverse: bool) -> jax.Array:
+    def _along_y(
+        self, values: Float[Array, "*batch y x"], *, inverse: bool
+    ) -> Float[Array, "*batch y x"]:
         """The 1-D transform along the second-to-last axis (y)."""
         columns = einx.id("... y x -> ... x y", values)
         transformed = _transform_last(columns, self.ny, self.kind, inverse=inverse)
@@ -322,6 +371,16 @@ class ChebyshevTransform2D(eqx.Module):
         Raises:
             ValidationError: If ``u`` is complex or its last two axes are not
                 the grid shape.
+
+        Examples:
+            >>> import jax.numpy as jnp
+            >>> from functax.transform import ChebyshevTransform2D
+            >>> transform = ChebyshevTransform2D(4, 2)
+            >>> coefficients = transform.to_spectral(jnp.ones((3, 5)))
+            >>> bool(jnp.allclose(coefficients, jnp.zeros((3, 5)).at[0, 0].set(1.0)))
+            True
+            >>> transform.to_spectral(jnp.ones((2, 3, 5))).shape
+            (2, 3, 5)
         """
         values = _as_real(u, self.shape, "u")
         along_x = _transform_last(values, self.nx, self.kind, inverse=False)
@@ -341,6 +400,18 @@ class ChebyshevTransform2D(eqx.Module):
         Raises:
             ValidationError: If ``a`` is complex or its last two axes are not
                 the grid shape.
+
+        Examples:
+            >>> import jax.numpy as jnp
+            >>> from functax.transform import ChebyshevTransform2D
+            >>> transform = ChebyshevTransform2D(4, 2, kind="gauss")
+            >>> unit = jnp.zeros((2, 4)).at[0, 0].set(1.0)
+            >>> bool(jnp.allclose(transform.from_spectral(unit), 1.0))
+            True
+            >>> u = jnp.arange(8.0).reshape(2, 4)
+            >>> round_trip = transform.from_spectral(transform.to_spectral(u))
+            >>> bool(jnp.allclose(round_trip, u))
+            True
         """
         coefficients = _as_real(a, self.shape, "a")
         along_y = self._along_y(coefficients, inverse=True)

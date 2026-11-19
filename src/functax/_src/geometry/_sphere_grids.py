@@ -18,9 +18,10 @@ import math
 import operator
 from typing import Any
 
+import einx
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, Int
 
 from functax._src.geometry._sphere import _check_unit
 from functax._src.quad._rules import gauss_legendre
@@ -66,17 +67,24 @@ def _check_count(value: Any, name: str) -> int:
 
 
 def _format(
-    lon: np.ndarray, lat: np.ndarray, output: str, unit: str | None
+    lon: Float[np.ndarray, " node"],
+    lat: Float[np.ndarray, " node"],
+    output: str,
+    unit: str | None,
 ) -> Float[Array, "node dim"]:
+    """The points as unit vectors or as (λ, φ) in ``unit``, on the device."""
     if output == "xyz":
-        # u = (cos φ cos λ, cos φ sin λ, sin φ)
+        # cos φ
         cos_lat = np.cos(lat)
-        xyz = np.stack(
-            [cos_lat * np.cos(lon), cos_lat * np.sin(lon), np.sin(lat)], axis=-1
-        )
+        # u = (cos φ cos λ, cos φ sin λ, sin φ)
+        x = cos_lat * np.cos(lon)
+        y = cos_lat * np.sin(lon)
+        z = np.sin(lat)
+        xyz = einx.id("node, node, node -> node (1 + 1 + 1)", x, y, z)
         return jnp.asarray(xyz)
-    lonlat = np.stack([lon, lat], axis=-1)
+    lonlat = einx.id("node, node -> node (1 + 1)", lon, lat)
     if unit == "degrees":
+        # x · 180/π
         lonlat = np.degrees(lonlat)
     return jnp.asarray(lonlat)
 
@@ -115,11 +123,20 @@ def fibonacci_sphere(
     count = _check_count(n, "n")
     _check_output(output, unit)
     index = np.arange(count, dtype=float)
+    # ϕ = (1 + √5)/2
     golden = (1.0 + math.sqrt(5.0)) / 2.0
-    lat = np.arcsin(1.0 - 2.0 * (index + 0.5) / count)
-    lon = np.mod(2.0 * math.pi * index / golden + math.pi, 2.0 * math.pi) - math.pi
+    # zᵢ = 1 − 2(i + ½)/n
+    z = 1.0 - 2.0 * (index + 0.5) / count
+    # φᵢ = arcsin zᵢ
+    lat = np.arcsin(z)
+    # λᵢ = 2πi/ϕ, wrapped to [−π, π)
+    angle = 2.0 * math.pi * index / golden
+    wrapped = np.mod(angle + math.pi, 2.0 * math.pi)
+    lon = wrapped - math.pi
+    # wᵢ = 4π/n
     weights = jnp.full((count,), 4.0 * math.pi / count)
-    return _format(lon, lat, output, unit), weights
+    points = _format(lon, lat, output, unit)
+    return points, weights
 
 
 def gauss_legendre_grid(
@@ -165,11 +182,17 @@ def gauss_legendre_grid(
     lon_count = 2 * lat_count if n_lon is None else _check_count(n_lon, "n_lon")
     _check_output(output, unit)
     nodes, node_weights = gauss_legendre(lat_count)
+    # φₖ = arcsin tₖ
     lat_1d = np.arcsin(nodes)
+    # λⱼ = −π + 2πj/n_lon
     lon_1d = -math.pi + 2.0 * math.pi * np.arange(lon_count) / lon_count
-    lat, lon = np.meshgrid(lat_1d, lon_1d, indexing="ij")
-    weights = np.repeat(node_weights * 2.0 * math.pi / lon_count, lon_count)
-    points = _format(lon.ravel(), lat.ravel(), output, unit)
+    # latitude-major: node (k, j) at k · n_lon + j
+    lat = einx.id("lat -> (lat lon)", lat_1d, lon=lon_count)
+    lon = einx.id("lon -> (lat lon)", lon_1d, lat=lat_count)
+    # wₖ 2π/n_lon, the weight of every node of latitude k
+    band_weights = node_weights * 2.0 * math.pi / lon_count
+    weights = einx.id("lat -> (lat lon)", band_weights, lon=lon_count)
+    points = _format(lon, lat, output, unit)
     return points, jnp.asarray(weights)
 
 
@@ -214,14 +237,23 @@ def latlon_grid(
     lon_count = _check_count(n_lon, "n_lon")
     _check_output(output, unit)
     lat_edges = np.linspace(-math.pi / 2, math.pi / 2, lat_count + 1)
+    # Δλ = 2π/n_lon
     lon_step = 2.0 * math.pi / lon_count
+    # φₖ = (φ_bottom + φ_top)/2, the centre of each band
     lat_1d = 0.5 * (lat_edges[:-1] + lat_edges[1:])
+    # λⱼ = −π + Δλ (j + ½)
     lon_1d = -math.pi + lon_step * (np.arange(lon_count) + 0.5)
+    # sin φ_top − sin φ_bottom
+    sin_top = np.sin(lat_edges[1:])
+    sin_bottom = np.sin(lat_edges[:-1])
+    band_height = sin_top - sin_bottom
     # the area of each band of cells: Δλ (sin φ_top − sin φ_bottom)
-    band_area = lon_step * (np.sin(lat_edges[1:]) - np.sin(lat_edges[:-1]))
-    lat, lon = np.meshgrid(lat_1d, lon_1d, indexing="ij")
-    weights = np.repeat(band_area, lon_count)
-    points = _format(lon.ravel(), lat.ravel(), output, unit)
+    band_area = lon_step * band_height
+    # latitude-major: cell (k, j) at k · n_lon + j
+    lat = einx.id("lat -> (lat lon)", lat_1d, lon=lon_count)
+    lon = einx.id("lon -> (lat lon)", lon_1d, lat=lat_count)
+    weights = einx.id("lat -> (lat lon)", band_area, lon=lon_count)
+    points = _format(lon, lat, output, unit)
     return points, jnp.asarray(weights)
 
 
@@ -232,12 +264,17 @@ _JRLL = np.array([2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4])
 _JPLL = np.array([1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7])
 
 
-def _interleave_bits(ix: np.ndarray, iy: np.ndarray, n_bits: int) -> np.ndarray:
-    out = np.zeros_like(ix)
+def _interleave_bits(
+    face_x: Int[np.ndarray, " node"], face_y: Int[np.ndarray, " node"], n_bits: int
+) -> Int[np.ndarray, " node"]:
+    """The Morton code of (x, y): bit b of x goes to bit 2b, of y to 2b + 1."""
+    code = np.zeros_like(face_x)
     for bit in range(n_bits):
-        out |= ((ix >> bit) & 1) << (2 * bit)
-        out |= ((iy >> bit) & 1) << (2 * bit + 1)
-    return out
+        x_bit = (face_x >> bit) & 1
+        y_bit = (face_y >> bit) & 1
+        code |= x_bit << (2 * bit)
+        code |= y_bit << (2 * bit + 1)
+    return code
 
 
 def healpix_grid(
@@ -263,6 +300,13 @@ def healpix_grid(
     4p + 3 at 2 N_side; it needs N_side to be a power of two. Both orders match
     ``healpy.pix2ang``. Longitudes are wrapped to [−π, π).
 
+    Algorithm:
+        1. Enumerate every pixel by its face f and face-local (x, y).
+        2. Find its ring i and the ring's size, and from them z and λ in
+           closed form (caps and belt apart).
+        3. Number the pixels in the nested or the ring order, and sort by
+           that number.
+
     Args:
         nside: N_side, the resolution.
         nest: The nested order (``True``) or the ring order (``False``).
@@ -278,12 +322,6 @@ def healpix_grid(
             of two with ``nest=True``, ``output`` is unknown, or ``unit`` is
             missing or unknown with ``"lonlat"``.
 
-    References:
-        Górski, K. M., Hivon, E., Banday, A. J., Wandelt, B. D., Hansen,
-        F. K., Reinecke, M., Bartelmann, M. (2005). HEALPix: a framework for
-        high-resolution discretization and fast analysis of data distributed
-        on the sphere. ApJ 622, 759.
-
     Examples:
         >>> import math
         >>> from functax.geometry import healpix_grid
@@ -292,6 +330,21 @@ def healpix_grid(
         ((12, 2), True)
         >>> [round(v, 4) for v in points[0].tolist()]
         [45.0, 41.8103]
+
+        The nested and ring orders hold the same pixels:
+
+        >>> import numpy as np
+        >>> nested, _ = healpix_grid(2)
+        >>> ring, _ = healpix_grid(2, nest=False)
+        >>> nested_z = np.sort(np.asarray(nested[:, 2]))
+        >>> bool(np.allclose(nested_z, np.sort(np.asarray(ring[:, 2]))))
+        True
+
+    References:
+        Górski, K. M., Hivon, E., Banday, A. J., Wandelt, B. D., Hansen,
+        F. K., Reinecke, M., Bartelmann, M. (2005). HEALPix: a framework for
+        high-resolution discretization and fast analysis of data distributed
+        on the sphere. ApJ 622, 759.
     """
     n = _check_count(nside, "nside")
     _check_output(output, unit)
@@ -301,39 +354,65 @@ def healpix_grid(
             "use nest=False for the ring order"
         )
         raise GeometryError(msg)
-    npix = 12 * n * n
-    ncap = 2 * n * (n - 1)
-    face, ix, iy = (
-        a.ravel()
-        for a in np.meshgrid(np.arange(12), np.arange(n), np.arange(n), indexing="ij")
-    )
+    # --- enumerate pixels by face and face-local (x, y) ---
+    # N = 12 N_side²
+    n_pixels = 12 * n * n
+    # the pixels in the north cap, 2 N_side (N_side − 1)
+    n_cap = 2 * n * (n - 1)
+    face = einx.id("face -> (face x y)", np.arange(12), x=n, y=n)
+    face_x = einx.id("x -> (face x y)", np.arange(n), face=12, y=n)
+    face_y = einx.id("y -> (face x y)", np.arange(n), face=12, x=n)
+
+    # --- ring and latitude ---
     # the ring number, 1 to 4n − 1
-    jr = _JRLL[face] * n - ix - iy - 1
-    north, south = jr < n, jr > 3 * n
-    # the number of pixels per ring, over 4
-    nr = np.where(north, jr, np.where(south, 4 * n - jr, n))
-    z = np.where(
-        north,
-        1.0 - nr**2 / (3.0 * n * n),
-        np.where(south, nr**2 / (3.0 * n * n) - 1.0, (2 * n - jr) * 2.0 / (3.0 * n)),
-    )
-    kshift = np.where(north | south, 0, (jr - n) & 1)
-    # the index within the ring, 1 to 4 nr
-    jp = (_JPLL[face] * nr + ix - iy + 1 + kshift) // 2
-    jp = np.where(jp > 4 * n, jp - 4 * n, np.where(jp < 1, jp + 4 * n, jp))
+    ring = _JRLL[face] * n - face_x - face_y - 1
+    north = ring < n
+    south = ring > 3 * n
+    # the number of pixels per ring, over 4: i in the caps, N_side in the belt
+    south_or_belt_size = np.where(south, 4 * n - ring, n)
+    ring_size = np.where(north, ring, south_or_belt_size)
+    # z = 1 − i²/(3 N_side²) in the north cap
+    z_north = 1.0 - ring_size**2 / (3.0 * n * n)
+    # z = i²/(3 N_side²) − 1 in the south cap
+    z_south = ring_size**2 / (3.0 * n * n) - 1.0
+    # z = (2 N_side − i) · 2/(3 N_side) in the belt
+    z_belt = (2 * n - ring) * 2.0 / (3.0 * n)
+    z_south_or_belt = np.where(south, z_south, z_belt)
+    z = np.where(north, z_north, z_south_or_belt)
+
+    # --- longitude ---
+    # alternate belt rings are shifted by half a pixel
+    shift = np.where(north | south, 0, (ring - n) & 1)
+    # the index within the ring, 1 to 4 × ring_size
+    ring_position = (_JPLL[face] * ring_size + face_x - face_y + 1 + shift) // 2
+    # wrap the index into 1, …, 4 N_side
+    wrapped_low = np.where(ring_position < 1, ring_position + 4 * n, ring_position)
+    ring_position = np.where(ring_position > 4 * n, ring_position - 4 * n, wrapped_low)
     # λ in [0, 2π)
-    lon = (jp - 0.5 * (kshift + 1)) * (math.pi / (2.0 * nr))
+    lon = (ring_position - 0.5 * (shift + 1)) * (math.pi / (2.0 * ring_size))
+
+    # --- order ---
     if nest:
-        index = face * n * n + _interleave_bits(ix, iy, max(n.bit_length() - 1, 0))
+        n_bits = max(n.bit_length() - 1, 0)
+        morton = _interleave_bits(face_x, face_y, n_bits)
+        index = face * n * n + morton
     else:
-        before = np.where(
-            north,
-            2 * nr * (nr - 1),
-            np.where(south, npix - 2 * nr * (nr + 1), ncap + (jr - n) * 4 * n),
-        )
-        index = before + jp - 1
-    order = np.argsort(index)
-    lat = np.arcsin(z[order])
-    lon = np.mod(lon[order] + math.pi, 2.0 * math.pi) - math.pi
-    weights = jnp.full((npix,), 4.0 * math.pi / npix)
-    return _format(lon, lat, output, unit), weights
+        # the pixels in the rings north of this one
+        before_south = n_pixels - 2 * ring_size * (ring_size + 1)
+        before_belt = n_cap + (ring - n) * 4 * n
+        before_south_or_belt = np.where(south, before_south, before_belt)
+        before_north = 2 * ring_size * (ring_size - 1)
+        before = np.where(north, before_north, before_south_or_belt)
+        index = before + ring_position - 1
+    order = einx.argsort("[node]", index)
+    z_sorted = z[order]
+    # φ = arcsin z
+    lat = np.arcsin(z_sorted)
+    # λ wrapped to [−π, π)
+    lon_sorted = lon[order]
+    lon_wrapped = np.mod(lon_sorted + math.pi, 2.0 * math.pi)
+    lon = lon_wrapped - math.pi
+    # wₖ = 4π/N
+    weights = jnp.full((n_pixels,), 4.0 * math.pi / n_pixels)
+    points = _format(lon, lat, output, unit)
+    return points, weights
