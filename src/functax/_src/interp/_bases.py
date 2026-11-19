@@ -264,7 +264,11 @@ def bspline(values: Float[Array, "*shape"], order: int) -> Float[Array, "*shape"
         # ∑ₗ (−1)ˡ C(k + 1, l) (x + (k + 1)/2 − l)₊ᵏ
         total = total + sign * power
     # βᵏ(x) = (1/k!) ∑ₗ …
-    return total / math.factorial(order)
+    spline = total / math.factorial(order)
+    # right of the support the truncated powers cancel only to O(xᵏ ε), so
+    # zero there explicitly; β⁰ keeps its closed left end, −½ ≤ x < ½
+    inside = (values >= -half_width) & (values < half_width)
+    return jnp.where(inside, spline, jnp.zeros_like(spline))
 
 
 class BSplineBasis(Basis):

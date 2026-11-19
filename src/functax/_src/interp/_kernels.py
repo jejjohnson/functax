@@ -310,7 +310,8 @@ class Wendland(RadialKernel):
     """
 
     smoothness: int = eqx.field(static=True, default=2)
-    support: float = 1.0
+    # a traced support is allowed (a hyperparameter under jax.grad)
+    support: float | Float[Array, ""] = 1.0
 
     def __check_init__(self) -> None:
         if self.smoothness not in (2, 4) or isinstance(self.smoothness, bool):

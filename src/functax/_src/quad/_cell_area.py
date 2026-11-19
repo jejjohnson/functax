@@ -36,7 +36,7 @@ __all__ = [
 def cell_area(
     grid: AffineGrid | RectilinearGrid,
     *,
-    sphere_radius: float | int | None = None,
+    sphere_radius: float | int | Float[Array, ""] | None = None,
     unit: str | None = None,
 ) -> Rule:
     """The cell-area rule of a grid: ∫ g dA ≈ ∑ₖ |Cₖ| g(xₖ) over its cells Cₖ.

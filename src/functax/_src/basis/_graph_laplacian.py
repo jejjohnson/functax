@@ -108,9 +108,12 @@ def graph_laplacian_eigpairs(
     # dᵢ = ∑ⱼ Aᵢⱼ
     degree = einx.sum("row [col]", weights)
     if normalized:
-        # d^{−½}, and 0 for an isolated vertex
-        inverse_sqrt = degree ** (-0.5)
-        inverse_sqrt_degree = np.where(degree > 0, inverse_sqrt, 0.0)
+        # d^{−½}, and 0 for an isolated vertex (never dividing by zero)
+        sqrt_degree = np.sqrt(degree)
+        connected = degree > 0
+        inverse_sqrt_degree = np.divide(
+            1.0, sqrt_degree, out=np.zeros_like(degree), where=connected
+        )
         # D^{−½} A D^{−½}, the two-sided diagonal scaling written out
         scaled = einx.multiply(
             "row, row col, col -> row col",
