@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.0.12](https://github.com/jejjohnson/functax/compare/v0.0.11...v0.0.12) (2026-11-19)
+
+
+### Features
+
+* **plugins:** a Claude Code plugin with a skill shelf and contract cards for functax ([#154](https://github.com/jejjohnson/functax/issues/154)) ([4eed3e2](https://github.com/jejjohnson/functax/commit/4eed3e2f7941026efe78a9719ee541c3efd41071))
+
+
+### Bug Fixes
+
+* traced Wendland support and sphere radius pass the type check, bspline is zero right of its support ([#161](https://github.com/jejjohnson/functax/issues/161)) ([d540722](https://github.com/jejjohnson/functax/commit/d540722883a764e5515f7b968dc5203a34a3fc83))
+
 ## [0.0.11](https://github.com/jejjohnson/functax/compare/v0.0.10...v0.0.11) (2026-11-19)
 
 
