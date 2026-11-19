@@ -46,7 +46,7 @@ def test_global_one_degree_rectilinear_grid_sums_to_the_sphere_area(
         _global_rectilinear(unit, step), sphere_radius=EARTH_LIKE_RADIUS, unit=unit
     )
     expected = 4.0 * math.pi * EARTH_LIKE_RADIUS**2
-    assert rule.weights.shape == (360 * 180,)
+    assert rule.weights.shape == (360, 180)
     assert abs(float(rule.weights.sum()) - expected) < 1e-12 * expected
 
 
@@ -62,7 +62,7 @@ def test_affine_and_rectilinear_lonlat_rules_agree() -> None:
     from_affine = cell_area(affine, sphere_radius=3.0, unit="degrees")
     from_rectilinear = cell_area(rectilinear, sphere_radius=3.0, unit="degrees")
     # (row col) against (lon lat): the same cells, transposed
-    transposed = np.asarray(from_rectilinear.weights).reshape(5, 4).T.ravel()
+    transposed = np.asarray(from_rectilinear.weights).T
     np.testing.assert_allclose(from_affine.weights, transposed, rtol=1e-14)
 
 
@@ -92,8 +92,8 @@ def test_rectilinear_areas_sum_to_the_domain_area() -> None:
     rule = cell_area(RectilinearGrid(axes))
     domain = (x_edges[-1] - x_edges[0]) * (y_edges[-1] - y_edges[0])
     assert abs(float(rule.weights.sum()) - domain) < 1e-14 * domain
-    # each cell is the product of its two widths, the first axis outer
-    expected = np.outer(np.diff(x_edges), np.diff(y_edges)).ravel()
+    # each cell is the product of its two widths, one axis per grid axis
+    expected = np.outer(np.diff(x_edges), np.diff(y_edges))
     np.testing.assert_allclose(rule.weights, expected, rtol=1e-15)
 
 
@@ -101,5 +101,6 @@ def test_rectilinear_areas_sum_to_the_domain_area() -> None:
 def test_rectilinear_grid_of_any_dimension(count: int) -> None:
     axes = tuple(Axis(jnp.array([0.5, 1.5, 2.5])) for _ in range(count))
     rule = cell_area(RectilinearGrid(axes))
-    assert rule.nodes.shape == (3**count, count)
+    assert rule.weights.shape == (3,) * count
+    assert rule.nodes.shape == (*(3,) * count, count)
     assert abs(float(rule.weights.sum()) - 3.0**count) < 1e-13

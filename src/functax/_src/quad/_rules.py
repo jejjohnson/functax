@@ -1,4 +1,4 @@
-"""One-dimensional quadrature rules as data: `Rule` and its four constructors."""
+"""Quadrature rules as data: `Rule` and its four one-dimensional constructors."""
 
 from __future__ import annotations
 
@@ -38,13 +38,18 @@ class Rule(eqx.Module):
     it (integrix design decision 3). Unpacking gives ``(nodes, weights)``, so
     ``nodes, weights = gauss_legendre(n)`` keeps working.
 
+    The weights have one axis per axis of the integrand they sum over: one
+    for a 1-D rule or scattered points, two for the cells of an image
+    (`cell_area`). The nodes have the weights' shape, or that shape with a
+    trailing axis of D coordinates.
+
     Attributes:
         nodes: The nodes xₙ.
         weights: The weights wₙ, one per node.
 
     Raises:
-        ValidationError: If ``weights`` is not 1-D or ``nodes`` does not have
-            one entry per weight along its leading axis.
+        ValidationError: If ``weights`` is 0-D, or ``nodes`` does not have the
+            weights' shape, with or without a trailing coordinate axis.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -52,19 +57,27 @@ class Rule(eqx.Module):
         >>> nodes, weights = rule
         >>> weights.shape
         (2,)
+        >>> # a 2 × 3 grid of cells: weights in its shape, (x, y) per node
+        >>> grid = Rule(jnp.zeros((2, 3, 2)), jnp.ones((2, 3)))
+        >>> grid.weights.shape, grid.nodes.shape
+        ((2, 3), (2, 3, 2))
     """
 
-    nodes: Float[Array | np.ndarray, " node *dim"]
-    weights: Float[Array | np.ndarray, " node"]
+    nodes: Float[Array | np.ndarray, " node ..."]
+    weights: Float[Array | np.ndarray, " node *grid"]
 
     def __check_init__(self) -> None:
-        if self.weights.ndim != 1:
-            msg = f"'weights' must be 1-D, got shape {self.weights.shape}"
+        if self.weights.ndim == 0:
+            msg = "'weights' must have at least one axis, got shape ()"
             raise ValidationError(msg)
-        if self.nodes.ndim == 0 or self.nodes.shape[0] != self.weights.shape[0]:
+        # nodes are (*grid) scalars or (*grid, D) coordinates
+        rank = self.weights.ndim
+        leading = self.nodes.shape[:rank]
+        if leading != self.weights.shape or self.nodes.ndim > rank + 1:
             msg = (
-                f"'nodes' must have one entry per weight along its leading axis, "
-                f"got shape {self.nodes.shape} for {self.weights.shape[0]} weights"
+                f"'nodes' must have the weights' shape {self.weights.shape}, "
+                f"with or without a trailing coordinate axis, got shape "
+                f"{self.nodes.shape}"
             )
             raise ValidationError(msg)
 
