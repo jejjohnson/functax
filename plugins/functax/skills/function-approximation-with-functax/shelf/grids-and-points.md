@@ -23,6 +23,7 @@ All of them live in `functax.geometry`.
 ## Use it
 
 ```python
+import jax
 import jax.numpy as jnp
 
 from functax.geometry import (
@@ -34,6 +35,8 @@ from functax.geometry import (
     chebyshev_nodes,
     pairwise_distance,
 )
+
+jax.config.update("jax_enable_x64", True)  # an AffineGrid holds float64
 
 # a raster of 4 rows and 5 columns with 10 m pixels, north up
 raster = AffineGrid([10.0, 0.0, 500.0, 0.0, -10.0, 900.0], (4, 5))
@@ -63,6 +66,7 @@ assert nodes.shape == (9,)
 
 - A field on a grid is one flat vector in row-major order: `(rows * cols,)` on an `AffineGrid`, the product of the axis lengths on a `RectilinearGrid`. Leading batch dimensions go in front.
 - The axes of a `RectilinearGrid` come in the order of the columns of the target points: a grid of `(lon, lat)` axes is read at points whose columns are `(lon, lat)`.
+- An `AffineGrid` needs `jax_enable_x64`: map coordinates in metres lose pixels in float32, so it raises `GeometryError` without it.
 - The geometry carries no CRS. Reproject first, then build the grid in the coordinates you will interpolate in.
 - A periodic axis must span less than its period, so do not repeat the first node at the end.
 - Use `Points(metric="geodesic")` or `"chord"` for sites on the sphere; a kernel scheme then measures neighbours the same way.
