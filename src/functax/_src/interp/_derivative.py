@@ -1,10 +1,12 @@
-"""Derivative read-outs: H′ with Hₖⱼ′ = ∂ᵐφⱼ/∂x_cᵐ at the k-th target.
+"""Derivative read-outs: ∂ᵐH/∂x_dᵐ, with entries ∂ᵐφⱼ/∂x_dᵐ at the k-th target.
 
-Every row of a local stencil depends only on its own target, so the
-derivative weights are the forward-mode derivative of the weight
-construction with respect to the target coordinates, one column c at a time:
-the chain rule through the index position (1/Δ on a regular axis, the cell
-width on a rectilinear one, A⁻¹ on an affine grid) and through the policies
+Here H is the read-out, φⱼ the basis function of coefficient j, x_d the d-th
+coordinate of a target and m ≥ 1 the order. Every row of a local stencil
+depends only on its own target, so the derivative weights are the
+forward-mode derivative of the weight construction with respect to the target
+coordinates, one coordinate x_d at a time: the chain rule through the index
+position (1/Δ on a regular axis of spacing Δ, one over the cell width on a
+rectilinear one, A⁻¹ on an affine grid of matrix A) and through the policies
 comes with it. The taps are piecewise constant in x, so they stay those of
 the plan.
 """
@@ -53,6 +55,20 @@ class ReadGeometry(eqx.Module):
     Each subclass holds the (M, D) target coordinates as ``coordinates``
     (declared there rather than here, which keeps each subclass's field
     order, and so its positional constructor).
+
+    Examples:
+        A plan from a local scheme keeps its geometry, and rebuilds its own
+        weights from it:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis, Points
+        >>> from functax.interp import Linear, ReadGeometry
+        >>> plan = Linear().plan(Axis(jnp.arange(4.0)), Points(jnp.array([[1.25]])))
+        >>> isinstance(plan.local, ReadGeometry)
+        True
+        >>> weights = plan.local.weights(plan.local.coordinates, plan.policies)
+        >>> bool(jnp.allclose(weights, plan.read.weights))
+        True
     """
 
     @abc.abstractmethod
@@ -66,6 +82,33 @@ class LocalGeometry(ReadGeometry):
     """What a local plan was built from: the source, the target coordinates, the bases.
 
     Kept on the `Plan`, so `Plan.derivative` can rebuild the weights.
+
+    Args:
+        source: The source geometry (an `Axis` or a grid).
+        coordinates: X_*, the (M, D) target coordinates in the source's frame.
+        bases: One `Basis` per source axis.
+
+    Examples:
+        The weights of a linear read-out are (1 − t, t):
+
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis
+        >>> from functax.interp import LinearBasis, LocalGeometry, Policies
+        >>> coordinates = jnp.array([[0.25], [2.5]])
+        >>> geometry = LocalGeometry(
+        ...     Axis(jnp.arange(4.0)), coordinates, (LinearBasis(),)
+        ... )
+        >>> geometry.weights(coordinates, Policies()).tolist()
+        [[0.75, 0.25], [0.5, 0.5]]
+
+        Their derivative in the target coordinate is (−1, 1) on unit cells:
+
+        >>> import jax
+        >>> def first_weights(x):
+        ...     return geometry.weights(x, Policies())
+        >>> _, slope = jax.jvp(first_weights, (coordinates,), (jnp.ones((2, 1)),))
+        >>> slope.tolist()
+        [[-1.0, 1.0], [-1.0, 1.0]]
     """
 
     source: Any
@@ -100,13 +143,20 @@ def derivative_stencil(
     axis: int,
     order: int,
 ) -> Stencil:
-    """The stencil of ∂ᵐ/∂x_cᵐ, with c = ``axis`` and m = ``order``.
+    """The stencil of ∂ᵐ/∂x_dᵐ, with d = ``axis`` and m = ``order``.
+
+    Algorithm:
+        1. Check ``axis`` and ``order``; relax ``outside="raise"`` to
+           ``"nan"``, since the plan already checked its targets.
+        2. Take the weights w(X_*) as a function of the target coordinates.
+        3. Apply forward mode m times along the tangent e_d of every target.
+        4. Keep the plan's taps and validity, with the derivative weights.
 
     Args:
         geometry: What the plan's stencil was built from.
         stencil: The plan's own stencil, whose taps and validity are kept.
         policies: The plan's policies.
-        axis: c, the target coordinate to differentiate along (a column of
+        axis: d, the target coordinate to differentiate along (a column of
             ``Points.xy``; negative counts from the end).
         order: m ≥ 1.
 
@@ -118,7 +168,8 @@ def derivative_stencil(
             positive integer.
     """
     # every subclass declares the field; ReadGeometry itself does not (see it)
-    coordinates: jax.Array = geometry.coordinates  # ty: ignore[unresolved-attribute]
+    coordinates: Float[Array, "target dim"]
+    coordinates = geometry.coordinates  # ty: ignore[unresolved-attribute]
     n_coordinates = coordinates.shape[1]
     if isinstance(axis, bool) or not isinstance(axis, int):
         msg = f"'axis' must be an integer, got {axis!r}"
@@ -135,12 +186,14 @@ def derivative_stencil(
     if policies.outside == "raise":
         policies = dataclasses.replace(policies, outside="nan")
 
-    def weights(coordinates: jax.Array) -> jax.Array:
+    def weights(coordinates: Float[Array, "target dim"]) -> Float[Array, "target tap"]:
         return geometry.weights(coordinates, policies)
 
-    # ẋ = e_c for every target: one coordinate moves, the others stay
-    tangent = jnp.zeros_like(coordinates).at[:, column].set(1.0)
+    # v = e_d for every target: one coordinate moves, the others stay
+    zeros = jnp.zeros_like(coordinates)
+    tangent = zeros.at[:, column].set(1.0)
     derivative: Callable[[jax.Array], jax.Array] = weights
+    # ∂ᵐw/∂x_dᵐ, one forward-mode pass per order
     for _ in range(order):
         derivative = _directional(derivative, tangent)
     derivative_weights = derivative(coordinates)
@@ -154,11 +207,14 @@ def derivative_stencil(
 
 
 def _directional(
-    function: Callable[[jax.Array], jax.Array], tangent: jax.Array
+    function: Callable[[jax.Array], jax.Array], tangent: Float[Array, "target dim"]
 ) -> Callable[[jax.Array], jax.Array]:
-    """x ↦ ∂f(x)/∂ε at ε = 0 along x + ε ẋ, by forward mode."""
+    """x ↦ J_f(x) v, the derivative of f along the tangent v, by forward mode."""
 
-    def derivative(coordinates: jax.Array) -> jax.Array:
+    def derivative(
+        coordinates: Float[Array, "target dim"],
+    ) -> Float[Array, "target tap"]:
+        # J_f(x) v
         _, slope = jax.jvp(function, (coordinates,), (tangent,))
         return slope
 

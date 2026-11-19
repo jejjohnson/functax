@@ -59,7 +59,7 @@ current).
 |---|---|---|
 | `fourier_basis` | function | The tensor-product Laplacian eigenpairs on the box [−L, L]^D. |
 | `fourier_basis_1d` | function | The first ``num_basis`` Laplacian eigenfunctions on [−L, L]. |
-| `fourier_eigenvalues` | function | The eigenvalues of `fourier_basis` alone, λ_(j₁, …, j_D) = ∑_d λ_{j_d}. |
+| `fourier_eigenvalues` | function | The eigenvalues of `fourier_basis` alone, λ_{j₁, …, j_D} = ∑_d λ_{j_d}. |
 | `fourier_eigenvalues_1d` | function | The eigenvalues λ_j = (jπ/(2L))² of `fourier_basis_1d`, j = 1, …, num_basis. |
 
 ## `functax.basis.local`
@@ -77,8 +77,8 @@ current).
 |---|---|---|
 | `rbf_basis` | function | A placeable radial basis at given centres and widths. |
 | `spherical_rbf_basis` | function | A placeable radial basis on the unit sphere, in geodesic distance. |
-| `wendland_c2` | function | The Wendland C² kernel K(r) = (1 − r)₊⁴ (4r + 1). |
-| `wendland_c4` | function | The Wendland C⁴ kernel K(r) = (1 − r)₊⁶ (35r² + 18r + 3)/3. |
+| `wendland_c2` | function | The Wendland C² kernel ψ(r) = (1 − r)₊⁴ (4r + 1). |
+| `wendland_c4` | function | The Wendland C⁴ kernel ψ(r) = (1 − r)₊⁶ (35r² + 18r + 3)/3. |
 
 ### Orthonormal discrete-wavelet-transform (DWT) basis matrices. (`functax._src.basis._wavelet`)
 
@@ -91,10 +91,10 @@ current).
 
 | Name | Kind | What it does |
 |---|---|---|
-| `associated_legendre` | function | The associated Legendre functions P_l^m(t) for 0 ≤ m ≤ l ≤ l_max. |
-| `associated_legendre_indices` | function | The (l, m) of each column of `associated_legendre`. |
-| `legendre_polynomials` | function | The Legendre polynomials P₀(t), …, P_{l_max}(t). |
-| `legendre_series` | function | The Legendre series f(x) = ∑ₗ cₗ Pₗ(x), l = 0, …, L, evaluated elementwise. |
+| `associated_legendre` | function | The associated Legendre functions P_ℓᵐ(t) for 0 ≤ m ≤ ℓ ≤ ℓ_max. |
+| `associated_legendre_indices` | function | The (ℓ, m) of each column of `associated_legendre`. |
+| `legendre_polynomials` | function | The Legendre polynomials P₀(t), …, P_{ℓ_max}(t). |
+| `legendre_series` | function | The Legendre series f(x) = ∑_ℓ c_ℓ P_ℓ(x), ℓ = 0, …, ℓ_max, elementwise. |
 
 ## `functax.basis.slepian`
 
@@ -103,9 +103,9 @@ current).
 | Name | Kind | What it does |
 |---|---|---|
 | `SlepianCapBasis` | class | A Slepian cap eigendecomposition in the real spherical-harmonic basis. |
-| `shannon_number` | function | The Shannon number N = (l_max + 1)² A / (4π), the count of concentrated modes. |
+| `shannon_number` | function | The Shannon number N = (ℓ_max + 1)² A / (4π), the count of concentrated modes. |
 | `slepian_cap_basis` | function | A Slepian basis for an axisymmetric spherical cap. |
-| `slepian_cap_eigh_per_m` | function | The cap Slepian eigenproblem D g = λ g, solved one azimuthal block at a time. |
+| `slepian_cap_eigh_per_m` | function | The cap Slepian eigenproblem D c = λ c, solved one azimuthal block at a time. |
 | `slepian_concentration_matrix` | function | The concentration matrix D_ij = ∫_cap Y_i Y_j dΩ of a north-pole cap. |
 
 ### Slepian bases for general regions of the sphere, and a spherical polygon test. (`functax._src.basis._slepian_region`)
@@ -132,18 +132,18 @@ current).
 |---|---|---|
 | `shell_basis` | function | Spherical harmonics times radial polynomials on a spherical shell. |
 
-### Real spherical harmonics Y_lm on the unit sphere, pole-free to high degree. (`functax._src.basis._spherical_harmonics`)
+### Real spherical harmonics Y_ℓm on the unit sphere, pole-free to high degree. (`functax._src.basis._spherical_harmonics`)
 
 | Name | Kind | What it does |
 |---|---|---|
-| `harmonic_degrees` | function | The degree l of each column of `real_spherical_harmonics`. |
-| `real_spherical_harmonics` | function | The real spherical harmonics Y_lm up to degree ``l_max``. |
+| `harmonic_degrees` | function | The degree ℓ of each column of `real_spherical_harmonics`. |
+| `real_spherical_harmonics` | function | The real spherical harmonics Y_ℓm up to degree ``l_max``. |
 
 ### Vector spherical harmonics, a basis for tangent vector fields on the sphere. (`functax._src.basis._vector_harmonics`)
 
 | Name | Kind | What it does |
 |---|---|---|
-| `vector_spherical_harmonics` | function | The gradient and toroidal vector spherical harmonics for 1 ≤ l ≤ l_max. |
+| `vector_spherical_harmonics` | function | The gradient and toroidal vector spherical harmonics for 1 ≤ ℓ ≤ ℓ_max. |
 
 ## `functax.basis.vector`
 
@@ -154,21 +154,21 @@ current).
 
 ## `functax.diffops`
 
-### Derivatives of Euclidean fields of x ∈ ℝ^D, by automatic differentiation. (`functax._src.diffops._fields`)
+### Derivatives of Euclidean fields of x ∈ ℝᴰ, by automatic differentiation. (`functax._src.diffops._fields`)
 
 | Name | Kind | What it does |
 |---|---|---|
-| `curl2d` | function | The scalar curl (vorticity) ∂_x u_y − ∂_y u_x of a planar field. |
+| `curl2d` | function | The scalar curl (vorticity) ∂u₁/∂x₀ − ∂u₀/∂x₁ of a planar field. |
 | `divergence` | function | The divergence ∇ · u = ∑_d ∂u_d/∂x_d of a vector field. |
 | `gradient` | function | The gradient ∇f of a scalar field. |
-| `jacobian_field` | function | The Jacobian J_kd = ∂u_k/∂x_d of a vector field. |
-| `laplacian` | function | The Laplacian Δf = ∑_d ∂²f/∂x_d² of a scalar field. |
+| `jacobian_field` | function | The Jacobian [J_u]_kd = ∂u_k/∂x_d of a vector field. |
+| `laplacian` | function | The Laplacian ∇²f = ∑_d ∂²f/∂x_d² of a scalar field. |
 
 ### Derivatives of fields on the unit sphere: surface gradient and Laplace–Beltrami. (`functax._src.diffops._sphere`)
 
 | Name | Kind | What it does |
 |---|---|---|
-| `laplace_beltrami` | function | The Laplace–Beltrami operator Δ_S f of a field on the unit sphere. |
+| `laplace_beltrami` | function | The Laplace–Beltrami operator ∇²_S f of a field on the unit sphere. |
 | `surface_grad` | function | The surface gradient ∇_S f of a field on the unit sphere. |
 | `surface_grad_enu` | function | The east and north components of the surface gradient, at a (λ, φ). |
 
@@ -194,13 +194,13 @@ current).
 
 | Name | Kind | What it does |
 |---|---|---|
-| `cartesian_to_tangent` | function | 3-D vectors to their east and north components (v · ê, v · n̂). |
+| `cartesian_to_tangent` | function | 3-D vectors w to their east and north components (w · e_east, w · e_north). |
 | `ecef_to_lonlat` | function | Earth-centred, Earth-fixed coordinates to geodetic (λ, φ) and height. |
 | `enu_basis` | function | The local east, north and up unit vectors at each point. |
 | `local_tangent_plane` | function | Project points onto the tangent plane at ``origin``, as (east, north). |
 | `lonlat_to_ecef` | function | Geodetic (λ, φ) and height to Earth-centred, Earth-fixed coordinates. |
-| `rotation_to_pole` | function | The rotation R with R û(centre) = (0, 0, 1). |
-| `tangent_to_cartesian` | function | East and north components (u, v) to the 3-D tangent vector u ê + v n̂. |
+| `rotation_to_pole` | function | The rotation Q with Q e_up(centre) = (0, 0, 1). |
+| `tangent_to_cartesian` | function | East and north components (u, v) to the tangent vector u e_east + v e_north. |
 
 ### Triangle meshes: the icosphere and the lumped vertex areas of any mesh. (`functax._src.geometry._mesh`)
 
@@ -225,7 +225,7 @@ current).
 | `spherical_polygon_area` | function | The signed area of a spherical polygon with great-circle edges. |
 | `unit_to_lonlat` | function | Longitude and latitude of vectors on (or off) the unit sphere. |
 
-### Point sets on the unit sphere with quadrature weights for ∫_{S²} f dΩ. (`functax._src.geometry._sphere_grids`)
+### Point sets on the unit sphere with quadrature weights for ∫_{S²} f dA. (`functax._src.geometry._sphere_grids`)
 
 | Name | Kind | What it does |
 |---|---|---|
@@ -253,7 +253,7 @@ current).
 |---|---|---|
 | `Binning` | class | Aggregate scattered samples into grid cells: Hᵀ y, normalised for the mean. |
 | `BinningPlan` | class | A plan from N samples to M cells: the sums, means or counts per cell. |
-| `TransposedStencil` | class | f̂ = diag(s) Hᵀ y: a sampling stencil H used backwards, scaled per cell. |
+| `TransposedStencil` | class | f̂ = diag(w) Hᵀ y: a sampling stencil H used backwards, scaled per cell. |
 
 ### Local one-dimensional bases: the taps a target reads on an axis, and their weights. (`functax._src.interp._bases`)
 
@@ -284,21 +284,21 @@ current).
 |---|---|---|
 | `Conservative` | class | First-order conservative remapping: each target cell's area-weighted mean. |
 
-### Posterior covariances Σ* of a field at the targets of a Gaussian plan. (`functax._src.interp._covariance`)
+### Posterior covariances Σ_{*∣y} of a field at the targets of a Gaussian plan. (`functax._src.interp._covariance`)
 
 | Name | Kind | What it does |
 |---|---|---|
 | `BrownianBridge` | class | The Brownian bridge between the knots of one axis, cell by cell. |
-| `KernelCovariance` | class | Σ*(x, x′) = k(x, x′) − h(x)ᵀ A⁻¹ h(x′), the posterior covariance of a kernel fit. |
-| `PosteriorCovariance` | class | Σ*, the (M, M) posterior covariance of the field at M targets. |
+| `KernelCovariance` | class | Σ_{*∣y} = K_** − H A⁻¹ Hᵀ, the posterior covariance of a kernel fit. |
+| `PosteriorCovariance` | class | Σ_{*∣y}, the (M, M) posterior covariance of the field at M targets. |
 
 ### Locate targets on a curvilinear grid: a nearest-cell search, then Newton steps. (`functax._src.interp._curvilinear`)
 
 | Name | Kind | What it does |
 |---|---|---|
-| `locate_curvilinear` | function | The cell (r, c), the offset (s, t) and the inside flag of targets on a swath. |
+| `locate_curvilinear` | function | The cell (i, j), the offset (s, t) and the inside flag of targets on a swath. |
 
-### Derivative read-outs: H′ with Hₖⱼ′ = ∂ᵐφⱼ/∂x_cᵐ at the k-th target. (`functax._src.interp._derivative`)
+### Derivative read-outs: ∂ᵐH/∂x_dᵐ, with entries ∂ᵐφⱼ/∂x_dᵐ at the k-th target. (`functax._src.interp._derivative`)
 
 | Name | Kind | What it does |
 |---|---|---|
@@ -317,13 +317,13 @@ current).
 
 | Name | Kind | What it does |
 |---|---|---|
-| `GaussianPlan` | class | A plan read as a Gaussian posterior: f(X*) ∣ y ~ 𝒩(H 𝒮(y), Σ*). |
+| `GaussianPlan` | class | A plan read as a Gaussian posterior: f(X_*) ∣ y ~ 𝒩(H 𝒮(y), Σ_{*∣y}). |
 
 ### Cubic Hermite read-out on one axis, from values and slopes at the knots. (`functax._src.interp._hermite`)
 
 | Name | Kind | What it does |
 |---|---|---|
-| `HermiteFit` | class | [y; m] from y: the values in increasing-knot order and their slopes. |
+| `HermiteFit` | class | [y; d] from y: the values in increasing-knot order and their slopes. |
 | `HermiteGeometry` | class | What a 1-D series plan's Hermite read-out was built from. |
 
 ### Interpolants: a fitted field f̂ that is read at targets chosen inside the trace. (`functax._src.interp._interpolant`)
@@ -337,7 +337,7 @@ current).
 | Name | Kind | What it does |
 |---|---|---|
 | `Kernel` | class | k(x, x′): the (M, N) cross-kernel of M targets and N sources. |
-| `Polyharmonic` | class | The polyharmonic spline φ(r) = ±rᵏ for odd k, ±rᵏ log r for even k. |
+| `Polyharmonic` | class | The polyharmonic spline φ(r) = ±rᵖ for odd p, ±rᵖ log r for even p. |
 | `RadialKernel` | class | k(x, x′) = φ(‖x − x′‖), Euclidean in the coordinates as given. |
 | `Wendland` | class | The compact Wendland kernel φ(r) = ψ(r/ρ), zero for r ≥ ρ. |
 
@@ -368,13 +368,13 @@ current).
 |---|---|---|
 | `overlap_weights_1d` | function | The (M, N) overlap lengths \|cⱼ ∩ Cᵢ\| of every target and source cell. |
 
-### Plans: a scheme frozen for one source and one target, f̂(X*) = H 𝒮(y). (`functax._src.interp._plan`)
+### Plans: a scheme frozen for one source and one target, f̂(X_*) = H 𝒮(y). (`functax._src.interp._plan`)
 
 | Name | Kind | What it does |
 |---|---|---|
 | `ComposedPlan` | class | ``outer @ inner``: H_outer H_inner 𝒮_inner, one plan with the product stencil. |
-| `DerivativePlan` | class | A plan whose read-out holds basis derivatives: ∂ᵐf̂/∂x_cᵐ at the targets. |
-| `Plan` | class | f̂(X*) = H 𝒮(y), fitted once, applied to many fields. |
+| `DerivativePlan` | class | A plan whose read-out holds basis derivatives: ∂ᵐf̂/∂x_dᵐ at the targets. |
+| `Plan` | class | f̂(X_*) = H 𝒮(y), fitted once, applied to many fields. |
 | `WindowedPlan` | class | ``plan[window]``: the rows of a grid target inside a window, sources unchanged. |
 
 ### The named rules for targets off the domain, missing samples and edge stencils. (`functax._src.interp._policies`)
@@ -394,7 +394,7 @@ current).
 
 | Name | Kind | What it does |
 |---|---|---|
-| `KernelReadout` | class | The dense read-out of a kernel scheme: f̂(X*) = K* c + P* b. |
+| `KernelReadout` | class | The dense read-out of a kernel scheme: f̂(X_*) = K_*X c + P_* b. |
 | `RBF` | class | Radial basis function interpolation: f̂(x) = ∑ⱼ cⱼ k(x, xⱼ) + ∑ₚ bₚ pₚ(x). |
 
 ### Schemes: configuration only, frozen into a `Plan` for one source and one target. (`functax._src.interp._schemes`)
@@ -427,17 +427,17 @@ current).
 | Name | Kind | What it does |
 |---|---|---|
 | `Chebyshev` | class | The Chebyshev series of samples on Chebyshev nodes, read at arbitrary points. |
-| `ChebyshevFit` | class | c = P C y: the first K Chebyshev coefficients of samples on Chebyshev nodes. |
+| `ChebyshevFit` | class | c = Π C y: the first D_c Chebyshev coefficients of samples on Chebyshev nodes. |
 | `ChebyshevInterpolant` | class | A fitted Chebyshev series f̂(x) = ∑ₖ cₖ Tₖ(ξ(x)), read at targets by `clenshaw`. |
 | `Fourier` | class | Band-limited Fourier resampling from N to M nodes of one periodic axis. |
-| `FourierReadout` | class | H y = (M/N) Re F⁻¹_M[S F_N y], band-limited resampling by two FFTs. |
-| `clenshaw` | function | The Chebyshev series f(x) = ∑ₖ aₖ Tₖ(ξ(x)) by Clenshaw's recurrence. |
+| `FourierReadout` | class | H y = (M/N) Re(F_M⁻¹ S F_N y), band-limited resampling by two FFTs. |
+| `clenshaw` | function | The Chebyshev series f(x) = ∑ₖ cₖ Tₖ(ξ(x)) by Clenshaw's recurrence. |
 
 ### The sparse read-out H: S taps per target, applied by gather and by scatter-add. (`functax._src.interp._stencil`)
 
 | Name | Kind | What it does |
 |---|---|---|
-| `Readout` | class | c → f̂(X*): the read-out of a plan, from coefficients to target values. |
+| `Readout` | class | c ↦ f̂(X_*): the read-out of a plan, from coefficients to target values. |
 | `Stencil` | class | A sparse read-out H: row k reads S source values at flat indices. |
 
 ### Tensor-product stencils: one local basis per axis, H = H₁ ⊗ … ⊗ H_D. (`functax._src.interp._tensor`)
@@ -458,20 +458,20 @@ current).
 
 | Name | Kind | What it does |
 |---|---|---|
-| `fill_gaps` | function | The image with its holes filled: Δx = 0 (Laplace) or Δ²x = 0 (biharmonic). |
+| `fill_gaps` | function | The image with its holes filled: ∇²x = 0 (Laplace) or ∇⁴x = 0 (biharmonic). |
 
 ### Linear fits onto a basis: ridge least squares and Galerkin projection. (`functax._src.project._linear`)
 
 | Name | Kind | What it does |
 |---|---|---|
 | `galerkin` | function | c = (ΦᵀWΦ)⁻¹ ΦᵀW y, the Galerkin projection with quadrature weights W. |
-| `least_squares` | function | c = argmin ‖Φc − y‖² + α‖c‖², the ridge least-squares coefficients. |
+| `least_squares` | function | c = argmin_c ‖Φc − y‖₂² + β‖c‖₂², the ridge least-squares coefficients. |
 
-### The variational fit: x = (HᵀR⁻¹H + λLᵀL)⁻¹ HᵀR⁻¹y, matrix-free through lineax. (`functax._src.project._variational`)
+### The variational fit: c = (HᵀΛ_εH + βLᵀL)⁻¹ HᵀΛ_εy, matrix-free through lineax. (`functax._src.project._variational`)
 
 | Name | Kind | What it does |
 |---|---|---|
-| `Variational` | class | x = argmin (Hx − y)ᵀR⁻¹(Hx − y) + λ‖Lx‖², the variational smoothing fit. |
+| `Variational` | class | c = argmin_c (Hc − y)ᵀΛ_ε(Hc − y) + β‖Lc‖₂², the variational smoothing fit. |
 
 ## `functax.quad`
 
@@ -485,7 +485,7 @@ current).
 
 | Name | Kind | What it does |
 |---|---|---|
-| `CurveRule` | class | A rule on a curve L: ∫_L c dℓ ≈ ∑ₖ Δsₖ c(xₖ), with the unit normal nₖ. |
+| `CurveRule` | class | A rule on a curve L: ∫_L g ds ≈ ∑ₖ Δsₖ g(xₖ), with the unit normal nₖ. |
 | `polyline` | function | A rule along a polyline: n nodes per segment, arc-length weights and normals. |
 
 ### Quadrature rules as data: `Rule` and its four one-dimensional constructors. (`functax._src.quad._rules`)
@@ -502,10 +502,10 @@ current).
 
 | Name | Kind | What it does |
 |---|---|---|
-| `SphereRule` | class | A rule on a sphere of radius a: ∫_{S²} g dA ≈ ∑_q w_q g(u_q). |
-| `sphere_fibonacci` | function | The Fibonacci rule: n near-uniform points of equal weight 4πa²/n. |
+| `SphereRule` | class | A rule on a sphere of radius R: ∫_{S²} g dA ≈ ∑_q w_q g(u_q). |
+| `sphere_fibonacci` | function | The Fibonacci rule: n near-uniform points of equal weight 4πR²/n. |
 | `sphere_gauss_legendre` | function | The Gauss–Legendre × uniform-longitude rule on the sphere, exact to a degree. |
-| `sphere_healpix` | function | The HEALPix rule: 12 N_side² pixel centres of equal weight 4πa²/Q. |
+| `sphere_healpix` | function | The HEALPix rule: 12 N_side² pixel centres of equal weight 4πR²/Q. |
 | `sphere_latlon` | function | The cell-centred lon/lat rule: equiangular cells weighted by their exact areas. |
 
 ## `functax.transform`

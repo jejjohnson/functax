@@ -21,6 +21,7 @@ from typing import Any
 import equinox as eqx
 import jax
 import numpy as np
+from jaxtyping import Shaped
 
 from functax import __version__
 from functax._src.interp._config import encode_json_value
@@ -34,7 +35,9 @@ __all__ = [
 ]
 
 
-def _describe(value: Any, name: str, arrays: list[np.ndarray]) -> Any:
+def _describe(
+    value: Any, name: str, arrays: list[Shaped[np.ndarray, "*_shape"]]
+) -> Any:
     """``value`` as strict JSON, with each array replaced by its dtype and shape.
 
     The array itself is appended to ``arrays`` (C-contiguous, little-endian),
@@ -82,14 +85,21 @@ def plan_key(
 ) -> str:
     """sha256 hex of the scheme, the policies and both geometries' bytes.
 
-    key = sha256(J ‖ 0x00 ‖ b₁ ‖ … ‖ b_K), with J the stable JSON (sorted
-    keys, floats by ``repr``) of the functax version, the scheme's and the
-    policies' configs, and each geometry's class and fields, every array
-    there written as its dtype and shape; b₁, …, b_K are those arrays'
-    C-contiguous little-endian bytes in the same order. Equal inputs give
+    key = sha256(s_json + 0x00 + b₁ + … + b_N), the bytes concatenated, with
+    s_json the stable JSON (sorted keys, floats by ``repr``) of the functax
+    version, the scheme's and the policies' configs, and each geometry's
+    class and fields, every array there written as its dtype and shape;
+    b₁, …, b_N are those N arrays' C-contiguous little-endian bytes in the
+    same order. Equal inputs give
     the same key in any process; a change of one ULP in any coordinate, of
     a dtype, a shape, a static field (period, epoch, metric) or the functax
     version gives another. Runs on the host.
+
+    Algorithm:
+        1. Describe the version, the configs and both geometries as strict
+           JSON, replacing each array by its dtype and shape and keeping its
+           bytes aside.
+        2. Hash the sorted-key JSON, a zero byte, then the arrays' bytes.
 
     Args:
         scheme: The scheme the plan is built with.
@@ -134,7 +144,7 @@ def plan_key(
                 f"{type(geometry).__name__}"
             )
             raise ValidationError(msg)
-    arrays: list[np.ndarray] = []
+    arrays: list[Shaped[np.ndarray, "*_shape"]] = []
     description = {
         "functax": __version__,
         "scheme": scheme.get_config(),

@@ -44,9 +44,23 @@ def encode_json_value(value: Any, name: str) -> Any:
     nested config. A lineax solver becomes the config of its fields
     (``{"class": "Cholesky"}``).
 
+    Args:
+        value: The field value to encode.
+        name: The field's name, for the message.
+
+    Returns:
+        The strict-JSON value.
+
     Raises:
         ValidationError: If ``value`` (named ``name`` in the message) has no
             strict-JSON form, such as an array or a callable.
+
+    Examples:
+        >>> from functax._src.interp._config import encode_json_value
+        >>> encode_json_value((1, 2.5, None), "pair")
+        [1, 2.5, None]
+        >>> encode_json_value(float("-inf"), "fill_value")
+        {'float': '-inf'}
     """
     if value is None or isinstance(value, bool | int | str):
         return value
@@ -110,8 +124,20 @@ def _decode(
 def config_of(module: eqx.Module) -> dict[str, Any]:
     """``{"class": name, field: value, …}`` for every constructor field of ``module``.
 
+    Args:
+        module: The module whose static fields are written.
+
+    Returns:
+        The config, a dict of strict-JSON values.
+
     Raises:
         ValidationError: If a field has no strict-JSON form.
+
+    Examples:
+        >>> from functax._src.interp._config import config_of
+        >>> from functax.interp import Policies
+        >>> config_of(Policies(outside="clamp"))["outside"]
+        'clamp'
     """
     config: dict[str, Any] = {"class": type(module).__name__}
     for field in dataclasses.fields(module):
@@ -154,6 +180,9 @@ def build_from_config(
         expected: The class the result must be an instance of.
         nested: Further roots whose classes a nested config may name.
 
+    Returns:
+        The module, an instance of ``expected``.
+
     Raises:
         ValidationError: If ``config`` is not a dict with a ``"class"`` name,
             names no loaded class, or more than one, or a class other than
@@ -180,6 +209,7 @@ def build_from_config(
     if unknown:
         msg = f"'config' has keys {unknown} that {name} does not take"
         raise ValidationError(msg)
+    # a field without a default must be in the config
     missing = sorted(
         field_name
         for field_name, field in fields.items()

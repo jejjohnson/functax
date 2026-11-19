@@ -2,8 +2,9 @@
 
 A B-spline of order k ≥ 2 does not pass through its samples, so the
 coefficients come from inverting the banded matrix B of B-spline values at the
-knots. B⁻¹ factors into a gain λ = ∏ₚ (1 − zₚ)(1 − 1/zₚ) and, for each pole
-zₚ, a causal and an anticausal first-order recursion,
+knots. On an axis of N samples y₀, …, y_{N−1}, B⁻¹ factors into the gain
+∏ₚ (1 − zₚ)(1 − 1/zₚ) and, for each pole z = zₚ, a causal and an anticausal
+first-order recursion over i,
 
     c⁺ᵢ = yᵢ + z c⁺ᵢ₋₁  and  c⁻ᵢ = z (c⁻ᵢ₊₁ − c⁺ᵢ),
 
@@ -49,10 +50,30 @@ def spline_poles(order: int) -> tuple[float, ...]:
         Unser, M. (1999). Splines: a perfect fit for signal and image
         processing. IEEE Signal Processing Magazine 16(6), 22-38.
 
+    Args:
+        order: k, the B-spline order, from 0 to 5.
+
+    Returns:
+        The poles, each in (−1, 0).
+
+    Raises:
+        ValidationError: If ``order`` is not an integer in [0, 5].
+
     Examples:
+        The cubic B-spline has the one pole √3 − 2:
+
+        >>> import math
         >>> from functax.interp import spline_poles
-        >>> [round(z, 12) for z in spline_poles(3)]
-        [-0.267949192431]
+        >>> (pole,) = spline_poles(3)
+        >>> math.isclose(pole, math.sqrt(3.0) - 2.0)
+        True
+
+        Orders 4 and 5 have two poles, inside the unit circle; 0 and 1 none:
+
+        >>> [len(spline_poles(k)) for k in range(6)]
+        [0, 0, 1, 1, 2, 2]
+        >>> all(-1.0 < z < 0.0 for z in spline_poles(5))
+        True
     """
     if order in (0, 1):
         return ()
@@ -74,77 +95,118 @@ def spline_poles(order: int) -> tuple[float, ...]:
     raise ValidationError(msg)
 
 
-def _causal_start_mirror(samples: jax.Array, pole: float) -> jax.Array:
+def _causal_start_mirror(
+    samples: Float[Array, "*batch node"], pole: float
+) -> Float[Array, "*batch"]:
     """c⁺₀ for a whole-sample-symmetric signal of period 2(N − 1)."""
-    n = samples.shape[-1]
+    n_nodes = samples.shape[-1]
     # zᴺ⁻¹
-    end_power = pole ** (n - 1)
+    end_power = pole ** (n_nodes - 1)
+    # y₀ + zᴺ⁻¹ y_{N−1}
     total = samples[..., 0] + end_power * samples[..., -1]
-    if n > 2:
+    if n_nodes > 2:
+        # zⁱ for i = 1, …, N − 2
+        exponents = jnp.arange(1, n_nodes - 1)
+        powers = jnp.asarray(pole**exponents, dtype=samples.dtype)
+        # yᵢ + zᴺ⁻¹ y_{N−1−i}
+        interior = samples[..., 1 : n_nodes - 1]
+        mirrored = samples[..., n_nodes - 2 : 0 : -1]
+        middle = interior + end_power * mirrored
         # ∑ᵢ₌₁^{N−2} zⁱ (yᵢ + zᴺ⁻¹ y_{N−1−i})
-        powers = jnp.asarray(pole ** jnp.arange(1, n - 1), dtype=samples.dtype)
-        middle = samples[..., 1 : n - 1] + end_power * samples[..., n - 2 : 0 : -1]
-        total = total + einx.dot("... i, i -> ...", middle, powers)
+        middle_sum = einx.dot("... node, node -> ...", middle, powers)
+        total = total + middle_sum
     # ÷ (1 − z^{2(N−1)})
     return total / (1.0 - end_power * end_power)
 
 
-def _anticausal_start_mirror(causal: jax.Array, pole: float) -> jax.Array:
+def _anticausal_start_mirror(
+    causal: Float[Array, "*batch node"], pole: float
+) -> Float[Array, "*batch"]:
     """c⁻_{N−1} = (z c⁺_{N−2} + c⁺_{N−1}) z / (z² − 1)."""
+    # c⁻_{N−1} = (z c⁺_{N−2} + c⁺_{N−1}) z / (z² − 1)
     return (pole * causal[..., -2] + causal[..., -1]) * pole / (pole * pole - 1.0)
 
 
-def _causal_start_wrap(samples: jax.Array, pole: float) -> jax.Array:
-    """c⁺₀ = ∑ₖ₌₀^{N−1} zᵏ y_{(−k) mod N} / (1 − zᴺ) for a periodic signal."""
-    n = samples.shape[-1]
-    powers = jnp.asarray(pole ** jnp.arange(n), dtype=samples.dtype)
-    # y₀, y_{N−1}, y_{N−2}, …, y₁: index (−k) mod N
-    backwards = samples[..., jnp.mod(-jnp.arange(n), n)]
-    total = einx.dot("... i, i -> ...", backwards, powers)
-    return total / (1.0 - pole**n)
+def _causal_start_wrap(
+    samples: Float[Array, "*batch node"], pole: float
+) -> Float[Array, "*batch"]:
+    """c⁺₀ = ∑ⱼ₌₀^{N−1} zʲ y_{(−j) mod N} / (1 − zᴺ) for a periodic signal."""
+    n_nodes = samples.shape[-1]
+    # zʲ for j = 0, …, N − 1
+    exponents = jnp.arange(n_nodes)
+    powers = jnp.asarray(pole**exponents, dtype=samples.dtype)
+    # y₀, y_{N−1}, y_{N−2}, …, y₁: index (−j) mod N
+    backwards_index = jnp.mod(-exponents, n_nodes)
+    backwards = samples[..., backwards_index]
+    # ∑ⱼ zʲ y_{(−j) mod N}
+    total = einx.dot("... node, node -> ...", backwards, powers)
+    # ÷ (1 − zᴺ)
+    return total / (1.0 - pole**n_nodes)
 
 
-def _anticausal_start_wrap(causal: jax.Array, pole: float) -> jax.Array:
-    """c⁻_{N−1} = −∑ₖ₌₀^{N−1} z^{k+1} c⁺_{(N−1+k) mod N} / (1 − zᴺ)."""
-    n = causal.shape[-1]
-    powers = jnp.asarray(pole ** jnp.arange(1, n + 1), dtype=causal.dtype)
-    # c⁺_{N−1}, c⁺₀, c⁺₁, …, c⁺_{N−2}: index (N − 1 + k) mod N
-    forwards = causal[..., jnp.mod(jnp.arange(n) + n - 1, n)]
-    total = einx.dot("... i, i -> ...", forwards, powers)
-    return -total / (1.0 - pole**n)
+def _anticausal_start_wrap(
+    causal: Float[Array, "*batch node"], pole: float
+) -> Float[Array, "*batch"]:
+    """c⁻_{N−1} = −∑ⱼ₌₀^{N−1} z^{j+1} c⁺_{(N−1+j) mod N} / (1 − zᴺ)."""
+    n_nodes = causal.shape[-1]
+    # z^{j+1} for j = 0, …, N − 1
+    exponents = jnp.arange(1, n_nodes + 1)
+    powers = jnp.asarray(pole**exponents, dtype=causal.dtype)
+    # c⁺_{N−1}, c⁺₀, c⁺₁, …, c⁺_{N−2}: index (N − 1 + j) mod N
+    shifted_index = jnp.arange(n_nodes) + n_nodes - 1
+    forwards_index = jnp.mod(shifted_index, n_nodes)
+    forwards = causal[..., forwards_index]
+    # ∑ⱼ z^{j+1} c⁺_{(N−1+j) mod N}
+    total = einx.dot("... node, node -> ...", forwards, powers)
+    # −… ÷ (1 − zᴺ)
+    return -total / (1.0 - pole**n_nodes)
 
 
-def _scan_causal(samples: jax.Array, start: jax.Array, pole: float) -> jax.Array:
+def _scan_causal(
+    samples: Float[Array, "*batch node"], start: Float[Array, "*batch"], pole: float
+) -> Float[Array, "*batch node"]:
     """c⁺ᵢ = yᵢ + z c⁺ᵢ₋₁ along the last axis, from c⁺₀ = ``start``."""
-    leading = einx.id("... n -> n ...", samples)
+    leading = einx.id("... node -> node ...", samples)
 
-    def step(previous: jax.Array, sample: jax.Array) -> tuple[jax.Array, jax.Array]:
+    def step(
+        previous: Float[Array, "*batch"], sample: Float[Array, "*batch"]
+    ) -> tuple[Float[Array, "*batch"], Float[Array, "*batch"]]:
+        # c⁺ᵢ = yᵢ + z c⁺ᵢ₋₁
         current = sample + pole * previous
         return current, current
 
+    # a recursion along the axis has no einx form
     _, rest = jax.lax.scan(step, start, leading[1:])
-    return einx.id("..., n ... -> ... (1 + n)", start, rest)
+    return einx.id("..., node ... -> ... (1 + node)", start, rest)
 
 
-def _scan_anticausal(causal: jax.Array, start: jax.Array, pole: float) -> jax.Array:
+def _scan_anticausal(
+    causal: Float[Array, "*batch node"], start: Float[Array, "*batch"], pole: float
+) -> Float[Array, "*batch node"]:
     """c⁻ᵢ = z (c⁻ᵢ₊₁ − c⁺ᵢ) along the last axis, from c⁻_{N−1} = ``start``."""
-    leading = einx.id("... n -> n ...", causal)
+    leading = einx.id("... node -> node ...", causal)
 
-    def step(following: jax.Array, value: jax.Array) -> tuple[jax.Array, jax.Array]:
+    def step(
+        following: Float[Array, "*batch"], value: Float[Array, "*batch"]
+    ) -> tuple[Float[Array, "*batch"], Float[Array, "*batch"]]:
+        # c⁻ᵢ = z (c⁻ᵢ₊₁ − c⁺ᵢ)
         current = pole * (following - value)
         return current, current
 
     _, rest = jax.lax.scan(step, start, leading[:-1], reverse=True)
-    return einx.id("n ..., ... -> ... (n + 1)", rest, start)
+    return einx.id("node ..., ... -> ... (node + 1)", rest, start)
 
 
-def _filter_last_axis(samples: jax.Array, order: int, periodic: bool) -> jax.Array:
+def _filter_last_axis(
+    samples: Float[Array, "*batch node"], order: int, periodic: bool
+) -> Float[Array, "*batch node"]:
     """B⁻¹ y along the last axis: the gain, then two passes per pole."""
     poles = spline_poles(order)
     if samples.shape[-1] == 1 or not poles:
         return samples
-    # λ = ∏ₚ (1 − zₚ)(1 − 1/zₚ)
+    # the gain ∏ₚ (1 − zₚ)(1 − 1/zₚ)
     gain = math.prod((1.0 - z) * (1.0 - 1.0 / z) for z in poles)
+    # ∏ₚ (1 − zₚ)(1 − 1/zₚ) y
     coefficients = samples * gain
     for pole in poles:
         if periodic:
@@ -163,10 +225,19 @@ def _filter_last_axis(samples: jax.Array, order: int, periodic: bool) -> jax.Arr
 class BandedPrefilter(Fit):
     """c = B⁻¹ y per axis: the B-spline prefilter, separable on a grid.
 
+    Algorithm:
+        1. Unflatten the samples onto the grid (N₁, …, N_D).
+        2. For each axis with an order k ≥ 2, move it last and run
+           `B⁻¹` along it: the gain, then per pole a causal and an
+           anticausal recursion started from the mirror or wrap boundary.
+        3. Flatten the coefficients back, row-major.
+
+    The adjoint is the linear transpose of these passes.
+
     Args:
         orders: The B-spline order of each axis, or ``None`` for an axis read
             without a prefilter (nearest, linear, cubic).
-        shape: (n₁, …, n_D), the grid the flat source is laid out on.
+        shape: (N₁, …, N_D), the grid the flat source is laid out on.
         periodic: Per axis, whether the signal wraps (``"grid-wrap"``) rather
             than mirrors (``"mirror"``) at its ends.
 
@@ -180,6 +251,16 @@ class BandedPrefilter(Fit):
         >>> prefilter = BandedPrefilter((3,), (5,), (False,))
         >>> coefficients = prefilter.apply(jnp.ones(5))
         >>> bool(jnp.allclose(coefficients, 1.0))
+        True
+
+        The coefficients reproduce the samples through the B-spline at the
+        knots, y = B c, with B = (1/6, 2/3, 1/6) mirrored at the ends:
+
+        >>> samples = jnp.array([0.0, 1.0, 4.0, 9.0, 16.0])
+        >>> c = prefilter.apply(samples)
+        >>> padded = jnp.concatenate([c[1:2], c, c[3:4]])
+        >>> rebuilt = (padded[:-2] + 4.0 * padded[1:-1] + padded[2:]) / 6.0
+        >>> bool(jnp.allclose(rebuilt, samples))
         True
     """
 
@@ -212,18 +293,15 @@ class BandedPrefilter(Fit):
         coefficients = einx.id(
             f"... ({grid_pattern}) -> ... {grid_pattern}", data, **sizes
         )
-        for d, (order, wraps) in enumerate(
-            zip(self.orders, self.periodic, strict=True)
-        ):
+        for name, order, wraps in zip(names, self.orders, self.periodic, strict=True):
             if order is None or order < 2:
                 continue
-            others = " ".join(name for k, name in enumerate(names) if k != d)
-            moved = einx.id(
-                f"... {grid_pattern} -> ... {others} {names[d]}", coefficients
-            )
+            others = " ".join(other for other in names if other != name)
+            moved = einx.id(f"... {grid_pattern} -> ... {others} {name}", coefficients)
+            # c = B⁻¹ y along this axis
             filtered = _filter_last_axis(moved, order, wraps)
             coefficients = einx.id(
-                f"... {others} {names[d]} -> ... {grid_pattern}", filtered
+                f"... {others} {name} -> ... {grid_pattern}", filtered
             )
         return einx.id(f"... {grid_pattern} -> ... ({grid_pattern})", coefficients)
 

@@ -1,6 +1,6 @@
 """Linear fits onto a basis: ridge least squares and Galerkin projection.
 
-Both take the basis already evaluated at the sites, Φ (M, J), so any basis of
+Both take the basis already evaluated at the sites, Φ (M, D_c), so any basis of
 `functax.basis` (or a user's feature map) plugs in, and both solve through
 lineax.
 """
@@ -15,10 +15,9 @@ require_jax(__name__)
 import math
 
 import einx
-import jax
 import jax.numpy as jnp
 import lineax as lx
-from jaxtyping import Array, ArrayLike, Float
+from jaxtyping import Array, ArrayLike, Float, Shaped
 
 from functax._src._checks import check_values, require_floating
 from functax.exceptions import ValidationError
@@ -30,8 +29,10 @@ __all__ = [
 ]
 
 
-def _check_design(design_matrix: jax.Array, data: jax.Array) -> None:
-    """Φ is a floating (M, J) matrix and y floating with M along its last axis."""
+def _check_design(
+    design_matrix: Shaped[Array, "*shape"], data: Shaped[Array, "*data_shape"]
+) -> None:
+    """Φ is a floating (M, D_c) matrix and y floating with M along its last axis."""
     if design_matrix.ndim != 2:
         msg = (
             "'design_matrix' must be 2-D (obs, feature), got shape "
@@ -54,10 +55,13 @@ def _cholesky_solve(
         normal, (lx.symmetric_tag, lx.positive_semidefinite_tag)
     )
 
-    def solve_one(vector: jax.Array) -> jax.Array:
-        return lx.linear_solve(operator, vector, lx.Cholesky()).value
+    def solve_one(vector: Float[Array, " feature"]) -> Float[Array, " feature"]:
+        # c = A⁻¹ b, as L Lᵀ c = b
+        solution = lx.linear_solve(operator, vector, lx.Cholesky())
+        return solution.value
 
-    return jnp.vectorize(solve_one, signature="(j)->(j)")(rhs)
+    solve_batch = jnp.vectorize(solve_one, signature="(j)->(j)")
+    return solve_batch(rhs)
 
 
 def least_squares(
@@ -66,40 +70,49 @@ def least_squares(
     *,
     ridge: float = 0.0,
 ) -> Float[Array, "*batch feature"]:
-    """c = argmin ‖Φc − y‖² + α‖c‖², the ridge least-squares coefficients.
+    """c = argmin_c ‖Φc − y‖₂² + β‖c‖₂², the ridge least-squares coefficients.
 
-    The minimiser solves (ΦᵀΦ + αI) c = Φᵀy. With α > 0 the normal matrix is
-    positive definite and is factorised by Cholesky; with α = 0 the problem is
-    solved by QR on Φ itself, which avoids squaring its condition number.
+    Here Φ ∈ ℝ^{M×D_c} is the design matrix, y ∈ ℝᴹ the data, c ∈ ℝ^{D_c} the
+    coefficients and β ≥ 0 the ridge weight. The minimiser solves
+    (ΦᵀΦ + βI) c = Φᵀy. With β > 0 the normal matrix is positive definite and
+    is factorised by Cholesky; with β = 0 the problem is solved by QR on Φ
+    itself, which avoids squaring its condition number.
 
     Algorithm:
-        1. α = 0: c = R⁻¹ Qᵀ y with Φ = QR (``lineax.QR``).
-        2. α > 0: A = ΦᵀΦ + αI and b = Φᵀy, then c = A⁻¹b by Cholesky.
+        1. β = 0: c = R⁻¹ Qᵀ y with Φ = QR (``lineax.QR``).
+        2. β > 0: A = ΦᵀΦ + βI and b = Φᵀy, then c = A⁻¹b by Cholesky.
 
     Args:
-        design_matrix: Φ, the J basis functions evaluated at the M sites,
-            Φₘⱼ = φⱼ(xₘ); M ≥ J when α = 0.
+        design_matrix: Φ, the D_c basis functions evaluated at the M sites,
+            Φₘⱼ = φⱼ(xₘ) for m = 1, …, M and j = 1, …, D_c; M ≥ D_c when β = 0.
         y: The data at the sites, M along the last axis, over any leading
             batch dims.
-        ridge: α ≥ 0, the ridge weight; a Python number, since it chooses the
+        ridge: β ≥ 0, the ridge weight; a Python number, since it chooses the
             factorisation.
 
     Returns:
-        c, the J coefficients, over the batch dims of ``y``.
+        c, the D_c coefficients, over the batch dims of ``y``.
 
     Raises:
         ValidationError: If Φ is not a floating 2-D matrix, ``y`` is not
-            floating with M along its last axis, or α is negative or not
+            floating with M along its last axis, or β is negative or not
             finite.
 
     Examples:
+        A quadratic recovered exactly from nine samples:
+
+        >>> import einx
         >>> import jax.numpy as jnp
         >>> from functax.project import least_squares
         >>> x = jnp.linspace(0.0, 1.0, 9)
-        >>> design = jnp.stack([jnp.ones_like(x), x, x**2], axis=-1)
+        >>> ones = jnp.ones_like(x)
+        >>> design = einx.id("obs, obs, obs -> obs (1 + 1 + 1)", ones, x, x**2)
         >>> c = least_squares(design, 1.0 - 2.0 * x + 3.0 * x**2)
         >>> c.shape, bool(jnp.allclose(c, jnp.array([1.0, -2.0, 3.0])))
         ((3,), True)
+
+        A batch of four data vectors, through the ridge (Cholesky) path:
+
         >>> least_squares(design, jnp.zeros((4, 9)), ridge=1e-8).shape
         (4, 3)
     """
@@ -115,16 +128,23 @@ def least_squares(
     if ridge == 0:
         operator = lx.MatrixLinearOperator(design_matrix)
 
-        def solve_one(vector: jax.Array) -> jax.Array:
-            return lx.linear_solve(operator, vector, lx.QR()).value
+        def solve_one(vector: Float[Array, " obs"]) -> Float[Array, " feature"]:
+            # c = R⁻¹ Qᵀ y with Φ = QR, which never squares cond(Φ)
+            solution = lx.linear_solve(operator, vector, lx.QR())
+            return solution.value
 
-        return jnp.vectorize(solve_one, signature="(m)->(j)")(y)
-    # A = ΦᵀΦ + αI
+        solve_batch = jnp.vectorize(solve_one, signature="(m)->(j)")
+        return solve_batch(y)
+    # ΦᵀΦ
     gram = einx.dot("obs row, obs col -> row col", design_matrix, design_matrix)
-    normal = gram + ridge * jnp.eye(gram.shape[0], dtype=gram.dtype)
+    identity = jnp.eye(gram.shape[0], dtype=gram.dtype)
+    # A = ΦᵀΦ + βI
+    normal = gram + ridge * identity
     # b = Φᵀy
     rhs = einx.dot("obs feature, ... obs -> ... feature", design_matrix, y)
-    return _cholesky_solve(normal, rhs)
+    # c = A⁻¹ b
+    coefficients = _cholesky_solve(normal, rhs)
+    return coefficients
 
 
 def galerkin(
@@ -135,37 +155,46 @@ def galerkin(
 ) -> Float[Array, "*batch feature"]:
     """c = (ΦᵀWΦ)⁻¹ ΦᵀW y, the Galerkin projection with quadrature weights W.
 
-    With the sites the nodes of a quadrature rule and W = diag(w) its weights,
-    ΦᵀWΦ approximates the Gram matrix ∫ φᵢ φⱼ and ΦᵀWy the moments ∫ φᵢ f, so
-    c is the L² projection of f onto the span of the basis. For a basis
-    orthonormal under the rule, ΦᵀWΦ = I and c = ΦᵀWy.
+    With the M sites xₘ ∈ Ω the nodes of a quadrature rule, w ∈ ℝᴹ its weights
+    and W = diag(w), ΦᵀWΦ approximates the Gram matrix ∫_Ω φᵢ(x) φⱼ(x) dx and
+    ΦᵀWy the moments ∫_Ω φᵢ(x) f(x) dx for i, j = 1, …, D_c, so c ∈ ℝ^{D_c} is the L²
+    projection of f onto the span of the basis. For a basis orthonormal under
+    the rule, ΦᵀWΦ = I and c = ΦᵀWy.
 
     Algorithm:
         1. A = ΦᵀWΦ and b = ΦᵀWy.
         2. c = A⁻¹b by Cholesky.
 
     Args:
-        design_matrix: Φ, the J basis functions at the M quadrature nodes.
+        design_matrix: Φ, the D_c basis functions at the M quadrature nodes.
         y: f at the nodes, M along the last axis, over any leading batch dims.
         weights: w, the M quadrature weights, all positive.
 
     Returns:
-        c, the J coefficients, over the batch dims of ``y``.
+        c, the D_c coefficients, over the batch dims of ``y``.
 
     Raises:
         ValidationError: If the shapes disagree, an input is not floating, or
             a weight is not positive (checked when run under ``jit``).
 
     Examples:
+        The L² projection of x² onto {1, x} on [−1, 1] is 1/3:
+
+        >>> import einx
         >>> import jax.numpy as jnp
         >>> from functax.project import galerkin
         >>> from functax.quad import gauss_legendre
         >>> nodes, weights = gauss_legendre(8)
-        >>> design = jnp.stack([jnp.ones_like(nodes), nodes], axis=-1)
-        >>> # the L² projection of x² onto {1, x} on [−1, 1] is 1/3
+        >>> ones = jnp.ones_like(nodes)
+        >>> design = einx.id("obs, obs -> obs (1 + 1)", ones, nodes)
         >>> c = galerkin(design, nodes**2, weights=weights)
         >>> bool(jnp.allclose(c, jnp.array([1.0 / 3.0, 0.0])))
         True
+
+        A batch of three fields projects in one call:
+
+        >>> galerkin(design, jnp.zeros((3, 8)), weights=weights).shape
+        (3, 2)
     """
     design_matrix = jnp.asarray(design_matrix)
     y = jnp.asarray(y)
@@ -176,13 +205,16 @@ def galerkin(
     if weights.shape != (n_obs,):
         msg = f"'weights' must have shape ({n_obs},), got {weights.shape}"
         raise ValidationError(msg)
-    weights = check_values(
-        weights, jnp.any(weights <= 0), "'weights' must all be positive"
-    )
+    # wₘ ≤ 0 for some m
+    is_non_positive = weights <= 0
+    any_non_positive = einx.any("[obs]", is_non_positive)
+    weights = check_values(weights, any_non_positive, "'weights' must all be positive")
     # WΦ, the basis scaled by the weight of its node
     weighted = einx.multiply("obs feature, obs -> obs feature", design_matrix, weights)
     # A = ΦᵀWΦ
     normal = einx.dot("obs row, obs col -> row col", design_matrix, weighted)
     # b = ΦᵀWy
     rhs = einx.dot("obs feature, ... obs -> ... feature", weighted, y)
-    return _cholesky_solve(normal, rhs)
+    # c = A⁻¹ b
+    coefficients = _cholesky_solve(normal, rhs)
+    return coefficients

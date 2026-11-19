@@ -31,7 +31,11 @@ __all__ = [
 ]
 
 
-def _icosahedron() -> tuple[np.ndarray, np.ndarray]:
+def _icosahedron() -> tuple[
+    Float[np.ndarray, "vertex 3"], Int[np.ndarray, "triangle 3"]
+]:
+    """The 12 unit vertices and 20 outward-facing triangles of the icosahedron."""
+    # ϕ = (1 + √5)/2
     golden = (1.0 + math.sqrt(5.0)) / 2.0
     vertices = np.array(
         [
@@ -50,12 +54,16 @@ def _icosahedron() -> tuple[np.ndarray, np.ndarray]:
         ],
         dtype=np.int64,
     )  # fmt: skip
-    return vertices / np.linalg.norm(vertices, axis=1, keepdims=True), triangles
+    # ‖v‖₂ of each vertex
+    norms = np.linalg.norm(vertices, axis=1, keepdims=True)
+    # v / ‖v‖₂
+    unit_vertices = vertices / norms
+    return unit_vertices, triangles
 
 
 def _subdivide(
-    vertices: np.ndarray, triangles: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
+    vertices: Float[np.ndarray, "vertex 3"], triangles: Int[np.ndarray, "triangle 3"]
+) -> tuple[Float[np.ndarray, "child_vertex 3"], Int[np.ndarray, "child_triangle 3"]]:
     """Split every triangle into four through its shared edge midpoints."""
     points = list(vertices)
     midpoint: dict[tuple[int, int], int] = {}
@@ -63,16 +71,18 @@ def _subdivide(
     def middle(first: Any, second: Any) -> int:
         key = (first, second) if first < second else (second, first)
         if key not in midpoint:
+            # p + q, then projected back onto the sphere: (p + q) / ‖p + q‖₂
             point = points[first] + points[second]
-            points.append(point / np.linalg.norm(point))
+            norm = np.linalg.norm(point)
+            points.append(point / norm)
             midpoint[key] = len(points) - 1
         return midpoint[key]
 
-    out = []
+    children = []
     for a, b, c in triangles:
         ab, bc, ca = middle(a, b), middle(b, c), middle(c, a)
-        out += [[a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]]
-    return np.asarray(points), np.asarray(out, dtype=np.int64)
+        children += [[a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]]
+    return np.asarray(points), np.asarray(children, dtype=np.int64)
 
 
 def icosphere(
@@ -88,7 +98,7 @@ def icosphere(
 
     Args:
         level: ℓ, the number of subdivisions.
-        radius: The sphere radius.
+        radius: R, the sphere radius.
 
     Returns:
         ``(vertices, triangles)``: V points and T triples of vertex indices.
@@ -103,6 +113,14 @@ def icosphere(
         ((162, 3), (320, 3))
         >>> icosphere(0)[0].shape
         (12, 3)
+
+        Every vertex lies on the sphere of the given radius:
+
+        >>> import jax.numpy as jnp
+        >>> vertices, _ = icosphere(1, radius=2.0)
+        >>> norms = jnp.linalg.norm(vertices, axis=-1)
+        >>> bool(jnp.allclose(norms, 2.0))
+        True
     """
     try:
         count = operator.index(level)
@@ -115,10 +133,14 @@ def icosphere(
     vertices, triangles = _icosahedron()
     for _ in range(count):
         vertices, triangles = _subdivide(vertices, triangles)
-    return jnp.asarray(radius * vertices), jnp.asarray(triangles)
+    # R v, the unit vertices scaled to the radius R
+    scaled = radius * vertices
+    return jnp.asarray(scaled), jnp.asarray(triangles)
 
 
-def _validate_mesh(vertices: Any, triangles: Any) -> tuple[np.ndarray, np.ndarray]:
+def _validate_mesh(
+    vertices: Any, triangles: Any
+) -> tuple[Float[np.ndarray, "vertex 3"], Int[np.ndarray, "triangle 3"]]:
     """Host copies of a mesh, checked for shape, index range and finiteness."""
     points = np.asarray(vertices, dtype=np.float64)
     corners = np.asarray(triangles)
@@ -145,8 +167,8 @@ def _validate_mesh(vertices: Any, triangles: Any) -> tuple[np.ndarray, np.ndarra
 
 
 def _corner_geometry(
-    points: np.ndarray, corners: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
+    points: Float[np.ndarray, "vertex 3"], corners: Int[np.ndarray, "triangle 3"]
+) -> tuple[Float[np.ndarray, " triangle"], Float[np.ndarray, "triangle 3"]]:
     """Twice each triangle's area, and the cotangent at each of its corners.
 
     ``cot[:, k]`` is the cotangent of the angle at corner k, which is opposite
@@ -156,22 +178,35 @@ def _corner_geometry(
         GeometryError: If a triangle has zero area.
     """
     corner_points = points[corners]
-    # the edges from corner k to k + 1 and to k + 2
-    edge_next = np.roll(corner_points, -1, axis=1) - corner_points
-    edge_prev = np.roll(corner_points, -2, axis=1) - corner_points
-    # 2|t| = ‖e₁ × e₂‖, the same at every corner of a triangle
-    double_area = np.linalg.norm(np.cross(edge_next, edge_prev), axis=-1)
+    # --- edges ---
+    # the corners k + 1 and k + 2 of each corner k
+    next_points = einx.roll("triangle [corner] dim", corner_points, shift=-1)
+    prev_points = einx.roll("triangle [corner] dim", corner_points, shift=-2)
+    # e₁ = x_{k+1} − x_k and e₂ = x_{k+2} − x_k
+    edge_next = next_points - corner_points
+    edge_prev = prev_points - corner_points
+
+    # --- areas ---
+    # e₁ × e₂
+    normal = np.cross(edge_next, edge_prev)
+    # 2|t| = ‖e₁ × e₂‖₂, the same at every corner of a triangle
+    double_area = np.linalg.norm(normal, axis=-1)
+    # ‖e₁‖₂ and ‖e₂‖₂
+    next_length = np.linalg.norm(edge_next, axis=-1)
+    prev_length = np.linalg.norm(edge_prev, axis=-1)
+    # ‖e₁‖₂ ‖e₂‖₂, the scale a zero area is measured against
     scale = einx.multiply(
-        "triangle corner, triangle corner -> triangle corner",
-        np.linalg.norm(edge_next, axis=-1),
-        np.linalg.norm(edge_prev, axis=-1),
+        "triangle corner, triangle corner -> triangle corner", next_length, prev_length
     )
-    degenerate = np.any(double_area <= 1e-12 * scale, axis=1)
+    # ‖e₁ × e₂‖₂ ≤ 10⁻¹² ‖e₁‖₂ ‖e₂‖₂ at any corner
+    tolerance = 1e-12 * scale
+    flat_corner = double_area <= tolerance
+    degenerate = einx.any("triangle [corner]", flat_corner)
     if np.any(degenerate):
         bad = np.flatnonzero(degenerate)
         msg = f"{bad.size} triangle(s) have zero area, e.g. index {bad[0]}"
         raise GeometryError(msg)
-    # cot θ = (e₁ · e₂) / ‖e₁ × e₂‖
+    # cot α = (e₁ · e₂) / ‖e₁ × e₂‖₂, α the angle at the corner
     dot = einx.dot(
         "triangle corner dim, triangle corner dim -> triangle corner",
         edge_next,
@@ -182,12 +217,19 @@ def _corner_geometry(
 
 
 def _lumped_areas(
-    n_vertices: int, corners: np.ndarray, double_area: np.ndarray
-) -> np.ndarray:
+    n_vertices: int,
+    corners: Int[np.ndarray, "triangle 3"],
+    double_area: Float[np.ndarray, " triangle"],
+) -> Float[np.ndarray, " vertex"]:
     """a_v = ∑_{t ∋ v} |t| / 3, from twice the triangle areas."""
     areas = np.zeros(n_vertices)
-    third = einx.id("triangle -> triangle corner", double_area / 6.0, corner=3)
-    np.add.at(areas, corners.ravel(), third.ravel())
+    # |t| / 3 = 2|t| / 6
+    third_area = double_area / 6.0
+    third = einx.id("triangle -> triangle corner", third_area, corner=3)
+    flat_corners = einx.id("triangle corner -> (triangle corner)", corners)
+    flat_third = einx.id("triangle corner -> (triangle corner)", third)
+    # a_v = ∑_{t ∋ v} |t| / 3, a scatter-add over every corner
+    np.add.at(areas, flat_corners, flat_third)
     return areas
 
 
@@ -196,10 +238,12 @@ def mesh_vertex_areas(
 ) -> Float[Array, " vertex"]:
     """The lumped (barycentric) vertex areas of a triangle mesh.
 
-    Each triangle gives a third of its area to each corner,
-    a_v = ∑_{t ∋ v} |t| / 3 with |t| = ½ ‖(x_q − x_p) × (x_r − x_p)‖, so ∑_v a_v
-    is the surface area and M = diag(a) the lumped finite-element mass matrix.
-    The areas are quadrature weights too: ∫_S g dA ≈ ∑_v a_v g(x_v). Meyer et
+    Each triangle gives a third of its area to each corner: for a vertex v at
+    x_v and a triangle t with corners p, q and r, a_v = ∑_{t ∋ v} |t| / 3 with
+    |t| = ½ ‖(x_q − x_p) × (x_r − x_p)‖₂, so ∑_v a_v is the surface area and
+    diag(a) the lumped finite-element mass matrix.
+    The areas are quadrature weights too: ∫_S f dA ≈ ∑_v a_v f(x_v) on the
+    surface S. Meyer et
     al. (2003) also describe a mixed Voronoi lumping, which differs at obtuse
     triangles and converges at the same rate.
 
@@ -217,11 +261,6 @@ def mesh_vertex_areas(
         GeometryError: If a shape is wrong, an index is out of range, a vertex
             is not finite, or a triangle has zero area.
 
-    References:
-        Meyer, M., Desbrun, M., Schröder, P., Barr, A. H. (2003). Discrete
-        differential-geometry operators for triangulated 2-manifolds.
-        Visualization and Mathematics III, 35–57.
-
     Examples:
         >>> import math
         >>> from functax.geometry import icosphere, mesh_vertex_areas
@@ -229,7 +268,30 @@ def mesh_vertex_areas(
         >>> areas = mesh_vertex_areas(vertices, triangles)
         >>> areas.shape, round(float(areas.sum()) / (4 * math.pi), 2)
         ((642,), 1.0)
+
+        One right triangle; the unused fourth vertex gets no area:
+
+        >>> import jax.numpy as jnp
+        >>> square_corner = jnp.array(
+        ...     [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [5.0, 5.0, 0.0]]
+        ... )
+        >>> areas = mesh_vertex_areas(square_corner, jnp.array([[0, 1, 2]]))
+        >>> bool(jnp.allclose(areas, jnp.array([1 / 6, 1 / 6, 1 / 6, 0.0])))
+        True
+
+        As quadrature weights, ∫_{S²} z² dA = 4π/3:
+
+        >>> z = vertices[:, 2]
+        >>> integral = jnp.dot(mesh_vertex_areas(vertices, triangles), z**2)
+        >>> bool(jnp.isclose(integral, 4 * jnp.pi / 3, rtol=1e-2))
+        True
+
+    References:
+        Meyer, M., Desbrun, M., Schröder, P., Barr, A. H. (2003). Discrete
+        differential-geometry operators for triangulated 2-manifolds.
+        Visualization and Mathematics III, 35–57.
     """
     points, corners = _validate_mesh(vertices, triangles)
     double_area, _ = _corner_geometry(points, corners)
-    return jnp.asarray(_lumped_areas(points.shape[0], corners, double_area))
+    areas = _lumped_areas(points.shape[0], corners, double_area)
+    return jnp.asarray(areas)

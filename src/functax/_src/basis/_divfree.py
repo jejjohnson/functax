@@ -1,7 +1,8 @@
 """Divergence-free and curl-free vector bases on the box [−L, L]².
 
-A 2-D incompressible velocity is the skew gradient of a stream function,
-u = ∇^⊥ψ = (−∂_y ψ, ∂_x ψ). Expanding ψ in the box Laplacian eigenfunctions φ_j
+On the coordinates (x, y) ∈ [−L, L]², a 2-D incompressible velocity (u, v) is
+the skew gradient of a stream function ψ, (u, v) = ∇^⊥ψ = (−∂_y ψ, ∂_x ψ).
+Expanding ψ in the box Laplacian eigenfunctions φ_j, with eigenvalues λ_j,
 gives atoms that are divergence-free by construction, the natural reduced
 basis for nearly geostrophic ocean currents; their gradients are the curl-free
 companions. Each atom carries the eigenvalue λ_j + λ_k of its scalar mode, so
@@ -17,7 +18,6 @@ from functax._src._backend import require_jax
 require_jax(__name__)
 
 import einx
-import jax
 from jaxtyping import Array, Float
 
 from functax._src.basis._fourier import (
@@ -35,7 +35,7 @@ __all__ = [
 ]
 
 
-def _check_plane(xy: jax.Array) -> None:
+def _check_plane(xy: Float[Array, "*shape"]) -> None:
     if xy.ndim != 2 or xy.shape[-1] != 2:
         msg = f"'xy' must have shape (N, 2), got {xy.shape}"
         raise ValidationError(msg)
@@ -43,7 +43,12 @@ def _check_plane(xy: jax.Array) -> None:
 
 def _axis_bases(
     xy: Float[Array, "obs 2"], counts: tuple, widths: tuple, boundaries: tuple
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+) -> tuple[
+    Float[Array, "obs feature_x"],
+    Float[Array, "obs feature_x"],
+    Float[Array, "obs feature_y"],
+    Float[Array, "obs feature_y"],
+]:
     """The 1-D values and derivatives on each axis: (φ_x, φ_x′, φ_y, φ_y′)."""
     out = []
     for d in range(2):
@@ -63,13 +68,22 @@ def divfree_basis(
 ) -> tuple[Float[Array, "obs feature 2"], Float[Array, " feature"]]:
     """Divergence-free vector atoms, the skew gradients of box stream functions.
 
-    φ_jk(x, y) = (−φ_j(x) φ_k′(y), φ_j′(x) φ_k(y)), so
-    ∂_x φ^(x) + ∂_y φ^(y) = −φ_j′φ_k′ + φ_j′φ_k′ = 0 identically.
+    φ_jk(x, y) = (−φ_j(x) φ_k′(y), φ_j′(x) φ_k(y)), with φ_j the 1-D
+    eigenfunctions of `fourier_basis_1d` along x (M_x of them), φ_k those along
+    y (M_y of them) and φ′ their derivatives. Its components φ_jk^{(x)} and
+    φ_jk^{(y)} have ∂_x φ_jk^{(x)} + ∂_y φ_jk^{(y)} = −φ_j′φ_k′ + φ_j′φ_k′ = 0
+    identically.
+
+    Algorithm:
+        1. Evaluate the 1-D eigenfunctions and their derivatives on each axis.
+        2. Form u = −φ_j(x) φ_k′(y) and v = φ_j′(x) φ_k(y), row-major over (j, k).
+        3. Attach the eigenvalues λ_j + λ_k of `fourier_eigenvalues`.
 
     Args:
         xy: Points in [−L, L]².
-        num_basis_per_dim: The number of 1-D stream-function modes per axis;
-            an int applies to both, and there are M = M_x M_y atoms.
+        num_basis_per_dim: M_x and M_y, the number of 1-D stream-function
+            modes per axis; an int applies to both, and there are M = M_x M_y
+            atoms.
         L: The half-width per axis; a number applies to both.
         boundary: The stream functions' boundary condition, ``"dirichlet"``,
             ``"neumann"`` or ``"periodic"``, one value or one per axis.
@@ -88,21 +102,38 @@ def divfree_basis(
         >>> Phi, lam = divfree_basis(jnp.zeros((5, 2)), num_basis_per_dim=3, L=1.0)
         >>> Phi.shape, lam.shape
         ((5, 9, 2), (9,))
+
+        Per-axis counts and boundaries, and the eigenvalues of the scalar modes:
+
+        >>> from functax.basis.fourier import fourier_eigenvalues
+        >>> Phi, lam = divfree_basis(
+        ...     jnp.zeros((5, 2)), (2, 3), 1.0, boundary=("periodic", "dirichlet")
+        ... )
+        >>> expected = fourier_eigenvalues(
+        ...     (2, 3), 1.0, 2, dtype=lam.dtype, boundary=("periodic", "dirichlet")
+        ... )
+        >>> Phi.shape, bool(jnp.allclose(lam, expected))
+        ((5, 6, 2), True)
     """
     _check_plane(xy)
     counts = _to_tuple(num_basis_per_dim, 2, "num_basis_per_dim")
     widths = _to_tuple(L, 2, "L")
     boundaries = _to_tuple(boundary, 2, "boundary")
     value_x, slope_x, value_y, slope_y = _axis_bases(xy, counts, widths, boundaries)
-    # u = −∂_y ψ = −φ_j(x) φ_k′(y) and v = ∂_x ψ = φ_j′(x) φ_k(y), row-major
-    # over (j, k) as fourier_eigenvalues lays them out
-    u = -einx.multiply("obs left, obs right -> obs (left right)", value_x, slope_y)
-    v = einx.multiply("obs left, obs right -> obs (left right)", slope_x, value_y)
-    phi = einx.id("obs feature, obs feature -> obs feature (1 + 1)", u, v)
-    lam = fourier_eigenvalues(
+    # row-major over (j, k), as fourier_eigenvalues lays them out
+    outer = "obs left, obs right -> obs (left right)"
+    # φ_j(x) φ_k′(y)
+    stream_slope = einx.multiply(outer, value_x, slope_y)
+    # u = −∂_y ψ = −φ_j(x) φ_k′(y)
+    u = -stream_slope
+    # v = ∂_x ψ = φ_j′(x) φ_k(y)
+    v = einx.multiply(outer, slope_x, value_y)
+    atoms = einx.id("obs feature, obs feature -> obs feature (1 + 1)", u, v)
+    # λ_j + λ_k
+    eigenvalues = fourier_eigenvalues(
         num_basis_per_dim, L, 2, dtype=xy.dtype, boundary=boundary
     )
-    return phi, lam
+    return atoms, eigenvalues
 
 
 def curlfree_basis(
@@ -115,13 +146,19 @@ def curlfree_basis(
     """Curl-free vector atoms, the gradients of the box Laplacian eigenfunctions.
 
     The companion of `divfree_basis`: φ_jk(x, y) = (φ_j′(x) φ_k(y), φ_j(x) φ_k′(y)),
-    the gradient of the potential φ_j ⊗ φ_k, so its scalar curl
-    ∂_x φ^(y) − ∂_y φ^(x) vanishes identically.
+    the gradient of the potential φ_j ⊗ φ_k, with the 1-D eigenfunctions and
+    indices of `divfree_basis`, so its scalar curl
+    ∂_x φ_jk^{(y)} − ∂_y φ_jk^{(x)} vanishes identically.
+
+    Algorithm:
+        1. Evaluate the 1-D eigenfunctions and their derivatives on each axis.
+        2. Form u = φ_j′(x) φ_k(y) and v = φ_j(x) φ_k′(y), row-major over (j, k).
+        3. Attach the eigenvalues λ_j + λ_k of `fourier_eigenvalues`.
 
     Args:
         xy: Points in [−L, L]².
-        num_basis_per_dim: The number of 1-D modes per axis; an int applies to
-            both.
+        num_basis_per_dim: M_x and M_y, the number of 1-D modes per axis; an
+            int applies to both.
         L: The half-width per axis; a number applies to both.
         boundary: The potential's boundary condition, one value or one per
             axis.
@@ -140,17 +177,31 @@ def curlfree_basis(
         >>> Phi, lam = curlfree_basis(jnp.zeros((5, 2)), num_basis_per_dim=3, L=1.0)
         >>> Phi.shape, lam.shape
         ((5, 9, 2), (9,))
+
+        The curl-free atoms are the divergence-free ones turned a quarter turn,
+        (u, v) ↦ (v, −u), when the stream function and the potential match:
+
+        >>> from functax.basis.vector import divfree_basis
+        >>> xy = jnp.array([[0.1, -0.3], [0.5, 0.2]])
+        >>> curl_free, _ = curlfree_basis(xy, 3, 1.0)
+        >>> div_free, _ = divfree_basis(xy, 3, 1.0)
+        >>> turned = div_free[..., ::-1] * jnp.array([1.0, -1.0])
+        >>> bool(jnp.allclose(curl_free, turned))
+        True
     """
     _check_plane(xy)
     counts = _to_tuple(num_basis_per_dim, 2, "num_basis_per_dim")
     widths = _to_tuple(L, 2, "L")
     boundaries = _to_tuple(boundary, 2, "boundary")
     value_x, slope_x, value_y, slope_y = _axis_bases(xy, counts, widths, boundaries)
-    # ∇(φ_j ⊗ φ_k) = (φ_j′(x) φ_k(y), φ_j(x) φ_k′(y))
-    u = einx.multiply("obs left, obs right -> obs (left right)", slope_x, value_y)
-    v = einx.multiply("obs left, obs right -> obs (left right)", value_x, slope_y)
-    phi = einx.id("obs feature, obs feature -> obs feature (1 + 1)", u, v)
-    lam = fourier_eigenvalues(
+    outer = "obs left, obs right -> obs (left right)"
+    # u = ∂_x(φ_j ⊗ φ_k) = φ_j′(x) φ_k(y)
+    u = einx.multiply(outer, slope_x, value_y)
+    # v = ∂_y(φ_j ⊗ φ_k) = φ_j(x) φ_k′(y)
+    v = einx.multiply(outer, value_x, slope_y)
+    atoms = einx.id("obs feature, obs feature -> obs feature (1 + 1)", u, v)
+    # λ_j + λ_k
+    eigenvalues = fourier_eigenvalues(
         num_basis_per_dim, L, 2, dtype=xy.dtype, boundary=boundary
     )
-    return phi, lam
+    return atoms, eigenvalues

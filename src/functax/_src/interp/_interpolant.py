@@ -47,6 +47,9 @@ __all__ = [
 class Interpolant(eqx.Module):
     """A fitted field f̂(x) = ∑ₛ wₛ(t(x)) c_{iₛ(x)}, read at any targets.
 
+    A target x reads the coefficients c at its taps iₛ(x), s = 1, …, S, with
+    weights wₛ of its offsets t(x) in its cell.
+
     Made by ``scheme.fit(source, data)``. Calling it with target coordinates
     locates, weighs and gathers inside the trace, so it runs under ``jit``,
     ``vmap``, ``grad`` and ``lax.scan`` without host work; it equals
@@ -61,6 +64,10 @@ class Interpolant(eqx.Module):
         derivative_axis: For a derivative interpolant, the target coordinate it
             differentiates along; ``None`` for the field itself.
         derivative_order: The derivative order, when ``derivative_axis`` is set.
+
+    Raises:
+        GeometryError: When called with targets of the wrong number of
+            coordinates.
 
     Examples:
         >>> import jax
@@ -116,7 +123,7 @@ class Interpolant(eqx.Module):
 
         Args:
             targets: The (M, D) target coordinates (one per source axis, or
-                (x, y) on an `AffineGrid`), or `Points`.
+                the two map coordinates on an `AffineGrid`), or `Points`.
 
         Returns:
             f̂ with the batch dims of the coefficients and the targets last.
@@ -129,7 +136,9 @@ class Interpolant(eqx.Module):
             if isinstance(targets, Points)
             else jnp.asarray(targets)
         )
-        return self._read_plan(coordinates)(self.coefficients)
+        plan = self._read_plan(coordinates)
+        # f̂(X_*) = H(X_*) c
+        return plan(self.coefficients)
 
     def plan(self, target: Any) -> Plan:
         """The `Plan` that ``scheme.plan(source, target)`` builds, which reads data.
@@ -141,6 +150,17 @@ class Interpolant(eqx.Module):
 
         Returns:
             The `Plan` (or `DerivativePlan` for a derivative interpolant).
+
+        Examples:
+            >>> import jax.numpy as jnp
+            >>> from functax.geometry import Axis, Points
+            >>> from functax.interp import Linear
+            >>> data = jnp.arange(5.0) ** 2
+            >>> field = Linear().fit(Axis(jnp.arange(5.0)), data)
+            >>> targets = Points(jnp.array([[1.5]]))
+            >>> plan = field.plan(targets)
+            >>> bool(jnp.allclose(plan(data), field(targets)))
+            True
         """
         plan = self.scheme.plan(self.source, target, policies=self.policies)
         if self.derivative_axis is None:
@@ -148,10 +168,33 @@ class Interpolant(eqx.Module):
         return plan.derivative(self.derivative_axis, self.derivative_order)
 
     def derivative(self, axis: int, order: int = 1) -> Interpolant:
-        """∂ᵐf̂/∂x_cᵐ as an interpolant, with c = ``axis`` and m = ``order``.
+        """∂ᵐf̂/∂x_dᵐ as an interpolant, with d = ``axis`` and m = ``order``.
+
+        Args:
+            axis: d, the target coordinate x_d to differentiate along.
+            order: m ≥ 1.
+
+        Returns:
+            The derivative `Interpolant`, read like the field itself.
 
         Raises:
             ValidationError: If the interpolant is already a derivative.
+
+        Examples:
+            The slope of a linear interpolant is the slope of its cell:
+
+            >>> import jax.numpy as jnp
+            >>> from functax.geometry import Axis
+            >>> from functax.interp import Linear
+            >>> field = Linear().fit(Axis(jnp.arange(5.0)), jnp.arange(5.0) ** 2)
+            >>> field.derivative(axis=0)(jnp.array([[1.5], [3.25]])).tolist()
+            [3.0, 7.0]
+
+            A derivative of a derivative raises its order instead:
+
+            >>> field.derivative(0).derivative(0)  # doctest: +IGNORE_EXCEPTION_DETAIL
+            Traceback (most recent call last):
+            functax.exceptions.ValidationError: derivative() of a derivative ...
         """
         if self.derivative_axis is not None:
             msg = "derivative() of a derivative interpolant: raise 'order' instead"
@@ -181,12 +224,17 @@ def fit_interpolant(
     prefilter = prefilter_for(orders, shape, periodic, policies.boundary)
     if policies.missing == "fill":
         fill = jnp.asarray(policies.fill_value, dtype=data.dtype)
-        data = jnp.where(jnp.isfinite(data), data, fill)
+        finite = jnp.isfinite(data)
+        # yⱼ ← y_fill where yⱼ is not finite
+        data = jnp.where(finite, data, fill)
     if prefilter is None:
+        # c = y
         return Interpolant(data, source, scheme, policies)
     if policies.missing == "renormalise":
         msg = (
             "missing='renormalise' needs a local plan (identity fit, stencil read-out)"
         )
         raise PolicyError(msg)
-    return Interpolant(prefilter.apply(data), source, scheme, policies)
+    # c = B⁻¹ y
+    coefficients = prefilter.apply(data)
+    return Interpolant(coefficients, source, scheme, policies)

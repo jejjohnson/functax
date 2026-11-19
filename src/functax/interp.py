@@ -1,9 +1,16 @@
 """Interpolation: stencils, locate and policies, schemes and plans with adjoints.
 
 A scheme is configuration; a plan freezes it for one source and one target
-geometry. Every plan reads a field as f̂(X*) = H 𝒮(y), with a fit 𝒮 (the
-identity for local schemes) and a read-out H, and sends residuals back with
-the hand-written adjoint 𝒮ᵀ Hᵀ. Plans compose (``outer @ inner``), cut to
+geometry. Every plan reads a field as
+
+    f̂(X_*) = H 𝒮(y),
+
+with y ∈ ℝᴺ the samples at the N source nodes, X_* ∈ ℝ^{M×D} the M targets of
+D coordinates each, a fit c = 𝒮(y) ∈ ℝ^{D_c} from the samples to D_c
+coefficients (the identity for local schemes, c = y), and a linear read-out
+H ∈ ℝ^{M×D_c} from the coefficients to the values f̂ ∈ ℝᴹ at the targets. Rows
+of H are indexed by the target k = 1, …, M. A residual r ∈ ℝᴹ goes back
+through the hand-written adjoint 𝒮ᵀ Hᵀ. Plans compose (``outer @ inner``), cut to
 windows of a grid target (``plan[window]``) and export their stencil for
 gaussx (``plan.to_gaussx()``). Schemes and policies round-trip
 through strict JSON, plans through bytes, and `plan_key` names a plan by the

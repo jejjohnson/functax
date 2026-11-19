@@ -1,10 +1,11 @@
 """Tensor-product stencils: one local basis per axis, H = H₁ ⊗ … ⊗ H_D.
 
-A target with index position u_d on axis d reads S_d taps there; across D
-axes it reads S = ∏_d S_d taps at flat, row-major indices
-∑_d j_d ∏_{d′ > d} n_{d′} (the order of ``einx.id("... y x -> ... (y x)")``),
-with weights ∏_d w_d. The policies decide what happens off the domain and
-past the ends.
+On a source of D axes, axis d = 1, …, D with N_d nodes (N = ∏_d N_d), a
+target with index position u_d on axis d reads S_d taps there, at nodes j_d
+with weights w_d; across the D axes it reads S = ∏_d S_d taps at flat,
+row-major indices ∑_d j_d ∏_{d′ > d} N_{d′} (the order of
+``einx.id("... y x -> ... (y x)")``), with weights ∏_d w_d. The policies
+decide what happens off the domain and past the ends.
 """
 
 from __future__ import annotations
@@ -18,9 +19,8 @@ import math
 from typing import Any
 
 import einx
-import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from jaxtyping import Array, Bool, Float, Int
 
 from functax._src.geometry._affine import pixel_centres, to_pixel
 from functax._src.geometry._types import (
@@ -60,7 +60,7 @@ __all__ = [
 
 
 def source_layout(source: Any) -> tuple[tuple[int, ...], tuple[bool, ...]]:
-    """The node counts (n₁, …, n_D) of a source, and which of its axes are periodic.
+    """The node counts (N₁, …, N_D) of a source, and which of its axes are periodic.
 
     Raises:
         GeometryError: If ``source`` is not an `Axis`, `RectilinearGrid`,
@@ -80,18 +80,21 @@ def source_layout(source: Any) -> tuple[tuple[int, ...], tuple[bool, ...]]:
     raise GeometryError(msg)
 
 
-def _target_coordinates(source: Any, target: Any) -> jax.Array:
+def _target_coordinates(source: Any, target: Any) -> Float[Array, "target dim"]:
     """The (M, D) target coordinates in the source's frame, before locating."""
     if isinstance(target, Points):
         return target.xy
     if isinstance(target, Axis):
         return einx.id("target -> target 1", target.values)
     if isinstance(target, RectilinearGrid):
-        nodes = jnp.meshgrid(*(axis.values for axis in target.axes), indexing="ij")
-        flat = [einx.id("... -> (...)", node) for node in nodes]
-        return jnp.column_stack(flat)
+        axis_values = (axis.values for axis in target.axes)
+        nodes = jnp.meshgrid(*axis_values, indexing="ij")
+        stacked = jnp.stack(nodes)
+        # row k of X_* is (x₁, …, x_D) at grid node k, row-major
+        return einx.id("dim ... -> (...) dim", stacked)
     if isinstance(target, AffineGrid) and isinstance(source, AffineGrid):
         x, y = pixel_centres(target)
+        # row k of X_* is the map coordinates of pixel centre k, row-major
         return einx.id("row col, row col -> (row col) (1 + 1)", x, y)
     msg = (
         f"'target' must be Points, an Axis or a RectilinearGrid (or an AffineGrid "
@@ -100,7 +103,7 @@ def _target_coordinates(source: Any, target: Any) -> jax.Array:
     raise GeometryError(msg)
 
 
-def descending_axes(source: Any) -> tuple[bool | jax.Array, ...]:
+def descending_axes(source: Any) -> tuple[bool | Bool[Array, ""], ...]:
     """Whether each source axis decreases: a bool, or a traced bool on a traced axis.
 
     Grids without axes (`AffineGrid`, `CurvilinearGrid`) count as increasing.
@@ -173,7 +176,12 @@ def coordinates_to_positions(
     if isinstance(source, CurvilinearGrid):
         return curvilinear_positions(source, coordinates)
     axes = (source,) if isinstance(source, Axis) else source.axes
-    columns = [index_positions(axis, coordinates[:, d]) for d, axis in enumerate(axes)]
+    # column indexing and column_stack, not einx: einx rejects the zero-length
+    # target axis of an empty target set, which must still plan
+    columns = [
+        index_positions(axis, coordinates[:, dim_index])
+        for dim_index, axis in enumerate(axes)
+    ]
     if extrapolate:
         columns = [
             hold_repeated_ends(axis, column)
@@ -211,11 +219,17 @@ def _axis_stencil(
     periodic: bool,
     basis: Basis,
     policies: Policies,
-    descending: bool | jax.Array = False,
-) -> tuple[jax.Array, jax.Array, tuple[jax.Array, jax.Array]]:
+    descending: bool | Bool[Array, ""] = False,
+) -> tuple[
+    Int[Array, "target tap"],
+    Float[Array, "target tap"],
+    tuple[Bool[Array, " target"], Bool[Array, " target"]],
+]:
     """Taps, weights, and (row kept, target inside) on one axis, after the policies."""
+    # --- locate ---
     lower, upper = domain_bounds(n_nodes, policies.extent)
     finite = jnp.isfinite(position)
+    # lower ≤ u ≤ upper, everywhere on a periodic axis
     inside = finite if periodic else finite & (position >= lower) & (position <= upper)
     # non-finite positions read node 0 and are masked; nothing else can read
     position = jnp.where(finite, position, 0.0)
@@ -225,6 +239,7 @@ def _axis_stencil(
     )
     if clamps and not periodic:
         position = clamp_positions(position, lower, upper)
+    # i = ⌊u⌋
     cell = jnp.floor(position)
     if not periodic and n_nodes > 1:
         # a target on the last node reads the last cell at t = 1, not the cell
@@ -236,18 +251,25 @@ def _axis_stencil(
         low_tap, high_tap = basis.support
         first = -low_tap
         last = max(n_nodes - 1 - high_tap, first)
+        # i ∈ [−r_min, N_d − 1 − r_max]
         cell = jnp.clip(cell, first, last)
+    # t = u − i
     offset = position - cell
+
+    # --- weigh ---
     if isinstance(basis, NearestBasis):
         # a tie goes to the lower coordinate, the next node on a decreasing axis
         relative, weights = basis.stencil(offset, ties_up=descending)
     else:
         relative, weights = basis.stencil(offset)
-    taps = einx.add(
-        "target, target tap -> target tap", cell.astype(jnp.int32), relative
-    )
+    cell_index = cell.astype(jnp.int32)
+    # jₛ = i + rₛ
+    taps = einx.add("target, target tap -> target tap", cell_index, relative)
+
+    # --- boundary ---
     indices, kept = remap_taps(taps, n_nodes, policies.boundary, periodic=periodic)
-    weights = jnp.where(kept, weights, jnp.zeros((), weights.dtype))
+    zero = jnp.zeros((), weights.dtype)
+    weights = jnp.where(kept, weights, zero)
     # clamp and extrapolate keep every finite row; nan keeps the inside ones
     row_ok = finite if policies.outside in ("clamp", "extrapolate") else inside
     return indices, weights, (row_ok, inside)
@@ -260,7 +282,7 @@ def stencil_from_positions(
     bases: tuple[Basis, ...],
     *,
     policies: Policies,
-    descending: tuple[bool | jax.Array, ...] | None = None,
+    descending: tuple[bool | Bool[Array, ""], ...] | None = None,
 ) -> Stencil:
     """The tensor stencil of index positions u on a grid of ``shape``.
 
@@ -286,28 +308,34 @@ def stencil_from_positions(
             check=False,
         )
     descending = (False,) * len(shape) if descending is None else descending
+    per_dim = einx.id("target dim -> dim target", positions)
     per_axis = [
-        _axis_stencil(
-            positions[:, d], n_nodes, is_periodic, basis, policies, decreasing
-        )
-        for d, (n_nodes, is_periodic, basis, decreasing) in enumerate(
-            zip(shape, periodic, bases, descending, strict=True)
+        _axis_stencil(position, n_nodes, is_periodic, basis, policies, decreasing)
+        for position, n_nodes, is_periodic, basis, decreasing in zip(
+            per_dim, shape, periodic, bases, descending, strict=True
         )
     ]
     indices, weights, (row_ok, inside_all) = per_axis[0]
     for n_nodes, (axis_indices, axis_weights, (axis_ok, axis_inside)) in zip(
         shape[1:], per_axis[1:], strict=True
     ):
-        # flat index ((j₁ n₂ + j₂) n₃ + j₃) …, weight w₁ w₂ w₃ …
+        # flat index ((j₁ N₂ + j₂) N₃ + j₃) …, weight w₁ w₂ w₃ …
         scaled = indices * n_nodes
-        indices = einx.add("target a, target b -> target (a b)", scaled, axis_indices)
+        indices = einx.add(
+            "target before, target axis -> target (before axis)",
+            scaled,
+            axis_indices,
+        )
         weights = einx.multiply(
-            "target a, target b -> target (a b)", weights, axis_weights
+            "target before, target axis -> target (before axis)",
+            weights,
+            axis_weights,
         )
         row_ok = row_ok & axis_ok
         inside_all = inside_all & axis_inside
     check_outside(inside_all, policies)
     zero = jnp.zeros((), weights.dtype)
+    # wₖₛ ← 0 on invalid rows
     weights = einx.where("target, target tap, -> target tap", row_ok, weights, zero)
     # every index went through remap_taps, so it is in range already
     return Stencil(
@@ -323,6 +351,14 @@ def tensor_stencil(
     policies: Policies,
 ) -> Stencil:
     """H = H₁ ⊗ … ⊗ H_D: one local basis per source axis, read at the targets.
+
+    Algorithm:
+        1. Locate each target on each source axis: the index positions u.
+        2. Per axis, split u into a cell i and an offset t, apply the outside
+           policy, and read the basis' relative taps and weights at t.
+        3. Remap the taps past the ends by the boundary rule.
+        4. Combine the axes: row-major flat indices ∑_d j_d ∏_{d′ > d} N_{d′}
+           and weights ∏_d w_d, then zero the invalid rows.
 
     Args:
         source: An `Axis`, a `RectilinearGrid`, an `AffineGrid` or a

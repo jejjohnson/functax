@@ -1,9 +1,10 @@
-"""Plans: a scheme frozen for one source and one target, f̂(X*) = H 𝒮(y).
+"""Plans: a scheme frozen for one source and one target, f̂(X_*) = H 𝒮(y).
 
-A plan holds a fit 𝒮, a read-out H and the policies. It is built once (the
-locate and the weights are paid then) and applied to every field, and its
-adjoint 𝒮ᵀ Hᵀ sends residuals back. Building may use the host; applying
-traces. Two plans compose into one (``outer @ inner``, a `ComposedPlan`), a
+A plan holds a fit c = 𝒮(y), from the N samples y to the coefficients c, a
+read-out H, from c to the values f̂ at the M targets X_*, and the policies. It
+is built once (the locate and the weights are paid then) and applied to every
+field, and its adjoint 𝒮ᵀ Hᵀ sends residuals back. Building may use the host;
+applying traces. Two plans compose into one (``outer @ inner``, a `ComposedPlan`), a
 plan on a grid target cuts to a window of it (``plan[window]``, a
 `WindowedPlan`), and a local plan exports its stencil for gaussx
 (`Plan.to_gaussx`).
@@ -47,7 +48,7 @@ __all__ = [
 
 
 class Plan(eqx.Module):
-    """f̂(X*) = H 𝒮(y), fitted once, applied to many fields.
+    """f̂(X_*) = H 𝒮(y), fitted once, applied to many fields.
 
     Invalid rows (targets outside the domain under ``outside="nan"``, or with
     no weight left under ``missing="renormalise"``) read ``fill_value``.
@@ -118,11 +119,12 @@ class Plan(eqx.Module):
     def to_gaussx(self) -> tuple[Int[Array, "target tap"], Float[Array, "target tap"]]:
         """The stencil arrays (iₖₛ, wₖₛ) in gaussx's row layout, invalid rows zeroed.
 
-        Row k of W has weights wₖₛ at source indices iₖₛ, repeated indices
-        adding: the ``(interp_indices, interp_values)`` of gaussx's
-        ``InterpolatedOperator`` (W K Wᵀ), and the rows of a ``SparseOperator``.
-        Invalid rows get index 0 and weight 0, so W is the linear map of
-        `operator`. Nothing from gaussx is imported.
+        Row k of H has weights wₖₛ at source indices iₖₛ for its S taps
+        s = 1, …, S, repeated indices adding: the ``(interp_indices,
+        interp_values)`` of gaussx's ``InterpolatedOperator`` (W K Wᵀ, with
+        W = H), and the rows of a ``SparseOperator``. Invalid rows get index 0
+        and weight 0, so H is the linear map of `operator`. Nothing from gaussx
+        is imported.
 
         Returns:
             The (M, S) indices and the (M, S) weights.
@@ -155,6 +157,7 @@ class Plan(eqx.Module):
         valid = self.valid
         zero_index = jnp.zeros((), stencil.indices.dtype)
         zero_weight = jnp.zeros((), stencil.weights.dtype)
+        # iₖₛ ← 0 and wₖₛ ← 0 on invalid rows
         indices = einx.where(
             "target, target tap, -> target tap", valid, stencil.indices, zero_index
         )
@@ -163,15 +166,27 @@ class Plan(eqx.Module):
         )
         return indices, weights
 
-    def _fill(self, data: jax.Array) -> jax.Array:
+    def _fill(
+        self, data: Float[Array, "*batch source"]
+    ) -> Float[Array, "*batch source"]:
         """Replace non-finite samples by ``fill_value`` under ``missing="fill"``."""
         fill = jnp.asarray(self.policies.fill_value, dtype=data.dtype)
-        return jnp.where(jnp.isfinite(data), data, fill)
+        finite = jnp.isfinite(data)
+        # yⱼ ← y_fill where yⱼ is not finite
+        return jnp.where(finite, data, fill)
 
     def __call__(
         self, data: Float[Array, "*batch source"]
     ) -> Float[Array, "*batch target"]:
-        """f̂(X*) = H 𝒮(y) over any leading batch dims, ``fill_value`` at invalid rows.
+        """f̂(X_*) = H 𝒮(y) over any leading batch dims, ``fill_value`` at invalid rows.
+
+        Algorithm:
+            1. Under ``missing="fill"``, replace non-finite samples by
+               ``fill_value``.
+            2. Fit and read, c = 𝒮(y) and f̂ = H c; under
+               ``missing="renormalise"``, read only the finite samples and
+               divide each row by the weight left.
+            3. Write ``fill_value`` at invalid rows and rows with no weight.
 
         Args:
             data: y, the samples, with the flat source last.
@@ -184,22 +199,29 @@ class Plan(eqx.Module):
             data = self._fill(data)
         if self.valid.shape[0] == 0:
             # no targets: nothing to mask, and einx rejects zero-length axes
-            return self.read.apply(self.fit.apply(data))
+            coefficients = self.fit.apply(data)
+            return self.read.apply(coefficients)
         if self.policies.missing == "renormalise":
             values, supported = self._renormalised(data)
         else:
+            # c = 𝒮(y)
             coefficients = self.fit.apply(data)
+            # f̂ = H c
             values = self.read.apply(coefficients)
             supported = jnp.ones(values.shape, dtype=bool)
         valid = einx.logical_and(
             "... target, target -> ... target", supported, self.valid
         )
         fill = jnp.asarray(self.policies.fill_value, dtype=values.dtype)
+        # f̂ₖ ← y_fill on invalid rows
         return jnp.where(valid, values, fill)
 
-    def _renormalised(self, data: jax.Array) -> tuple[jax.Array, jax.Array]:
-        """∑ₛ wₖₛ yᵢ / ∑ₛ wₖₛ over the finite samples only, and where any are left."""
+    def _renormalised(
+        self, data: Float[Array, "*batch source"]
+    ) -> tuple[Float[Array, "*batch target"], Bool[Array, "*batch target"]]:
+        """∑ₛ wₖₛ y[iₖₛ] / ∑ₛ wₖₛ over the finite samples, where any are left."""
         stencil = self._local_stencil("missing='renormalise'")
+        # y[iₖₛ]
         gathered = data[..., stencil.indices]
         finite = jnp.isfinite(gathered)
         zero = jnp.zeros((), data.dtype)
@@ -211,13 +233,18 @@ class Plan(eqx.Module):
             zero,
         )
         safe = jnp.where(finite, gathered, zero)
+        # ∑ₛ wₖₛ over the finite taps
         total = einx.sum("... target [tap]", weights)
+        # ∑ₛ wₖₛ y[iₖₛ] over the finite taps
         weighted = einx.dot(
             "... target tap, ... target tap -> ... target", safe, weights
         )
         supported = total != 0
-        safe_total = jnp.where(supported, total, jnp.ones((), total.dtype))
-        return weighted / safe_total, supported
+        one = jnp.ones((), total.dtype)
+        safe_total = jnp.where(supported, total, one)
+        # f̂ₖ = ∑ₛ wₖₛ y[iₖₛ] / ∑ₛ wₖₛ
+        renormalised = weighted / safe_total
+        return renormalised, supported
 
     def _local_stencil(self, what: str) -> Stencil:
         """The plan's stencil, for policies defined only on local read-outs."""
@@ -243,10 +270,14 @@ class Plan(eqx.Module):
         residual = jnp.asarray(residual)
         if self.valid.shape[0] > 0:
             zero = jnp.zeros((), residual.dtype)
+            # rₖ ← 0 on invalid rows
             residual = einx.where(
                 "target, ... target, -> ... target", self.valid, residual, zero
             )
-        return self.fit.apply_adjoint(self.read.apply_adjoint(residual))
+        # Hᵀ r
+        read_adjoint = self.read.apply_adjoint(residual)
+        # g = 𝒮ᵀ Hᵀ r
+        return self.fit.apply_adjoint(read_adjoint)
 
     def operator(self) -> lx.FunctionLinearOperator:
         """H 𝒮 as one (M, N) lineax operator, with zero rows where invalid.
@@ -256,13 +287,29 @@ class Plan(eqx.Module):
 
         Returns:
             A ``lineax.FunctionLinearOperator`` from ℝᴺ to ℝᴹ.
+
+        Examples:
+            >>> import jax.numpy as jnp
+            >>> from functax.geometry import Axis, Points
+            >>> from functax.interp import Linear
+            >>> plan = Linear().plan(
+            ...     Axis(jnp.arange(3.0)), Points(jnp.array([[0.5], [9.0]]))
+            ... )
+            >>> plan.operator().mv(jnp.array([0.0, 2.0, 4.0])).tolist()
+            [1.0, 0.0]
+            >>> plan.operator().T.mv(jnp.ones(2)).tolist()
+            [0.5, 0.5, 0.0]
         """
-        coefficients = self.read.operator().in_structure()
+        read_operator = self.read.operator()
+        coefficients = read_operator.in_structure()
         n_data = self.fit.data_size(coefficients.shape[0])
         structure = jax.ShapeDtypeStruct((n_data,), coefficients.dtype)
 
-        def apply(data: jax.Array) -> jax.Array:
-            return self.read.apply(self.fit.apply(data))
+        def apply(data: Float[Array, " source"]) -> Float[Array, " target"]:
+            # c = 𝒮(y)
+            fitted = self.fit.apply(data)
+            # H c
+            return self.read.apply(fitted)
 
         return lx.FunctionLinearOperator(apply, structure)
 
@@ -275,8 +322,37 @@ class Plan(eqx.Module):
         finite, so ``data`` is needed and the result is the stencil of that
         mask, renormalised row by row.
 
+        Args:
+            data: y, the samples the weights depend on; needed only under
+                ``missing="renormalise"``.
+
+        Returns:
+            A lineax operator from ℝᴺ to ℝᴹ.
+
         Raises:
             PolicyError: Under ``missing="renormalise"`` without ``data``.
+
+        Examples:
+            Under ``missing="renormalise"`` a missing sample drops out and its
+            row is reweighted:
+
+            >>> import jax.numpy as jnp
+            >>> from functax.geometry import Axis, Points
+            >>> from functax.interp import Linear, Policies
+            >>> plan = Linear().plan(
+            ...     Axis(jnp.arange(3.0)),
+            ...     Points(jnp.array([[0.5], [1.5]])),
+            ...     policies=Policies(missing="renormalise"),
+            ... )
+            >>> data = jnp.array([1.0, jnp.nan, 3.0])
+            >>> plan.linearize(data).mv(jnp.array([1.0, 0.0, 3.0])).tolist()
+            [1.0, 3.0]
+
+            Without ``data`` the weights are unknown:
+
+            >>> plan.linearize()  # doctest: +IGNORE_EXCEPTION_DETAIL
+            Traceback (most recent call last):
+            functax.exceptions.PolicyError: linearize() ... needs the data
         """
         if self.policies.missing != "renormalise":
             return self.operator()
@@ -284,12 +360,18 @@ class Plan(eqx.Module):
             msg = "linearize() under missing='renormalise' needs the data"
             raise PolicyError(msg)
         stencil = self._local_stencil("missing='renormalise'")
-        finite = jnp.isfinite(jnp.asarray(data))[stencil.indices]
+        samples = jnp.asarray(data)
+        finite_samples = jnp.isfinite(samples)
+        finite = finite_samples[stencil.indices]
         zero = jnp.zeros((), stencil.weights.dtype)
+        # wₖₛ ← 0 at missing samples
         weights = jnp.where(finite, stencil.weights, zero)
+        # ∑ₛ wₖₛ
         total = einx.sum("target [tap]", weights)
         supported = total != 0
-        safe_total = jnp.where(supported, total, jnp.ones((), total.dtype))
+        one = jnp.ones((), total.dtype)
+        safe_total = jnp.where(supported, total, one)
+        # wₖₛ / ∑ₛ wₖₛ
         normalised = einx.divide(
             "target tap, target -> target tap", weights, safe_total
         )
@@ -387,14 +469,16 @@ class Plan(eqx.Module):
         return plan
 
     def derivative(self, axis: int, order: int = 1) -> DerivativePlan:
-        """The plan of ∂ᵐf̂/∂x_cᵐ: H′ with H′ₖⱼ = ∂ᵐφⱼ/∂x_cᵐ at target k.
+        """The plan of ∂ᵐf̂/∂x_dᵐ, with read-out entries ∂ᵐφⱼ/∂x_dᵐ at target k.
 
-        c is a target coordinate (a column of ``Points.xy``: per source axis
-        on an `Axis` or a `RectilinearGrid`, (x, y) on an `AffineGrid`). The
-        result has the plan's fit, taps and validity, and its own adjoint.
+        x_d is the d-th target coordinate (a column of ``Points.xy``: one per
+        source axis on an `Axis` or a `RectilinearGrid`, the two map
+        coordinates on an `AffineGrid`), and φⱼ is the basis function that
+        coefficient j carries. The result has the plan's fit, taps and
+        validity, and its own adjoint.
 
         Args:
-            axis: c; negative counts from the end.
+            axis: d; negative counts from the end.
             order: m ≥ 1.
 
         Returns:
@@ -413,8 +497,9 @@ class Plan(eqx.Module):
             >>> axis = Axis(jnp.linspace(0.0, 2.5, 6))
             >>> plan = Cubic().plan(axis, Points(jnp.array([[1.25]])))
             >>> # d/dx of x² is 2x
-            >>> [round(v, 12) for v in plan.derivative(axis=0)(axis.values**2).tolist()]
-            [2.5]
+            >>> slope = plan.derivative(axis=0)(axis.values**2)
+            >>> bool(jnp.allclose(slope, jnp.array([2.5])))
+            True
         """
         if self.local is None or not isinstance(self.read, Stencil):
             msg = "derivative() needs a plan built by a local scheme"
@@ -441,9 +526,26 @@ class Plan(eqx.Module):
         Both plans must share the fit and the policies (as two derivatives of
         one plan do); a row is valid when it is valid in both.
 
+        Args:
+            other: The plan to add, H₂.
+
+        Returns:
+            The `Plan` of H₁ + H₂, with S₁ + S₂ taps per row.
+
         Raises:
             ValidationError: If either read-out is not a stencil, or the fits,
                 policies or source sizes differ.
+
+        Examples:
+            f̂ + ∂f̂/∂x, as one plan holding the taps of both:
+
+            >>> import jax.numpy as jnp
+            >>> from functax.geometry import Axis, Points
+            >>> from functax.interp import Linear
+            >>> plan = Linear().plan(Axis(jnp.arange(4.0)), Points(jnp.array([[0.5]])))
+            >>> both = plan + plan.derivative(axis=0)
+            >>> both.read.n_taps, both(jnp.array([0.0, 1.0, 4.0, 9.0])).tolist()
+            (4, [1.5])
         """
         if not isinstance(other, Plan):
             return NotImplemented
@@ -460,18 +562,20 @@ class Plan(eqx.Module):
         if not same_structure or self.policies != other.policies:
             msg = "plans add when they share the fit and the policies"
             raise ValidationError(msg)
+        # the taps of H₁, then those of H₂, on each row
         indices = einx.id(
-            "target a, target b -> target (a + b)",
+            "target first, target second -> target (first + second)",
             self.read.indices,
             other.read.indices,
         )
         weights = einx.id(
-            "target a, target b -> target (a + b)",
+            "target first, target second -> target (first + second)",
             self.read.weights,
             other.read.weights,
         )
         valid = self.read.valid & other.read.valid
         zero = jnp.zeros((), weights.dtype)
+        # wₖₛ ← 0 on rows invalid in either plan
         weights = einx.where("target, target tap, -> target tap", valid, weights, zero)
         read = Stencil(indices, weights, n_source=self.read.n_source, valid=valid)
         same_shape = self.target_shape == other.target_shape
@@ -480,10 +584,34 @@ class Plan(eqx.Module):
 
 
 class DerivativePlan(Plan):
-    """A plan whose read-out holds basis derivatives: ∂ᵐf̂/∂x_cᵐ at the targets.
+    """A plan whose read-out holds basis derivatives: ∂ᵐf̂/∂x_dᵐ at the targets.
 
     It is linear in the data, with its own `adjoint` and `operator`, and
     passes the dot-product test like any plan. Made by `Plan.derivative`.
+
+    Args:
+        axis: d, the target coordinate x_d it differentiates along.
+        order: m ≥ 1, the derivative order.
+
+    Examples:
+        The slope of a linear read-out is the slope of its cell:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis, Points
+        >>> from functax.interp import DerivativePlan, Linear
+        >>> plan = Linear().plan(
+        ...     Axis(jnp.arange(4.0)), Points(jnp.array([[0.5], [2.5]]))
+        ... )
+        >>> slope = plan.derivative(axis=0)
+        >>> isinstance(slope, DerivativePlan), slope.axis, slope.order
+        (True, 0, 1)
+        >>> slope(jnp.array([0.0, 1.0, 4.0, 9.0])).tolist()
+        [1.0, 5.0]
+
+        Its adjoint sends a residual back through the derivative weights:
+
+        >>> slope.adjoint(jnp.array([1.0, 0.0])).tolist()
+        [-1.0, 1.0, 0.0, 0.0]
     """
 
     axis: int = eqx.field(static=True, kw_only=True)
@@ -636,8 +764,10 @@ class WindowedPlan(Plan):
         if math.prod(window_shape) == 0:
             msg = f"'window' {window!r} selects no targets of a grid of {shape}"
             raise ValidationError(msg)
+        # host-side grid of kept nodes; einx has no meshgrid form
         mesh = np.meshgrid(*kept, indexing="ij")
-        rows = einx.id("... -> (...)", np.ravel_multi_index(mesh, shape))
+        grid_rows = np.ravel_multi_index(mesh, shape)
+        rows = einx.id("... -> (...)", grid_rows)
         stencil = plan.read
         self.fit = plan.fit
         self.read = Stencil(

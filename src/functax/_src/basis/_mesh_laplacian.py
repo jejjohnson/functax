@@ -40,38 +40,42 @@ def cotangent_laplacian_eigpairs(
 ]:
     """The smallest eigenpairs of the cotangent Laplace–Beltrami operator.
 
-    The cotangent Laplacian (Pinkall and Polthier 1993) weights each edge
-    (i, j) by the cotangents of the two angles α_ij, β_ij opposite it (one for
-    a boundary edge): L_ij = −½ (cot α_ij + cot β_ij) on an edge and
-    L_ii = −∑_{j ≠ i} L_ij, a symmetric positive semidefinite stiffness matrix
-    with the constants in its null space. With the lumped mass M = diag(a) of
-    `mesh_vertex_areas`, the eigenproblem is L φ = λ M φ, solved as
-    (M^{−½} L M^{−½}) ψ = λ ψ with φ = M^{−½} ψ, so the eigenvectors are
-    M-orthonormal: Φᵀ M Φ = I. On a closed mesh λ₀ = 0 with
-    φ₀ = 1/√(∑_v a_v); on the unit sphere λ → ℓ(ℓ + 1) with multiplicity
-    2ℓ + 1 under refinement. A mesh with a boundary gets natural (Neumann)
-    conditions. This is the eigenbasis behind NORM (Chen et al. 2024).
+    On a mesh of V vertices, the cotangent Laplacian L ∈ ℝ^{V×V} (Pinkall and
+    Polthier 1993) weights each edge (i, j) by the cotangents of the two angles
+    α_ij, β_ij opposite it (one for a boundary edge): L_ij = −½ (cot α_ij + cot
+    β_ij) on an edge and L_ii = −∑_{j ≠ i} L_ij, a symmetric positive
+    semidefinite stiffness matrix with the constants in its null space. With
+    the lumped mass M = diag(a) of `mesh_vertex_areas`, a ∈ ℝ^V the vertex
+    areas, the eigenproblem is L φ = λ M φ, solved as (M^{−½} L M^{−½}) ψ = λ ψ
+    with φ = M^{−½} ψ, so the eigenvectors are M-orthonormal: Φᵀ M Φ = I for Φ
+    ∈ ℝ^{V×N_basis} holding the N_basis eigenvectors φ_m, m = 0, …, N_basis −
+    1, as columns. On a closed mesh λ₀ = 0 with φ₀ = 1/√(∑_v a_v), summed over
+    the vertices v; on the unit sphere λ → ℓ(ℓ + 1) with multiplicity 2ℓ + 1
+    under refinement, for the spherical-harmonic degree ℓ. A mesh with a
+    boundary gets natural (Neumann) conditions. This is the eigenbasis behind
+    NORM (Chen et al. 2024).
 
     Algorithm:
         1. Check the mesh; compute each triangle's area and corner cotangents.
-        2. Assemble L, adding ½ cot θ to the edge opposite each corner.
+        2. Assemble L, adding half the cotangent of each corner's angle to the
+           edge opposite it.
         3. Diagonalise M^{−½} L M^{−½} densely on the host in float64, which
            is O(V³) time and O(V²) memory, practical up to a few thousand
            vertices.
-        4. Keep the M smallest pairs, clip round-off negatives to 0, and map
-           ψ back to φ = M^{−½} ψ.
+        4. Keep the N_basis smallest pairs, clip round-off negatives to 0, and
+           map ψ back to φ = M^{−½} ψ.
 
     Args:
         vertices: The vertex positions.
         triangles: Vertex indices, three per triangle, in either orientation.
             Every vertex must belong to a triangle.
-        num_basis: M, the number of eigenpairs, from 1 to V.
+        num_basis: N_basis, the number of eigenpairs, from 1 to V.
 
     Returns:
-        ``(eigvals, eigvecs, areas)``: the M eigenvalues ascending, the
+        ``(eigvals, eigvecs, areas)``: the N_basis eigenvalues ascending, the
         M-orthonormal eigenvectors (column m is φ_m at the vertices), and the
         vertex areas a, the mass diagonal and quadrature weights. The analysis
-        of a vertex field u is ``eigvecs.T @ (areas * u)`` and the synthesis
+        of a vertex field f is ``eigvecs.T @ (areas * f)`` and the synthesis
         ``eigvecs @ coefficients``.
 
     Raises:
@@ -97,8 +101,19 @@ def cotangent_laplacian_eigpairs(
         ... )
         >>> eigvals.shape, eigvecs.shape, areas.shape
         ((9,), (642, 9), (642,))
-        >>> [round(float(v), 1) for v in eigvals]
-        [0.0, 2.0, 2.0, 2.0, 6.0, 6.0, 6.0, 6.0, 6.0]
+        >>> # ℓ(ℓ + 1) = 0, 2, 6 on the unit sphere, with multiplicity 2ℓ + 1
+        >>> import jax.numpy as jnp
+        >>> exact = jnp.array([0.0, 2.0, 2.0, 2.0, 6.0, 6.0, 6.0, 6.0, 6.0])
+        >>> bool(jnp.allclose(eigvals, exact, atol=0.05))
+        True
+
+        On a closed mesh the first eigenvector is the constant 1/√(∑_v a_v):
+
+        >>> vertices, triangles = icosphere(0)
+        >>> _, eigvecs, areas = cotangent_laplacian_eigpairs(vertices, triangles, 1)
+        >>> constant = 1.0 / jnp.sqrt(areas.sum())
+        >>> bool(jnp.allclose(jnp.abs(eigvecs[:, 0]), constant))
+        True
     """
     points, corners = _validate_mesh(vertices, triangles)
     n_vertices = points.shape[0]
@@ -120,21 +135,34 @@ def cotangent_laplacian_eigpairs(
         raise GeometryError(msg)
 
     # --- assemble L: corner k's cotangent weights the opposite edge ---
-    head = np.roll(corners, -1, axis=1).ravel()
-    tail = np.roll(corners, -2, axis=1).ravel()
-    half_cot = 0.5 * cot.ravel()
+    # the edge opposite corner k runs from corner k + 1 to corner k + 2
+    next_corner = einx.roll("triangle [corner]", corners, shift=-1)
+    after_next = einx.roll("triangle [corner]", corners, shift=-2)
+    head = einx.id("triangle corner -> (triangle corner)", next_corner)
+    tail = einx.id("triangle corner -> (triangle corner)", after_next)
+    flat_cot = einx.id("triangle corner -> (triangle corner)", cot)
+    # half the cotangent of each corner's angle
+    half_cot = 0.5 * flat_cot
     weights = np.zeros((n_vertices, n_vertices))
     np.add.at(weights, (head, tail), half_cot)
     np.add.at(weights, (tail, head), half_cot)
-    laplacian = np.diag(weights.sum(axis=1)) - weights
-    laplacian = 0.5 * (laplacian + einx.id("row col -> col row", laplacian))
+    # L_ii = −∑_{j ≠ i} L_ij
+    degree = einx.sum("row [col]", weights)
+    laplacian = np.diag(degree) - weights
+    transposed = einx.id("row col -> col row", laplacian)
+    # L ← (L + Lᵀ)/2
+    laplacian = 0.5 * (laplacian + transposed)
 
     # --- solve the symmetric problem M^{−½} L M^{−½} ψ = λ ψ ---
-    inverse_sqrt_mass = 1.0 / np.sqrt(areas)
+    sqrt_mass = np.sqrt(areas)
+    # M^{−½}
+    inverse_sqrt_mass = 1.0 / sqrt_mass
+    # M^{−½} L M^{−½}, the two-sided diagonal scaling written out
     symmetric = einx.multiply(
         "row, row col, col -> row col", inverse_sqrt_mass, laplacian, inverse_sqrt_mass
     )
-    symmetric = 0.5 * (symmetric + einx.id("row col -> col row", symmetric))
+    transposed = einx.id("row col -> col row", symmetric)
+    symmetric = 0.5 * (symmetric + transposed)
     eigvals, psi = np.linalg.eigh(symmetric)
     eigvals = np.maximum(eigvals[:count], 0.0)
     # φ = M^{−½} ψ

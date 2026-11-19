@@ -1,8 +1,9 @@
 """The sparse read-out H: S taps per target, applied by gather and by scatter-add.
 
-Row k of H has weights wₖₛ at source indices iₖₛ for s = 1, …, S, so
+Row k = 1, …, M of H has weights wₖₛ at source indices iₖₛ ∈ {0, …, N − 1}
+for its taps s = 1, …, S, so for coefficients c ∈ ℝᴺ and a residual r ∈ ℝᴹ
 
-    f̂ₖ = ∑ₛ wₖₛ c[iₖₛ]  and  (Hᵀr)ⱼ = ∑ₖ ∑ₛ [iₖₛ = j] wₖₛ rₖ,
+    f̂ₖ = ∑ₛ wₖₛ c[iₖₛ]  and  (Hᵀ r)ⱼ = ∑ₖ ∑ₛ [iₖₛ = j] wₖₛ rₖ,
 
 with [·] equal to 1 when its condition holds. Every local scheme (nearest,
 linear, cubic, B-spline read-out, inverse distance, Delaunay, conservative)
@@ -26,7 +27,7 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
-from jaxtyping import Array, ArrayLike, Bool, Float, Int
+from jaxtyping import Array, ArrayLike, Bool, Float, Int, Shaped
 
 from functax._src._checks import check_values, require_floating
 from functax.exceptions import ValidationError
@@ -39,10 +40,25 @@ __all__ = [
 
 
 class Readout(eqx.Module):
-    """c → f̂(X*): the read-out of a plan, from coefficients to target values.
+    """c ↦ f̂(X_*): the read-out of a plan, from coefficients to target values.
 
     A `Stencil` is the sparse read-out of every local scheme; dense kernel
-    read-outs K(X*, X) arrive with the global schemes of Wave 3.
+    read-outs K_*X, the kernel matrix between the targets X_* and the sources
+    X, arrive with the global schemes of Wave 3.
+
+    Examples:
+        A `Stencil` is a read-out, with every row valid by default; its
+        adjoint spreads a residual back over the taps:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.interp import Readout, Stencil
+        >>> read = Stencil(
+        ...     jnp.array([[0, 1]]), jnp.array([[0.25, 0.75]]), n_source=2
+        ... )
+        >>> isinstance(read, Readout), read.valid.tolist()
+        (True, [True])
+        >>> read.apply_adjoint(jnp.array([2.0])).tolist()
+        [0.5, 1.5]
     """
 
     valid: eqx.AbstractVar[Bool[Array, " target"]]
@@ -151,7 +167,11 @@ class Stencil(Readout):
             )
             raise ValidationError(msg)
         if check:
-            out_of_range = jnp.any((indices < 0) | (indices >= n_source))
+            # [iₖₛ ∉ [0, N)] for each tap
+            below = indices < 0
+            above = indices >= n_source
+            # full reduction, not einx: a stencil may have no rows
+            out_of_range = jnp.any(below | above)
             indices = check_values(
                 indices, out_of_range, f"'indices' must lie in [0, {int(n_source)})"
             )
@@ -192,14 +212,15 @@ class Stencil(Readout):
         # c[iₖₛ]
         gathered = coefficients[..., self.indices]
         # f̂ₖ = ∑ₛ wₖₛ c[iₖₛ]
-        return einx.dot(
+        values = einx.dot(
             "... target tap, target tap -> ... target", gathered, self.weights
         )
+        return values
 
     def apply_adjoint(
         self, residual: Float[Array, "*batch target"]
     ) -> Float[Array, "*batch source"]:
-        """(Hᵀr)ⱼ = ∑ₖ ∑ₛ [iₖₛ = j] wₖₛ rₖ, over any leading batch dims.
+        """(Hᵀ r)ⱼ = ∑ₖ ∑ₛ [iₖₛ = j] wₖₛ rₖ, over any leading batch dims.
 
         Args:
             residual: r, with the targets last.
@@ -221,8 +242,9 @@ class Stencil(Readout):
         )
         batch_shape = residual.shape[:-1]
         zeros = jnp.zeros((*batch_shape, self.n_source), contributions.dtype)
-        # (Hᵀr)ⱼ = ∑ₖ ∑ₛ [iₖₛ = j] wₖₛ rₖ: the scatter adds repeated indices
-        return zeros.at[..., self.indices].add(contributions)
+        # (Hᵀ r)ⱼ = ∑ₖ ∑ₛ [iₖₛ = j] wₖₛ rₖ: the scatter adds repeated indices
+        adjoint = zeros.at[..., self.indices].add(contributions)
+        return adjoint
 
     def operator(self) -> lx.FunctionLinearOperator:
         """H as an (M, N) lineax operator.
@@ -232,6 +254,17 @@ class Stencil(Readout):
 
         Returns:
             A ``lineax.FunctionLinearOperator`` from ℝᴺ to ℝᴹ.
+
+        Examples:
+            >>> import jax.numpy as jnp
+            >>> from functax.interp import Stencil
+            >>> H = Stencil(
+            ...     jnp.array([[0, 1], [1, 2]]), jnp.full((2, 2), 0.5), n_source=3
+            ... )
+            >>> H.operator().mv(jnp.array([0.0, 2.0, 4.0])).tolist()
+            [1.0, 3.0]
+            >>> H.operator().T.mv(jnp.ones(2)).tolist()
+            [0.5, 1.0, 0.5]
         """
         structure = jax.ShapeDtypeStruct((self.n_source,), self.weights.dtype)
         return lx.FunctionLinearOperator(self.apply, structure)
@@ -267,11 +300,13 @@ class Stencil(Readout):
         """
         if self.n_target == 0:
             return jnp.zeros((0, self.n_source), self.weights.dtype)
-        rows = einx.id(
-            "target -> target tap", jnp.arange(self.n_target), tap=self.n_taps
-        )
-        dense = jnp.zeros((self.n_target, self.n_source), self.weights.dtype)
-        return dense.at[rows, self.indices].add(self.weights)
+        # k, the row of each tap
+        row_numbers = jnp.arange(self.n_target)
+        rows = einx.id("target -> target tap", row_numbers, tap=self.n_taps)
+        zeros = jnp.zeros((self.n_target, self.n_source), self.weights.dtype)
+        # Hₖⱼ = ∑ₛ [iₖₛ = j] wₖₛ
+        dense = zeros.at[rows, self.indices].add(self.weights)
+        return dense
 
     @classmethod
     def from_dense(cls, matrix: Any, *, max_taps: int) -> Stencil:
@@ -325,7 +360,7 @@ class Stencil(Readout):
         return cls(jnp.asarray(indices), jnp.asarray(weights), n_source=n_source)
 
     @staticmethod
-    def _check_last_axis(array: jax.Array, size: int, name: str) -> None:
+    def _check_last_axis(array: Shaped[Array, "*shape"], size: int, name: str) -> None:
         if array.ndim < 1 or array.shape[-1] != size:
             msg = (
                 f"'{name}' must have a last axis of length {size}, "

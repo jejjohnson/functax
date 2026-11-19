@@ -16,7 +16,6 @@ require_jax(__name__)
 
 import abc
 import dataclasses
-from collections.abc import Callable
 from typing import Any, ClassVar
 
 import einx
@@ -30,6 +29,7 @@ from functax._src.geometry._types import AffineGrid, Axis, Points, RectilinearGr
 from functax._src.interp._hermite import (
     HermiteFit,
     HermiteGeometry,
+    Slopes,
     ascending_axis,
     hermite_stencil,
 )
@@ -69,8 +69,44 @@ __all__ = [
 class NonlinearPlan(Plan):
     """A plan whose fit depends on y: no fixed operator or adjoint, but `linearize`.
 
-    Calling it reads f̂(X*) = H 𝒮(y) as any plan does; `operator` and
+    Calling it reads f̂(X_*) = H 𝒮(y) as any plan does; `operator` and
     `adjoint` raise `NonlinearSchemeError`.
+
+    Args:
+        window: (l, r), the knots i − l … i + r that a target in cell i
+            depends on.
+
+    Raises:
+        NonlinearSchemeError: From `operator` and `adjoint`.
+
+    Examples:
+        PCHIP builds one; it reads like any plan:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis, Points
+        >>> from functax.interp import NonlinearPlan, Pchip
+        >>> plan = Pchip().plan(Axis(jnp.arange(5.0)), Points(jnp.array([[1.5]])))
+        >>> isinstance(plan, NonlinearPlan)
+        True
+        >>> data = jnp.array([0.0, 1.0, 3.0, 4.0, 4.5])
+        >>> plan(data).shape
+        (1,)
+
+        Its tangent-linear stencil at y has the taps i − 1 … i + 2; PCHIP is
+        homogeneous of degree 1 in y, so J_f̂ y = f̂(y) with J_f̂ = ∂f̂/∂y (Euler):
+
+        >>> tangent = plan.linearize(data)
+        >>> tangent.weights.shape
+        (1, 4)
+        >>> bool(jnp.allclose(tangent.apply(data), plan(data)))
+        True
+
+        There is no fixed operator:
+
+        >>> plan.operator()  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        functax.exceptions.NonlinearSchemeError: a nonlinear plan has no ...
     """
 
     window: tuple[int, int] = eqx.field(static=True, kw_only=True)
@@ -110,11 +146,11 @@ class NonlinearPlan(Plan):
     def linearize(  # ty: ignore[invalid-method-override]
         self, data: Float[Array, " source"] | None = None
     ) -> Stencil:
-        """∂f̂(X*)/∂y at y, as a stencil with the taps each target depends on.
+        """∂f̂(X_*)/∂y at y, as a stencil with the taps each target depends on.
 
         Target k in cell i depends only on y at knots i − l … i + r (l = 1,
-        r = 2 for PCHIP and Steffen; l = 2, r = 3 for Akima), so the Jacobian
-        row has those entries and the stencil holds them.
+        r = 2 for PCHIP and Steffen; l = 2, r = 3 for Akima), so row k of the
+        Jacobian J_f̂ has those entries and the stencil holds them.
 
         Args:
             data: y, one vector of N samples.
@@ -137,21 +173,24 @@ class NonlinearPlan(Plan):
         if data.shape != (n_nodes,):
             msg = f"'data' must be one vector of shape ({n_nodes},), got {data.shape}"
             raise ValidationError(msg)
-        # J = ∂f̂/∂y, (M, N); its non-zeros sit in each target's window
+        # J_f̂ = ∂f̂/∂y; its non-zeros sit in each target's window
         jacobian = jax.jacfwd(self.__call__)(data)
         left, right = self.window
+        # i, the cell of each target (its first value tap)
         cell = read.indices[:, 0]
         offsets = jnp.arange(-left, right + 1, dtype=cell.dtype)
+        # the knots i − l … i + r
         taps = einx.add("target, tap -> target tap", cell, offsets)
         in_range = (taps >= 0) & (taps <= n_nodes - 1)
         # back to the source's own order when its axis decreases
         source_taps = (n_nodes - 1) - taps if fit.reversed else taps
         indices = jnp.clip(source_taps, 0, n_nodes - 1)
-        rows = einx.id(
-            "target -> target tap", jnp.arange(cell.shape[0]), tap=offsets.shape[0]
+        # wₖₛ = J_f̂[k, iₖₛ]
+        weights = einx.get_at(
+            "target [source], target tap -> target tap", jacobian, indices
         )
-        weights = jacobian[rows, indices]
-        weights = jnp.where(in_range, weights, jnp.zeros((), weights.dtype))
+        zero = jnp.zeros((), weights.dtype)
+        weights = jnp.where(in_range, weights, zero)
         return Stencil(indices, weights, n_source=n_nodes, valid=read.valid)
 
 
@@ -161,6 +200,29 @@ class NonlinearDerivativePlan(DerivativePlan):
     Made by ``NonlinearPlan.derivative``; the slopes still depend on y, so
     `operator` and `adjoint` raise `NonlinearSchemeError`, and ``jax.vjp`` of
     the call is its adjoint at y.
+
+    Raises:
+        NonlinearSchemeError: From `operator` and `adjoint`.
+
+    Examples:
+        The slope of a PCHIP field, read at the targets:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis, Points
+        >>> from functax.interp import NonlinearDerivativePlan, Pchip
+        >>> plan = Pchip().plan(Axis(jnp.arange(4.0)), Points(jnp.array([[1.5]])))
+        >>> derivative = plan.derivative(0)
+        >>> isinstance(derivative, NonlinearDerivativePlan)
+        True
+        >>> bool(jnp.allclose(derivative(2.0 * jnp.arange(4.0)), 2.0))
+        True
+
+        Its adjoint at y comes from ``jax.vjp``, not from the plan:
+
+        >>> derivative.adjoint(jnp.ones(1))  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        functax.exceptions.NonlinearSchemeError: a nonlinear plan has no ...
     """
 
     def operator(self) -> lx.FunctionLinearOperator:
@@ -182,7 +244,7 @@ class SeriesInterpolant(eqx.Module):
 
     Made by ``scheme.fit(axis, y)``; the fit runs in JAX, so gradients reach
     both y and the knot positions. It equals ``scheme.plan(axis, targets)(y)``.
-    `derivative` gives the field f̂⁽ᵐ⁾, the derivative of the cubic Hermite
+    `derivative` gives the field ∂ᵐf̂/∂xᵐ, the derivative of the cubic Hermite
     read-out in closed form.
 
     Examples:
@@ -193,11 +255,13 @@ class SeriesInterpolant(eqx.Module):
         ...     Axis(jnp.array([0.0, 1.0, 2.0, 4.0])),
         ...     jnp.array([0.0, 1.0, 1.0, 3.0]),
         ... )
-        >>> field(jnp.array([[1.5], [3.0]])).tolist()
-        [1.0, 1.5833333333333333]
+        >>> values = field(jnp.array([[1.5], [3.0]]))
+        >>> bool(jnp.allclose(values, jnp.array([1.0, 1.5833333333333333])))
+        True
         >>> # f̂′ at a knot is the knot's slope; PCHIP's is 0 at a flat step
-        >>> field.derivative()(jnp.array([[1.0], [2.0]])).tolist()
-        [0.0, 0.0]
+        >>> slopes = field.derivative()(jnp.array([[1.0], [2.0]]))
+        >>> bool(jnp.allclose(slopes, 0.0))
+        True
     """
 
     data: Float[Array, "*batch source"]
@@ -210,9 +274,10 @@ class SeriesInterpolant(eqx.Module):
         self, targets: Float[Array, "target 1"] | Points
     ) -> Float[Array, "*batch target"]:
         """f̂ at the targets, ``fill_value`` where they are invalid."""
-        points = (
-            targets if isinstance(targets, Points) else Points(jnp.asarray(targets))
-        )
+        if isinstance(targets, Points):
+            points = targets
+        else:
+            points = Points(jnp.asarray(targets))
         return self.plan(points)(self.data)
 
     def plan(self, target: Any) -> Plan:
@@ -223,7 +288,7 @@ class SeriesInterpolant(eqx.Module):
         return plan.derivative(0, self.derivative_order)
 
     def derivative(self, axis: int = 0, order: int = 1) -> SeriesInterpolant:
-        """dᵐf̂/dxᵐ as a field, with m = ``order``, read like f̂.
+        """∂ᵐf̂/∂xᵐ as a field, with m = ``order``, read like f̂.
 
         Args:
             axis: The target coordinate, 0 (or −1), since the axis is 1-D.
@@ -246,18 +311,46 @@ class SeriesInterpolant(eqx.Module):
 
 
 class SeriesScheme(Scheme):
-    """A scheme on one axis with a cubic Hermite read-out and its own slopes."""
+    """A scheme on one axis with a cubic Hermite read-out and its own slopes.
+
+    f̂ = φ₀₀(t) yᵢ + φ₁₀(t) hᵢ dᵢ + φ₀₁(t) yᵢ₊₁ + φ₁₁(t) hᵢ dᵢ₊₁ on cell i of
+    width hᵢ, at offset t, with the cubic Hermite basis φ₀₀, φ₁₀, φ₀₁, φ₁₁
+    (see `hermite_stencil`) and the slopes d = 𝒮_d(y) that each subclass
+    supplies: `_slopes` for increasing knots and `_piecewise_slopes` for knots
+    with repeats.
+
+    Examples:
+        A new scheme supplies only its slopes; here the centred secants:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis, Points
+        >>> from functax.interp import SeriesScheme
+        >>> def centred_slopes(nodes, values):
+        ...     secants = jnp.diff(values) / jnp.diff(nodes)
+        ...     inner = 0.5 * (secants[1:] + secants[:-1])
+        ...     return jnp.concatenate([secants[:1], inner, secants[-1:]])
+        >>> class CentredSecants(SeriesScheme):
+        ...     def _slopes(self):
+        ...         return centred_slopes
+        ...
+        ...     def _piecewise_slopes(self):
+        ...         return centred_slopes
+        >>> axis = Axis(jnp.arange(4.0))
+        >>> plan = CentredSecants().plan(axis, Points(jnp.array([[1.5]])))
+        >>> bool(jnp.allclose(plan(2.0 * jnp.arange(4.0)), 3.0))
+        True
+    """
 
     window: ClassVar[tuple[int, int]] = (1, 2)
     linear: ClassVar[bool] = False
 
     @abc.abstractmethod
-    def _slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
-        """m = slopes(x, y) for increasing knots."""
+    def _slopes(self) -> Slopes:
+        """d = slopes(x, y) for increasing knots."""
 
     @abc.abstractmethod
-    def _piecewise_slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
-        """m = slopes(x, y) for non-decreasing knots, piece by piece between repeats."""
+    def _piecewise_slopes(self) -> Slopes:
+        """d = slopes(x, y) for non-decreasing knots, piece by piece between repeats."""
 
     def _minimum_knots(self) -> int:
         return 2
@@ -305,10 +398,12 @@ class SeriesScheme(Scheme):
         )
         coordinates = target_points[:, 0]
         if self._periodic():
-            # one period P = x_{N−1} − x₀: x ↦ x₀ + ((x − x₀) mod P), as SciPy does
             first = ascending.values[0]
+            # P = x_{N−1} − x₀
             period = ascending.values[-1] - first
-            coordinates = first + jnp.mod(coordinates - first, period)
+            # x ↦ x₀ + ((x − x₀) mod P), as SciPy does
+            wrapped = jnp.mod(coordinates - first, period)
+            coordinates = first + wrapped
         stencil = hermite_stencil(ascending, coordinates, policies)
         if source.repeats == "allow":
             if self._periodic():
@@ -332,7 +427,16 @@ class SeriesScheme(Scheme):
         *,
         policies: Policies | None = None,
     ) -> SeriesInterpolant:
-        """The field on ``source`` from y, read later at targets chosen in the trace."""
+        """The field on ``source`` from y, read later at targets chosen in the trace.
+
+        Args:
+            source: The `Axis` the data lie on.
+            data: y, the samples last, with any leading batch dims.
+            policies: The outside rules.
+
+        Returns:
+            The `SeriesInterpolant`.
+        """
         policies = Policies() if policies is None else policies
         return SeriesInterpolant(jnp.asarray(data), source, self, policies)
 
@@ -355,8 +459,20 @@ class CubicSpline(SeriesScheme):
         >>> knots = Axis(jnp.array([0.0, 1.0, 2.5, 3.0, 4.0]))
         >>> plan = CubicSpline().plan(knots, Points(jnp.array([[2.0]])))
         >>> # not-a-knot reproduces cubics: 2³ = 8
-        >>> [round(v, 12) for v in plan(knots.values**3).tolist()]
-        [8.0]
+        >>> bool(jnp.allclose(plan(knots.values**3), 8.0))
+        True
+
+        The spline is linear in y, so its plan has an adjoint:
+
+        >>> plan.adjoint(jnp.ones(1)).shape
+        (5,)
+
+        An unknown end condition is rejected:
+
+        >>> CubicSpline("parabolic")  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        functax.exceptions.ValidationError: 'bc' must be one of ...
     """
 
     bc: str = eqx.field(static=True, default="not-a-knot")
@@ -367,10 +483,10 @@ class CubicSpline(SeriesScheme):
             msg = f"'bc' must be one of {list(SPLINE_CONDITIONS)}, got {self.bc!r}"
             raise ValidationError(msg)
 
-    def _slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
+    def _slopes(self) -> Slopes:
         return SPLINE_SLOPES[self.bc]
 
-    def _piecewise_slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
+    def _piecewise_slopes(self) -> Slopes:
         return PIECEWISE_SPLINE_SLOPES[self.bc]
 
     def _minimum_knots(self) -> int:
@@ -388,14 +504,22 @@ class Pchip(SeriesScheme):
         >>> from functax.geometry import Axis, Points
         >>> from functax.interp import Pchip
         >>> plan = Pchip().plan(Axis(jnp.arange(4.0)), Points(jnp.array([[1.5]])))
-        >>> plan(jnp.array([0.0, 0.0, 1.0, 1.0])).tolist()
-        [0.5]
+        >>> bool(jnp.allclose(plan(jnp.array([0.0, 0.0, 1.0, 1.0])), 0.5))
+        True
+
+        On a decreasing axis it reads the same field:
+
+        >>> flipped = Pchip().plan(
+        ...     Axis(jnp.arange(4.0)[::-1]), Points(jnp.array([[1.5]]))
+        ... )
+        >>> bool(jnp.allclose(flipped(jnp.array([1.0, 1.0, 0.0, 0.0])), 0.5))
+        True
     """
 
-    def _slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
+    def _slopes(self) -> Slopes:
         return pchip_slopes
 
-    def _piecewise_slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
+    def _piecewise_slopes(self) -> Slopes:
         return piecewise_pchip_slopes
 
 
@@ -410,16 +534,21 @@ class Akima(SeriesScheme):
         >>> from functax.geometry import Axis, Points
         >>> from functax.interp import Akima
         >>> plan = Akima().plan(Axis(jnp.arange(5.0)), Points(jnp.array([[2.5]])))
-        >>> plan(jnp.arange(5.0) * 2.0).tolist()
-        [5.0]
+        >>> bool(jnp.allclose(plan(jnp.arange(5.0) * 2.0), 5.0))
+        True
+
+        Its tangent-linear stencil has the six taps i − 2 … i + 3:
+
+        >>> plan.linearize(jnp.arange(5.0) ** 2).weights.shape
+        (1, 6)
     """
 
     window: ClassVar[tuple[int, int]] = (2, 3)
 
-    def _slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
+    def _slopes(self) -> Slopes:
         return akima_slopes
 
-    def _piecewise_slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
+    def _piecewise_slopes(self) -> Slopes:
         return piecewise_akima_slopes
 
 
@@ -436,12 +565,19 @@ class Steffen(SeriesScheme):
         >>> plan = Steffen().plan(
         ...     Axis(jnp.arange(4.0)), Points(jnp.array([[0.5], [2.5]]))
         ... )
-        >>> plan(jnp.array([0.0, 1.0, 1.0, 5.0])).tolist()
-        [0.6875, 2.25]
+        >>> values = plan(jnp.array([0.0, 1.0, 1.0, 5.0]))
+        >>> bool(jnp.allclose(values, jnp.array([0.6875, 2.25])))
+        True
+
+        A line is reproduced, since every slope is then its secant:
+
+        >>> line = plan(jnp.array([0.0, 1.0, 2.0, 3.0]))
+        >>> bool(jnp.allclose(line, jnp.array([0.5, 2.5])))
+        True
     """
 
-    def _slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
+    def _slopes(self) -> Slopes:
         return steffen_slopes
 
-    def _piecewise_slopes(self) -> Callable[[jax.Array, jax.Array], jax.Array]:
+    def _piecewise_slopes(self) -> Slopes:
         return piecewise_steffen_slopes

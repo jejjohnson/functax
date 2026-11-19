@@ -2,10 +2,11 @@
 
 The columns are an orthonormal multiscale wavelet basis, Φ = Wᵀ for the
 periodic DWT analysis operator W built by cascading convolve-and-downsample
-levels, so Φᵀ Φ = I and a field is reconstructed exactly as Φ (Φᵀ f). This is
-the critically sampled counterpart of the overcomplete Gabor frames: periodic
-boundaries, power-of-two sizes, and the Haar, db2 and db4 filters, built once
-on the host. Moved from geonnax ``_wavelet`` at ``be5537d``.
+levels, so Φᵀ Φ = I and a field f on the grid is reconstructed exactly as
+Φ (Φᵀ f). This is the critically sampled counterpart of the overcomplete Gabor
+frames: periodic boundaries, power-of-two sizes, and the Haar, db2 and db4
+filters, built once on the host. Moved from geonnax ``_wavelet`` at
+``be5537d``.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from functax._src._backend import require_jax
 
 require_jax(__name__)
 
+import einx
 import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, Float
@@ -28,8 +30,8 @@ __all__ = [
 ]
 
 
-# the orthonormal scaling (low-pass) filters, ∑h = √2 and ∑h² = 1, in the
-# PyWavelets ``dec_lo`` convention
+# the orthonormal scaling (low-pass) filters h, ∑ₖ hₖ = √2 and ∑ₖ hₖ² = 1, in
+# the PyWavelets ``dec_lo`` convention
 _FILTERS: dict[str, tuple[float, ...]] = {
     "haar": (0.7071067811865476, 0.7071067811865476),
     "db2": (
@@ -51,13 +53,23 @@ _FILTERS: dict[str, tuple[float, ...]] = {
 }
 
 
-def _qmf(h: np.ndarray) -> np.ndarray:
-    """The high-pass quadrature-mirror filter g_k = (−1)^k h_{L−1−k}."""
-    k = np.arange(h.shape[0])
-    return ((-1.0) ** k) * h[::-1]
+def _qmf(h: Float[np.ndarray, " tap"]) -> Float[np.ndarray, " tap"]:
+    """The high-pass quadrature-mirror filter g_k = (−1)ᵏ h_{L−1−k}.
+
+    For a scaling filter h of length L, with the taps k = 0, …, L − 1.
+    """
+    taps = np.arange(h.shape[0])
+    # (−1)ᵏ
+    signs = (-1.0) ** taps
+    # h_{L−1−k}
+    reversed_filter = h[::-1]
+    # g_k = (−1)ᵏ h_{L−1−k}
+    return signs * reversed_filter
 
 
-def _level_matrix(m: int, h: np.ndarray, g: np.ndarray) -> np.ndarray:
+def _level_matrix(
+    m: int, h: Float[np.ndarray, " tap"], g: Float[np.ndarray, " tap"]
+) -> Float[np.ndarray, "row col"]:
     """One periodic convolve-and-downsample level as an m × m matrix.
 
     The first m/2 rows are the low-pass (approximation) outputs and the rest
@@ -66,13 +78,14 @@ def _level_matrix(m: int, h: np.ndarray, g: np.ndarray) -> np.ndarray:
     """
     half = m // 2
     length = h.shape[0]
-    w = np.zeros((m, m))
-    for i in range(half):
-        for k in range(length):
-            col = (2 * i + k) % m
-            w[i, col] += h[k]
-            w[half + i, col] += g[k]
-    return w
+    matrix = np.zeros((m, m))
+    for output in range(half):
+        for tap in range(length):
+            # output n reads the input (2n + k) mod m: convolve, then downsample
+            col = (2 * output + tap) % m
+            matrix[output, col] += h[tap]
+            matrix[half + output, col] += g[tap]
+    return matrix
 
 
 def wavelet_basis_1d(
@@ -83,6 +96,17 @@ def wavelet_basis_1d(
 ) -> Float[Array, "row col"]:
     """The orthonormal 1-D DWT synthesis basis on a periodic grid of length n.
 
+    Φ = Wᵀ with W = W_J ⋯ W₂ W₁ for J = ``levels``, where level j = 1, …, J
+    applies the periodic convolve-and-downsample matrix to the approximation
+    block of size n/2^{j−1} and leaves the details already split off
+    unchanged.
+
+    Algorithm:
+        1. Build the high-pass mirror g of the scaling filter h.
+        2. For each level, embed the level matrix of the current approximation
+           size in an identity and compose it onto W.
+        3. Return the transpose Wᵀ, the synthesis basis of the orthonormal W.
+
     Args:
         n: The grid length, a power of two of at least 2.
         wavelet: ``"haar"``, ``"db2"`` or ``"db4"``.
@@ -90,7 +114,8 @@ def wavelet_basis_1d(
             default, and capped there.
 
     Returns:
-        Φ, n × n with the orthonormal basis functions as columns (Φᵀ Φ = I).
+        Φ ∈ ℝ^{n×n}, with the orthonormal basis functions as columns
+        (Φᵀ Φ = I).
 
     Raises:
         ValidationError: If ``n`` is not a power of two of at least 2,
@@ -107,6 +132,10 @@ def wavelet_basis_1d(
         True
         >>> wavelet_basis_1d(4, levels=1).shape
         (4, 4)
+        >>> # analysis then synthesis reconstructs a field exactly
+        >>> field = jnp.arange(8.0)
+        >>> bool(jnp.allclose(Phi @ (Phi.T @ field), field))
+        True
     """
     if n < 2 or (n & (n - 1)) != 0:
         msg = f"'n' must be a power of two of at least 2, got {n!r}"
@@ -124,17 +153,19 @@ def wavelet_basis_1d(
 
     h = np.asarray(_FILTERS[wavelet], dtype=np.float64)
     g = _qmf(h)
-    w = np.eye(n)
+    analysis = np.eye(n)
     size = n
     for _ in range(levels):
         if size < 2:
             break
         level = np.eye(n)
         level[:size, :size] = _level_matrix(size, h, g)
-        w = level @ w
+        # W ← W_j W
+        analysis = einx.dot("row mid, mid col -> row col", level, analysis)
         size //= 2
     # the transform is orthonormal, so the synthesis basis is the transpose
-    return jnp.asarray(w.T)
+    synthesis = einx.id("row col -> col row", analysis)
+    return jnp.asarray(synthesis)
 
 
 def wavelet_basis_2d(
@@ -146,8 +177,9 @@ def wavelet_basis_2d(
 ) -> Float[Array, "row col"]:
     """The separable orthonormal 2-D DWT basis, the Kronecker product Φ_y ⊗ Φ_x.
 
-    Its rows index the row-major flattened (ny, nx) grid (row iy · nx + ix),
-    and it stays orthonormal.
+    Φ_y and Φ_x are the 1-D bases of `wavelet_basis_1d` along the rows and the
+    columns. Its rows index the row-major flattened (ny, nx) grid (row
+    iy · nx + ix), and it stays orthonormal.
 
     Args:
         ny: The number of rows, a power of two of at least 2.
@@ -172,8 +204,16 @@ def wavelet_basis_2d(
         >>> Phi = wavelet_basis_2d(2, 4)
         >>> bool(jnp.allclose(Phi.T @ Phi, jnp.eye(8), atol=1e-12))
         True
+        >>> # the Kronecker product of the two 1-D bases
+        >>> from functax.basis.local import wavelet_basis_1d
+        >>> kron = jnp.kron(wavelet_basis_1d(2), wavelet_basis_1d(4))
+        >>> bool(jnp.allclose(Phi, kron))
+        True
     """
     nx = ny if nx is None else nx
     phi_y = wavelet_basis_1d(ny, wavelet=wavelet, levels=levels)
     phi_x = wavelet_basis_1d(nx, wavelet=wavelet, levels=levels)
-    return jnp.kron(phi_y, phi_x)
+    # Φ = Φ_y ⊗ Φ_x
+    return einx.multiply(
+        "row_y col_y, row_x col_x -> (row_y row_x) (col_y col_x)", phi_y, phi_x
+    )

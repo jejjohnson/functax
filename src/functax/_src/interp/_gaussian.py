@@ -28,10 +28,12 @@ __all__ = [
 
 
 class GaussianPlan(Plan):
-    """A plan read as a Gaussian posterior: f(X*) ∣ y ~ 𝒩(H 𝒮(y), Σ*).
+    """A plan read as a Gaussian posterior: f(X_*) ∣ y ~ 𝒩(H 𝒮(y), Σ_{*∣y}).
 
-    The mean is the plan itself, so `__call__`, `adjoint` and `operator` are
-    those of `Plan`; ``posterior`` adds Σ*. Invalid rows (targets outside the
+    At the M targets X_*, with f_* = f(X_*) ∈ ℝ^M and the samples y, the mean
+    𝔼[f_* ∣ y] = H 𝒮(y) is the plan itself, so `__call__`, `adjoint` and
+    `operator` are those of `Plan`; ``posterior`` adds the posterior
+    covariance Σ_{*∣y} ∈ ℝ^{M×M}. Invalid rows (targets outside the
     domain under ``outside="nan"``) have NaN variance and covariance, and
     `sample` writes the plan's ``fill_value`` there, as the mean does.
 
@@ -39,7 +41,8 @@ class GaussianPlan(Plan):
         fit: 𝒮, from samples to coefficients.
         read: H, from coefficients to target values.
         policies: The plan's outside, missing and boundary rules.
-        posterior: Σ*, the posterior covariance at the targets (keyword only).
+        posterior: Σ_{*∣y}, the posterior covariance at the targets (keyword
+            only).
 
     Raises:
         ValidationError: If ``posterior`` has a different number of targets
@@ -75,7 +78,7 @@ class GaussianPlan(Plan):
     def mean(
         self, data: Float[Array, "*batch source"]
     ) -> Float[Array, "*batch target"]:
-        """𝔼[f(X*) ∣ y] = H 𝒮(y), the same as calling the plan.
+        """𝔼[f(X_*) ∣ y] = H 𝒮(y), the same as calling the plan.
 
         Args:
             data: y, the samples, with the flat source last.
@@ -86,17 +89,18 @@ class GaussianPlan(Plan):
         return self(data)
 
     def variance(self) -> Float[Array, " target"]:
-        """Var[f(x*) ∣ y] = diag Σ*, NaN at invalid rows.
+        """σ_*² = diag(Σ_{*∣y}), the variance of f(x_*) ∣ y, NaN at invalid rows.
 
         Returns:
             The posterior variance at each target.
         """
+        # diag(Σ_{*∣y})
         variance = self.posterior.variance()
         nan = jnp.full((), jnp.nan, variance.dtype)
         return jnp.where(self.valid, variance, nan)
 
     def covariance(self) -> Float[Array, "target target"]:
-        """Σ*, dense (M, M), with NaN rows and columns at invalid rows.
+        """Σ_{*∣y}, dense (M, M), with NaN rows and columns at invalid rows.
 
         Returns:
             The posterior covariance of the targets.
@@ -109,7 +113,7 @@ class GaussianPlan(Plan):
     def sample(
         self, data: Float[Array, "*batch source"], *, key: PRNGKeyArray
     ) -> Float[Array, "*batch target"]:
-        """f(X*) ~ 𝒩(H 𝒮(y), Σ*), one independent draw per field in ``data``.
+        """f(X_*) ~ 𝒩(H 𝒮(y), Σ_{*∣y}), one independent draw per field in ``data``.
 
         Args:
             data: y, the samples, with the flat source last.
@@ -119,9 +123,12 @@ class GaussianPlan(Plan):
             One draw per leading batch entry, with the targets last;
             ``fill_value`` at invalid rows.
         """
+        # 𝔼[f_* ∣ y] = H 𝒮(y)
         mean = self(data)
-        noise = self.posterior.sample(mean.shape[:-1], key=key)
-        # f = 𝔼[f ∣ y] + ε, ε ~ 𝒩(0, Σ*)
+        # f̃ ~ 𝒩(0, Σ_{*∣y}), one draw per field
+        batch_shape = mean.shape[:-1]
+        noise = self.posterior.sample(batch_shape, key=key)
+        # f_* = 𝔼[f_* ∣ y] + f̃, f̃ ~ 𝒩(0, Σ_{*∣y})
         draw = mean + noise
         return einx.where(
             "target, ... target, ... target -> ... target", self.valid, draw, mean

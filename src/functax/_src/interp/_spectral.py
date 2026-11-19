@@ -7,7 +7,7 @@ two FFTs and has a hand-written adjoint of the same form. `Chebyshev` fits the
 Chebyshev coefficients of samples on Chebyshev nodes with the transform of
 `ChebyshevTransform1D` (`ChebyshevFit`) and reads the series at arbitrary
 points, by `clenshaw` in its interpolant and by the dense matrix
-T_pk = T_k(ξ_p) in its plan.
+Tₚₖ = Tₖ(ξₚ) in its plan, for target p and degree k.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
-from jaxtyping import Array, ArrayLike, Bool, Float, Int, Real
+from jaxtyping import Array, ArrayLike, Bool, Complex, Float, Int, Real, Shaped
 
 from functax._src._dtypes import promote_integers
 from functax._src.basis._legendre import _check_degree
@@ -58,18 +58,21 @@ __all__ = [
 ]
 
 
-# a node within 1e-12 P of x₀ + jP/N counts as on the grid (8ε for float32)
+# a node within 1e-12 P of x₀ + jP/N counts as on the grid (8 machine epsilons
+# for float32)
 _GRID_RTOL = 1e-12
 
 
 def resampling_modes(
     n_source: int, n_target: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[
+    Int[np.ndarray, " mode"], Int[np.ndarray, " mode"], Float[np.ndarray, " mode"]
+]:
     """The mode map S of N → M resampling: (output bin, input bin, weight) triples.
 
     Bins are in full-FFT order (0, 1, …, then the negative wavenumbers). With
-    m = min(N, M), the wavenumbers |k| < m/2 copy across with weight 1. For
-    even m and N ≠ M the unpaired bin k = m/2 follows ``scipy.signal.resample``:
+    m = min(N, M), the wavenumbers |κ| < m/2 copy across with weight 1. For
+    even m and N ≠ M the unpaired bin κ = m/2 follows ``scipy.signal.resample``:
     upsampling splits input bin N/2 into output bins ±N/2 with weight ½ each,
     and downsampling adds input bins ±M/2 into output bin M/2.
 
@@ -80,17 +83,34 @@ def resampling_modes(
     Returns:
         Three 1-D arrays of one length: the output bins, the input bins, and
         the weights (float64).
+
+    Examples:
+        Upsampling 4 → 8 copies bins 0 and ±1 and splits the Nyquist bin 2:
+
+        >>> from functax._src.interp._spectral import resampling_modes
+        >>> outputs, inputs, weights = resampling_modes(4, 8)
+        >>> outputs.tolist(), inputs.tolist()
+        ([0, 1, 2, 7, 6], [0, 1, 2, 3, 2])
+        >>> weights.tolist() == [1.0, 1.0, 0.5, 1.0, 0.5]
+        True
+
+        Equal sizes copy every bin once:
+
+        >>> outputs, inputs, weights = resampling_modes(5, 5)
+        >>> bool((outputs == inputs).all()), weights.shape
+        (True, (5,))
     """
-    m = min(n_source, n_target)
-    # the bins k = 0, …, ⌊m/2⌋, then the negative bins k = −1, …, −(m − ⌊m/2⌋ − 1)
-    n_nonnegative = m // 2 + 1
+    n_kept = min(n_source, n_target)
+    # the bins κ = 0, …, ⌊m/2⌋, then the negative bins κ = −1, …, −(m − ⌊m/2⌋ − 1)
+    n_nonnegative = n_kept // 2 + 1
     positive = np.arange(n_nonnegative)
-    negative = np.arange(1, m - n_nonnegative + 1)
+    negative = np.arange(1, n_kept - n_nonnegative + 1)
+    # bin −κ of a length-L DFT sits at L − κ
     outputs = [positive, n_target - negative]
     inputs = [positive, n_source - negative]
     weights = [np.ones(positive.size), np.ones(negative.size)]
-    if m % 2 == 0 and n_source != n_target:
-        half = m // 2
+    if n_kept % 2 == 0 and n_source != n_target:
+        half = n_kept // 2
         if n_target > n_source:
             # split input bin N/2 into output bins +N/2 and −N/2
             weights[0][half] = 0.5
@@ -110,14 +130,14 @@ def resampling_modes(
 
 
 class FourierReadout(Readout):
-    """H y = (M/N) Re F⁻¹_M[S F_N y], band-limited resampling by two FFTs.
+    """H y = (M/N) Re(F_M⁻¹ S F_N y), band-limited resampling by two FFTs.
 
-    F_N is the length-N DFT, F⁻¹_M the inverse length-M DFT, and S the (M, N)
-    mode map of `resampling_modes` (zero-padding when M > N, cropping when
-    M < N). Writing the DFTs as matrices, H = (1/N) Re(F*_M S F_N), so the
-    adjoint has the same shape with the roles swapped:
+    F_N is the length-N DFT matrix, F_M⁻¹ the inverse length-M DFT, and S the
+    (M, N) mode map of `resampling_modes` (zero-padding when M > N, cropping
+    when M < N). With F_M† the conjugate transpose, H = (1/N) Re(F_M† S F_N),
+    so the adjoint has the same shape with the roles swapped:
 
-        Hᵀ r = Re F⁻¹_N[Sᵀ F_M r].
+        Hᵀ r = Re(F_N⁻¹ Sᵀ F_M r).
 
     Args:
         n_source: N, the number of periodic input samples.
@@ -166,21 +186,27 @@ class FourierReadout(Readout):
 
     def _map_modes(
         self,
-        spectrum: jax.Array,
-        gather: jax.Array,
-        scatter: jax.Array,
+        spectrum: Complex[Array, "*batch bin"],
+        gather: Int[Array, " mode"],
+        scatter: Int[Array, " mode"],
         size: int,
-    ) -> jax.Array:
-        """Z[scatter] += w · X[gather] over the last axis: S X, or Sᵀ X swapped."""
+    ) -> Complex[Array, "*batch out_bin"]:
+        """z[scatter] += w · v[gather] over the last axis: S v, or Sᵀ v swapped."""
         weights = self.mode_weights.astype(spectrum.real.dtype)
-        contributions = spectrum[..., gather] * weights
+        # v[gather]
+        gathered = einx.get_at("... [bin], mode -> ... mode", spectrum, gather)
+        # w · v[gather]
+        contributions = einx.multiply("... mode, mode -> ... mode", gathered, weights)
         zeros = jnp.zeros((*spectrum.shape[:-1], size), spectrum.dtype)
-        return zeros.at[..., scatter].add(contributions)
+        # z[scatter] += w · v[gather]
+        return einx.add_at(
+            "... [bin], mode, ... mode -> ... [bin]", zeros, scatter, contributions
+        )
 
     def apply(
         self, coefficients: Float[Array, "*batch source"]
     ) -> Float[Array, "*batch target"]:
-        """H y = (M/N) Re F⁻¹_M[S F_N y], over any leading batch dims.
+        """H y = (M/N) Re(F_M⁻¹ S F_N y), over any leading batch dims.
 
         Args:
             coefficients: y, the N periodic samples, last.
@@ -198,14 +224,15 @@ class FourierReadout(Readout):
         padded = self._map_modes(
             spectrum, self.input_modes, self.output_modes, self.n_target
         )
-        # (M/N) Re F⁻¹_M[S F_N y]
+        # Re(F_M⁻¹ S F_N y)
         resampled = jnp.fft.ifft(padded).real
+        # (M/N) Re(F_M⁻¹ S F_N y)
         return resampled * (self.n_target / self.n_source)
 
     def apply_adjoint(
         self, residual: Float[Array, "*batch target"]
     ) -> Float[Array, "*batch source"]:
-        """Hᵀ r = Re F⁻¹_N[Sᵀ F_M r], over any leading batch dims.
+        """Hᵀ r = Re(F_N⁻¹ Sᵀ F_M r), over any leading batch dims.
 
         Args:
             residual: r, the M values, last.
@@ -223,7 +250,7 @@ class FourierReadout(Readout):
         cropped = self._map_modes(
             spectrum, self.output_modes, self.input_modes, self.n_source
         )
-        # Re F⁻¹_N[Sᵀ F_M r]
+        # Re(F_N⁻¹ Sᵀ F_M r)
         return jnp.fft.ifft(cropped).real
 
     def operator(self) -> lx.FunctionLinearOperator:
@@ -232,7 +259,7 @@ class FourierReadout(Readout):
         return lx.FunctionLinearOperator(self.apply, structure)
 
 
-def _check_last_axis(array: jax.Array, size: int, name: str) -> None:
+def _check_last_axis(array: Shaped[Array, "*shape"], size: int, name: str) -> None:
     if array.ndim < 1 or array.shape[-1] != size:
         msg = (
             f"'{name}' must have a last axis of length {size}, got shape {array.shape}"
@@ -241,7 +268,7 @@ def _check_last_axis(array: jax.Array, size: int, name: str) -> None:
 
 
 def _grid_tolerance(axis: Axis) -> float:
-    """The relative tolerance of a node: 1e-12, or 8ε of a coarser dtype."""
+    """The relative tolerance of a node: 1e-12, or 8 epsilons of a coarser dtype."""
     epsilon = float(np.finfo(np.asarray(axis.values).dtype).eps)
     return max(_GRID_RTOL, 8 * epsilon)
 
@@ -257,9 +284,13 @@ def _periodic_grid(axis: Any, name: str) -> tuple[float, float, int]:
     values = np.asarray(axis.values, dtype=np.float64)
     n_nodes = values.shape[0]
     period = axis.period
-    # xⱼ = x₀ + jP/N: ascending, equally spaced, tiling the whole period
-    expected = values[0] + np.arange(n_nodes) * (period / n_nodes)
-    deviation = np.max(np.abs(values - expected))
+    # jP/N: ascending, equally spaced, tiling the whole period
+    offsets = np.arange(n_nodes) * (period / n_nodes)
+    # xⱼ = x₀ + jP/N
+    expected = values[0] + offsets
+    # max_j |xⱼ − (x₀ + jP/N)|
+    misfit = np.abs(values - expected)
+    deviation = einx.max("[node]", misfit)
     if deviation > _grid_tolerance(axis) * period:
         msg = (
             f"'{name}' must have the nodes x0 + j * period / n (ascending, "
@@ -273,15 +304,15 @@ class Fourier(Scheme):
     """Band-limited Fourier resampling from N to M nodes of one periodic axis.
 
     The N samples define the trigonometric polynomial with their discrete
-    Fourier coefficients ŷ = F_N y, and the plan reads it on M nodes of the same
+    Fourier coefficients ỹ = F_N y, and the plan reads it on M nodes of the same
     period from the same origin by zero-padding the spectrum (M > N) or
     cropping it (M < N):
 
-        f̂ = (M/N) F⁻¹_M[S ŷ].
+        f̂ = (M/N) Re(F_M⁻¹ S ỹ).
 
     For even min(N, M) the unpaired Nyquist bin is split (upsampling) or
     folded (downsampling) as ``scipy.signal.resample`` does, so a field whose
-    spectrum lies in |k| < min(N, M)/2 is resampled exactly and upsampling
+    spectrum lies in |κ| < min(N, M)/2 is resampled exactly and upsampling
     then downsampling returns the samples. The axis must be periodic or the
     field band-limited; at a jump the read-out rings (Gibbs).
 
@@ -289,7 +320,7 @@ class Fourier(Scheme):
         1. Check both axes: periodic with one period P, ascending, nodes
            x₀ + jP/N and x₀ + jP/M from the same x₀ (host).
         2. Build S, the mode map of `resampling_modes`, into a `FourierReadout`.
-        3. Apply: ŷ = F_N y, then f̂ = (M/N) Re F⁻¹_M[S ŷ].
+        3. Apply: ỹ = F_N y, then f̂ = (M/N) Re(F_M⁻¹ S ỹ).
 
     Examples:
         >>> import jax.numpy as jnp
@@ -376,27 +407,27 @@ def clenshaw(
     *,
     interval: tuple[float, float] = (-1.0, 1.0),
 ) -> Float[Array, "*batch"]:
-    """The Chebyshev series f(x) = ∑ₖ aₖ Tₖ(ξ(x)) by Clenshaw's recurrence.
+    """The Chebyshev series f(x) = ∑ₖ cₖ Tₖ(ξ(x)) by Clenshaw's recurrence.
 
     With ξ = (2x − a − b)/(b − a), the affine map of [a, b] onto [−1, 1], and
-    K coefficients,
+    D_c coefficients c₀, …, c_{D_c−1},
 
-        bₖ = aₖ + 2ξ bₖ₊₁ − bₖ₊₂,  k = K − 1, …, 1,  b_K = b_{K+1} = 0,
-        f(x) = a₀ + ξ b₁ − b₂,
+        qₖ = cₖ + 2ξ qₖ₊₁ − qₖ₊₂,  k = D_c − 1, …, 1,  q_{D_c} = q_{D_c+1} = 0,
+        f(x) = c₀ + ξ q₁ − q₂,
 
-    in O(K) per point without forming any Tₖ, stable for any K. It equals
-    ``numpy.polynomial.chebyshev.chebval(ξ, a)``. Points outside [a, b] are
+    in O(D_c) per point without forming any Tₖ, stable for any D_c. It equals
+    ``numpy.polynomial.chebyshev.chebval(ξ, c)``. Points outside [a, b] are
     evaluated as the polynomial (extrapolated); `Chebyshev` applies the
     outside policies.
 
     Algorithm:
         1. Map x onto ξ in [−1, 1].
-        2. Scan k = K − 1 down to 1, carrying (bₖ₊₁, bₖ₊₂).
-        3. f = a₀ + ξ b₁ − b₂.
+        2. Scan k = D_c − 1 down to 1, carrying (qₖ₊₁, qₖ₊₂).
+        3. f = c₀ + ξ q₁ − q₂.
 
     Args:
         x: The points x, any shape. Integers become float32.
-        coefficients: The K coefficients a₀, …, a_{K−1}, by degree.
+        coefficients: c, the D_c coefficients c₀, …, c_{D_c−1}, by degree.
         interval: The interval (a, b), with a < b, that the series lives on.
 
     Returns:
@@ -407,25 +438,27 @@ def clenshaw(
         ValidationError: If ``coefficients`` is not 1-D and non-empty, or the
             interval is not two finite numbers with a < b.
 
-    References:
-        Clenshaw, C. W. (1955). A note on the summation of Chebyshev series.
-        Mathematical Tables and Other Aids to Computation 9(51), 118–120.
-
     Examples:
         >>> import jax.numpy as jnp
         >>> from functax.interp import clenshaw
         >>> # T₂(x) = 2x² − 1
-        >>> clenshaw(
+        >>> values = clenshaw(
         ...     jnp.array([0.0, 0.5, 1.0]), jnp.array([0.0, 0.0, 1.0])
-        ... ).tolist()
-        [-1.0, -0.5, 1.0]
+        ... )
+        >>> bool(jnp.allclose(values, jnp.array([-1.0, -0.5, 1.0])))
+        True
         >>> # on [0, 4], T₁(ξ) = ξ = (x − 2)/2
-        >>> clenshaw(
+        >>> shifted = clenshaw(
         ...     jnp.array([3.0]), jnp.array([0.0, 1.0]), interval=(0.0, 4.0)
-        ... ).tolist()
-        [0.5]
+        ... )
+        >>> bool(jnp.allclose(shifted, 0.5))
+        True
         >>> clenshaw(jnp.zeros((2, 3)), jnp.ones(5)).shape
         (2, 3)
+
+    References:
+        Clenshaw, C. W. (1955). A note on the summation of Chebyshev series.
+        Mathematical Tables and Other Aids to Computation 9(51), 118–120.
     """
     lower, upper = _reference_interval(interval)
     series = promote_integers(jnp.asarray(coefficients))
@@ -437,24 +470,26 @@ def clenshaw(
     points = points.astype(dtype)
     series = series.astype(dtype)
     # ξ = (2x − a − b)/(b − a)
-    reference = (2.0 * points - (lower + upper)) / (upper - lower)
-    # f = a₀ for K = 1
+    stretched = 2.0 * points - (lower + upper)
+    reference = stretched / (upper - lower)
+    # f = c₀ for D_c = 1
     if series.shape[0] == 1:
         return jnp.full_like(reference, series[0])
 
     def step(
-        carry: tuple[jax.Array, jax.Array], coefficient: jax.Array
-    ) -> tuple[tuple[jax.Array, jax.Array], None]:
+        carry: tuple[Float[Array, "*batch"], Float[Array, "*batch"]],
+        coefficient: Float[Array, ""],
+    ) -> tuple[tuple[Float[Array, "*batch"], Float[Array, "*batch"]], None]:
         later, latest = carry
-        # bₖ = aₖ + 2ξ bₖ₊₁ − bₖ₊₂
+        # qₖ = cₖ + 2ξ qₖ₊₁ − qₖ₊₂
         current = coefficient + 2.0 * reference * later - latest
         return (current, later), None
 
     zero = jnp.zeros_like(reference)
-    # aₖ for k = K − 1, …, 1
+    # cₖ for k = D_c − 1, …, 1
     descending = series[:0:-1]
     (first, second), _ = jax.lax.scan(step, (zero, zero), descending)
-    # f = a₀ + ξ b₁ − b₂
+    # f = c₀ + ξ q₁ − q₂
     return series[0] + reference * first - second
 
 
@@ -469,10 +504,11 @@ class _ChebyshevGrid:
 
 
 def _chebyshev_grid(axis: Any, kind: str, name: str) -> _ChebyshevGrid:
-    """Read N, [a, b] and the order off an `Axis` of Chebyshev nodes, on the host.
+    """Read the degree n, [a, b] and the order off an `Axis` of Chebyshev nodes (host).
 
-    Lobatto nodes give [a, b] as their ends; Gauss nodes give it from the first
-    and last node, x₀ − x_{N−1} = 2h cos(π/(2N)). The nodes must then be those
+    The n + 1 Lobatto nodes give [a, b] as their ends; the n Gauss nodes give
+    it from the first and last node, x₀ − x_{n−1} = 2h cos(π/(2n)), with h the
+    half-width of [a, b]. The nodes must then be those
     of `chebyshev_nodes` on [a, b], in either order.
     """
     if not isinstance(axis, Axis):
@@ -492,12 +528,14 @@ def _chebyshev_grid(axis: Any, kind: str, name: str) -> _ChebyshevGrid:
         lower, upper = float(last), float(first)
     else:
         degree = n_nodes
-        # c = (x₀ + x_{N−1})/2, h = (x₀ − x_{N−1}) / (2 cos(π/(2N)))
+        # centre (x₀ + x_{n−1})/2, h = (x₀ − x_{n−1}) / (2 cos(π/(2n)))
         centre = 0.5 * (first + last)
         half_width = (first - last) / (2.0 * math.cos(math.pi / (2 * degree)))
         lower, upper = float(centre - half_width), float(centre + half_width)
     expected = _mapped_nodes(degree, kind, lower, upper)
-    deviation = float(np.max(np.abs(descending_values - expected)))
+    # max_j |xⱼ − x_ref,j| against the nodes x_ref of [a, b]
+    misfit = np.abs(descending_values - expected)
+    deviation = float(einx.max("[node]", misfit))
     if deviation > _grid_tolerance(axis) * (upper - lower):
         msg = (
             f"'{name}' must hold the {kind} Chebyshev nodes of an interval (in "
@@ -508,19 +546,20 @@ def _chebyshev_grid(axis: Any, kind: str, name: str) -> _ChebyshevGrid:
 
 
 class ChebyshevFit(Fit):
-    """c = P C y: the first K Chebyshev coefficients of samples on Chebyshev nodes.
+    """c = Π C y: the first D_c Chebyshev coefficients of samples on Chebyshev nodes.
 
-    C is the forward transform of `ChebyshevTransform1D` (the values taken in
-    its descending node order) and P keeps the coefficients a₀, …, a_{K−1}.
-    The adjoint is Cᵀ Pᵀ: Pᵀ pads with zeros, and with cₖ = 2 at the end modes
-    and 1 inside,
+    On the n + 1 Lobatto or n Gauss nodes of a degree-n transform, C is the
+    forward transform of `ChebyshevTransform1D` (the values taken in its
+    descending node order) and Π keeps the coefficients c₀, …, c_{D_c−1}. The
+    adjoint is Cᵀ Πᵀ: Πᵀ pads with zeros, and with γₖ = 2 at the end modes and
+    1 inside,
 
-        Gauss–Lobatto:  C_kj = 2 cos(πjk/N) / (N cₖ cⱼ) is symmetric, so Cᵀ = C,
-        Gauss:          Cᵀ g = (2/N) ∑ₖ (gₖ/cₖ) Tₖ(ξⱼ), the synthesis of g/c.
+        Gauss–Lobatto:  Cₖⱼ = 2 cos(πjk/n) / (n γₖ γⱼ) is symmetric, so Cᵀ = C,
+        Gauss:          Cᵀ g = (2/n) ∑ₖ (gₖ/γₖ) Tₖ(ξⱼ), the synthesis of g/γ.
 
     Args:
         transform: The `ChebyshevTransform1D` of the nodes.
-        n_coefficients: K, at most the number of nodes.
+        n_coefficients: D_c, at most the number of nodes.
         ascending: Whether the data run up the axis (the reverse of the
             transform's order), so they are flipped first.
 
@@ -554,12 +593,14 @@ class ChebyshevFit(Fit):
             )
             raise ValidationError(msg)
 
-    def _oriented(self, values: jax.Array) -> jax.Array:
+    def _oriented(
+        self, values: Float[Array, "*batch node"]
+    ) -> Float[Array, "*batch node"]:
         """The values in the transform's (descending) node order, or back."""
         return values[..., ::-1] if self.ascending else values
 
     def apply(self, data: Float[Array, "*batch source"]) -> Float[Array, "*batch mode"]:
-        """c = P C y, over any leading batch dims.
+        """c = Π C y, over any leading batch dims.
 
         Raises:
             ValidationError: If the last axis of ``data`` is not the node count.
@@ -572,16 +613,16 @@ class ChebyshevFit(Fit):
     def apply_adjoint(
         self, coefficients: Float[Array, "*batch mode"]
     ) -> Float[Array, "*batch source"]:
-        """Cᵀ Pᵀ g, over any leading batch dims.
+        """Cᵀ Πᵀ g, over any leading batch dims.
 
         Raises:
-            ValidationError: If the last axis of ``coefficients`` is not K.
+            ValidationError: If the last axis of ``coefficients`` is not D_c.
         """
         coefficients = jnp.asarray(coefficients)
         _check_last_axis(coefficients, self.n_coefficients, "coefficients")
         n_nodes = self.transform.n_nodes
         padding = n_nodes - self.n_coefficients
-        # Pᵀ g: the dropped coefficients are zero
+        # Πᵀ g: the dropped coefficients are zero
         padded = coefficients
         if padding:
             zeros = jnp.zeros((*coefficients.shape[:-1], padding), coefficients.dtype)
@@ -592,13 +633,15 @@ class ChebyshevFit(Fit):
             # Cᵀ = C on the Lobatto nodes
             back = self.transform.to_spectral(padded)
         else:
-            # Cᵀ g = (2/N) synthesis(g/c), with c₀ = 2
+            # g/γ, with γ₀ = 2
             halved = padded.at[..., 0].multiply(0.5)
-            back = self.transform.from_spectral(halved) * (2.0 / self.transform.n)
+            # Cᵀ g = (2/n) synthesis(g/γ)
+            synthesis = self.transform.from_spectral(halved)
+            back = synthesis * (2.0 / self.transform.n)
         return self._oriented(back)
 
     def data_size(self, n_coefficients: int) -> int:
-        """The number of nodes, N + 1 (Lobatto) or N (Gauss)."""
+        """The number of nodes, n + 1 (Lobatto) or n (Gauss)."""
         del n_coefficients
         return self.transform.n_nodes
 
@@ -616,14 +659,14 @@ def _reference_points(
     under every rule, and read ξ = 0 so no NaN reaches a gradient.
     """
     # ξ = (2x − a − b)/(b − a)
-    reference = (2.0 * coordinates - (grid.lower + grid.upper)) / (
-        grid.upper - grid.lower
-    )
+    stretched = 2.0 * coordinates - (grid.lower + grid.upper)
+    reference = stretched / (grid.upper - grid.lower)
     finite = jnp.isfinite(reference)
-    # a target within rounding of an end counts as on it: 1e-12, or 8ε of a
-    # coarser dtype
+    # a target within rounding of an end counts as on it: 1e-12, or 8 machine
+    # epsilons of a coarser dtype
     epsilon = float(jnp.finfo(reference.dtype).eps)
     tolerance = max(_GRID_RTOL, 8 * epsilon)
+    # |ξ| ≤ 1 + tol
     inside = finite & (jnp.abs(reference) <= 1.0 + tolerance)
     check_outside(inside, policies)
     valid = finite if policies.outside in ("clamp", "extrapolate") else inside
@@ -632,7 +675,9 @@ def _reference_points(
         # onto ±1 with a unit derivative up to the ends (jnp.clip halves it
         # there) and zero beyond them
         one = jnp.ones((), safe.dtype)
-        safe = jnp.where(safe > 1.0, one, jnp.where(safe < -1.0, -one, safe))
+        # ξ ↦ max(ξ, −1), then min(ξ, 1)
+        raised = jnp.where(safe < -1.0, -one, safe)
+        safe = jnp.where(safe > 1.0, one, raised)
     elif policies.outside != "extrapolate":
         safe = jnp.where(inside, safe, jnp.zeros((), safe.dtype))
     return safe, valid
@@ -647,14 +692,14 @@ def _check_chebyshev_policies(policies: Policies) -> None:
 class ChebyshevInterpolant(eqx.Module):
     """A fitted Chebyshev series f̂(x) = ∑ₖ cₖ Tₖ(ξ(x)), read at targets by `clenshaw`.
 
-    Made by ``Chebyshev(n_coefficients=K).fit(axis, y)``. Calling it maps the
+    Made by ``Chebyshev(n_coefficients=D_c).fit(axis, y)``. Calling it maps the
     targets onto ξ ∈ [−1, 1], applies the outside rule and sums the series
     by Clenshaw's recurrence inside the trace, so it runs under ``jit``,
     ``vmap``, ``grad`` and ``lax.scan``; it equals
     ``scheme.plan(axis, targets)(y)``.
 
     Args:
-        coefficients: c, the K coefficients last, with any leading batch dims.
+        coefficients: c, the D_c coefficients last, with any leading batch dims.
         source: The `Axis` of Chebyshev nodes the data lived on.
         scheme: The `Chebyshev` scheme that fitted it.
         policies: The plan policies; ``missing="fill"`` was applied at the fit.
@@ -673,8 +718,9 @@ class ChebyshevInterpolant(eqx.Module):
         ...     )
         ... )
         True
-        >>> field(jnp.array([[3.0]])).tolist()
-        [nan]
+        >>> # off [a, b], the default policy reads NaN
+        >>> bool(jnp.isnan(field(jnp.array([[3.0]]))).all())
+        True
     """
 
     coefficients: Float[Array, "*batch mode"]
@@ -712,9 +758,10 @@ class ChebyshevInterpolant(eqx.Module):
             )
             raise GeometryError(msg)
         grid = _ChebyshevGrid(0, self.lower, self.upper, ascending=False)
-        reference, valid = _reference_points(coordinates[:, 0], grid, self.policies)
+        positions = einx.id("target 1 -> target", coordinates)
+        reference, valid = _reference_points(positions, grid, self.policies)
 
-        def evaluate(series: jax.Array) -> jax.Array:
+        def evaluate(series: Float[Array, " mode"]) -> Float[Array, " target"]:
             # the coefficients are already on [−1, 1]: ξ is the point
             return clenshaw(reference, series)
 
@@ -733,34 +780,35 @@ class Chebyshev(Scheme):
     """The Chebyshev series of samples on Chebyshev nodes, read at arbitrary points.
 
     Samples y on the nodes of `chebyshev_nodes` on [a, b] (an `Axis`, in either
-    order) define the series of their first K Chebyshev coefficients,
+    order) define the series of their first D_c Chebyshev coefficients,
 
-        f̂(x) = ∑ₖ cₖ Tₖ(ξ(x)),  c = P C y,  ξ = (2x − a − b)/(b − a),
+        f̂(x) = ∑ₖ cₖ Tₖ(ξ(x)),  c = Π C y,  ξ = (2x − a − b)/(b − a),
 
-    with C the forward `ChebyshevTransform1D` and P the truncation to K
-    modes (K = N + 1 on Lobatto nodes interpolates the samples). It is linear
-    in y: `plan` gives a `Plan` whose fit is `ChebyshevFit` and whose read-out
-    is the dense `KernelReadout` T_pk = Tₖ(ξ_p), with the adjoint Cᵀ Pᵀ Tᵀ;
+    with C the forward `ChebyshevTransform1D` and Π the truncation to D_c
+    modes (D_c = n + 1 on the n + 1 Lobatto nodes of degree n interpolates the
+    samples). It is linear in y: `plan` gives a `Plan` whose fit is
+    `ChebyshevFit` and whose read-out is the dense `KernelReadout`
+    Tₚₖ = Tₖ(ξₚ) at targets p, with the adjoint Cᵀ Πᵀ Tᵀ;
     `fit` gives a `ChebyshevInterpolant` that sums the series by `clenshaw`
-    at targets chosen in the trace. A field of degree below K is reproduced
+    at targets chosen in the trace. A field of degree below D_c is reproduced
     exactly. Targets off [a, b] follow ``policies.outside``.
 
     Algorithm:
-        1. Read N, [a, b] and the order off the axis (host), checking that its
+        1. Read n, [a, b] and the order off the axis (host), checking that its
            nodes are Chebyshev nodes of ``kind``.
-        2. Fit: c = P C y, the forward transform truncated to K modes.
-        3. Read: f̂ = T c with T_pk = Tₖ(ξ_p) (plan), or Clenshaw's recurrence
+        2. Fit: c = Π C y, the forward transform truncated to D_c modes.
+        3. Read: f̂ = T c with Tₚₖ = Tₖ(ξₚ) (plan), or Clenshaw's recurrence
            (interpolant).
 
     Args:
-        n_coefficients: K, the number of coefficients kept, from 1 to the
+        n_coefficients: D_c, the number of coefficients kept, from 1 to the
             number of nodes.
         kind: The node kind of the source axis, ``"lobatto"`` (the default) or
             ``"gauss"``.
 
     Raises:
         ValidationError: If ``n_coefficients`` is not a positive integer, or
-            ``kind`` is unknown; when planned or fitted, if K exceeds the
+            ``kind`` is unknown; when planned or fitted, if D_c exceeds the
             number of nodes.
         GeometryError: When planned or fitted, if the source is not an `Axis`
             of Chebyshev nodes of ``kind``.
@@ -813,7 +861,7 @@ class Chebyshev(Scheme):
 
         Raises:
             GeometryError: If the source is not an `Axis` of Chebyshev nodes.
-            ValidationError: If K exceeds the number of nodes.
+            ValidationError: If D_c exceeds the number of nodes.
             PolicyError: Under ``missing="renormalise"``.
             OutsideDomainError: Under ``outside="raise"`` when a target is
                 outside [a, b].
@@ -828,12 +876,14 @@ class Chebyshev(Scheme):
                 "the Chebyshev source has 1 axis"
             )
             raise GeometryError(msg)
-        reference, valid = _reference_points(coordinates[:, 0], grid, policies)
-        # T_pk = Tₖ(ξ_p)
+        positions = einx.id("target 1 -> target", coordinates)
+        reference, valid = _reference_points(positions, grid, policies)
+        # Tₚₖ = Tₖ(ξₚ)
         table = _chebyshev(reference, self.n_coefficients)
+        read = KernelReadout(table, valid)
         is_grid = isinstance(target, RectilinearGrid | AffineGrid)
         target_shape = target.shape if is_grid else None
-        return Plan(fit, KernelReadout(table, valid), policies, None, target_shape)
+        return Plan(fit, read, policies, None, target_shape)
 
     def fit(
         self,
@@ -854,7 +904,7 @@ class Chebyshev(Scheme):
 
         Raises:
             GeometryError: If the source is not an `Axis` of Chebyshev nodes.
-            ValidationError: If K exceeds the number of nodes, or the last axis
+            ValidationError: If D_c exceeds the number of nodes, or the last axis
                 of ``data`` is not the node count.
             PolicyError: Under ``missing="renormalise"``.
         """
@@ -864,7 +914,9 @@ class Chebyshev(Scheme):
         data = promote_integers(jnp.asarray(data))
         if policies.missing == "fill":
             fill = jnp.asarray(policies.fill_value, dtype=data.dtype)
-            data = jnp.where(jnp.isfinite(data), data, fill)
+            finite = jnp.isfinite(data)
+            data = jnp.where(finite, data, fill)
+        # c = Π C y
         coefficients = fit.apply(data)
         return ChebyshevInterpolant(
             coefficients, source, self, policies, grid.lower, grid.upper

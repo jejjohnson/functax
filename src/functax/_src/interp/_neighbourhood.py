@@ -57,7 +57,7 @@ def scattered_targets(
     """The (M, D) coordinates of a target, its grid shape, and its padding mask.
 
     `Points` give their ``xy`` and ``valid``; an `Axis`, a `RectilinearGrid`
-    (nodes in row-major order) and an `AffineGrid` (pixel centres, as (x, y))
+    (nodes in row-major order) and an `AffineGrid` (pixel centres, easting first)
     give their nodes, and the two grids their shape, so a plan onto them keeps
     it as ``target_shape``.
 
@@ -67,11 +67,14 @@ def scattered_targets(
     if isinstance(target, Points):
         return target.xy, None, target.valid
     if isinstance(target, Axis):
-        return einx.id("target -> target 1", target.values), None, None
+        column = einx.id("target -> target 1", target.values)
+        return column, None, None
     if isinstance(target, RectilinearGrid):
         nodes = jnp.meshgrid(*(axis.values for axis in target.axes), indexing="ij")
         flat = [einx.id("... -> (...)", node) for node in nodes]
-        return jnp.column_stack(flat), target.shape, None
+        # one column per axis, however many axes the grid has
+        coordinates = jnp.column_stack(flat)
+        return coordinates, target.shape, None
     if isinstance(target, AffineGrid):
         x, y = pixel_centres(target)
         centres = einx.id("row col, row col -> (row col) (1 + 1)", x, y)
@@ -125,12 +128,19 @@ def _tap_distances(
     targets: Float[Array, "target space"],
     indices: Int[Array, "target tap"],
 ) -> Float[Array, "target tap"]:
-    """dᵢⱼ = ‖x_{iᵢⱼ} − x*ᵢ‖ in the search space, guarded at dᵢⱼ = 0."""
+    """dᵢⱼ = ‖x_{nᵢⱼ} − x_{*,i}‖ in the search space, guarded at dᵢⱼ = 0.
+
+    nᵢⱼ is the source of tap j of target i.
+    """
     neighbours = sources[indices]
+    # x_{nᵢⱼ} − x_{*,i}
     difference = einx.subtract(
-        "target tap c, target c -> target tap c", neighbours, targets
+        "target tap space, target space -> target tap space", neighbours, targets
     )
-    squared = einx.sum("target tap [c]", difference**2)
+    squared_difference = difference**2
+    # dᵢⱼ² = ‖x_{nᵢⱼ} − x_{*,i}‖²
+    squared = einx.sum("target tap [space]", squared_difference)
+    # dᵢⱼ = √(dᵢⱼ²), with a zero gradient at dᵢⱼ = 0
     return _safe_norm(squared)
 
 
@@ -139,22 +149,36 @@ def _tap_angles(
     targets: Float[Array, "target 3"],
     indices: Int[Array, "target tap"],
 ) -> Float[Array, "target tap"]:
-    """θᵢⱼ = atan2(‖u × v‖, u · v), the great-circle angle to each tap.
+    """dᵢⱼ = atan2(‖u × v‖, u · v), the great-circle angle to each tap.
 
-    The atan2 form is accurate at every angle, as in `geodesic_distance`,
-    and the cross product's norm is guarded at θ = 0, so the gradient there
-    is zero.
+    For u the unit vector of a tap and v that of its target, the atan2 form is
+    accurate at every angle, as in `geodesic_distance`, and the cross
+    product's norm is guarded at dᵢⱼ = 0, so the gradient there is zero.
     """
     neighbours = sources[indices]
     # u × v, one component at a time, for u a tap and v its target
     u_x, u_y, u_z = neighbours[..., 0], neighbours[..., 1], neighbours[..., 2]
     v_x, v_y, v_z = targets[:, 0], targets[:, 1], targets[:, 2]
     pair = "target tap, target -> target tap"
-    cross_x = einx.multiply(pair, u_y, v_z) - einx.multiply(pair, u_z, v_y)
-    cross_y = einx.multiply(pair, u_z, v_x) - einx.multiply(pair, u_x, v_z)
-    cross_z = einx.multiply(pair, u_x, v_y) - einx.multiply(pair, u_y, v_x)
-    cross_norm = _safe_norm(cross_x**2 + cross_y**2 + cross_z**2)
+    # (u × v)_x = u_y v_z − u_z v_y
+    yz = einx.multiply(pair, u_y, v_z)
+    zy = einx.multiply(pair, u_z, v_y)
+    cross_x = yz - zy
+    # (u × v)_y = u_z v_x − u_x v_z
+    zx = einx.multiply(pair, u_z, v_x)
+    xz = einx.multiply(pair, u_x, v_z)
+    cross_y = zx - xz
+    # (u × v)_z = u_x v_y − u_y v_x
+    xy = einx.multiply(pair, u_x, v_y)
+    yx = einx.multiply(pair, u_y, v_x)
+    cross_z = xy - yx
+    # ‖u × v‖², summed in the order x, y, z
+    squared_cross = cross_x**2 + cross_y**2 + cross_z**2
+    # ‖u × v‖, with a zero gradient at dᵢⱼ = 0
+    cross_norm = _safe_norm(squared_cross)
+    # u · v
     dot = einx.dot("target tap c, target c -> target tap", neighbours, targets)
+    # dᵢⱼ = atan2(‖u × v‖, u · v)
     return jnp.arctan2(cross_norm, dot)
 
 
@@ -186,20 +210,28 @@ def _tree_neighbours(
         else np.flatnonzero(np.asarray(source_valid))
     )
     n_targets = target_array.shape[0]
-    finite = np.asarray(np.isfinite(target_array).all(axis=1, keepdims=True))
+    is_finite = np.isfinite(target_array)
+    finite = einx.all("target [space]", is_finite)
     if real.size == 0:
         indices = np.zeros((n_targets, n_taps), dtype=np.int32)
-        return jnp.asarray(indices), jnp.zeros((n_targets, n_taps), dtype=bool)
-    tree = spatial.cKDTree(source_array[real])
+        none_found = jnp.zeros((n_targets, n_taps), dtype=bool)
+        return jnp.asarray(indices), none_found
+    real_sources = source_array[real]
+    tree = spatial.cKDTree(real_sources)
     # non-finite targets are searched at the origin and marked not found
-    queries = np.where(finite, target_array, 0.0)
+    origin = np.zeros((), target_array.dtype)
+    queries = einx.where(
+        "target, target space, -> target space", finite, target_array, origin
+    )
     bound = np.inf if radius is None else radius
     # k as the list 1, …, Q keeps the result 2-D when Q = 1
-    _, neighbours = tree.query(
-        queries, k=list(range(1, n_taps + 1)), distance_upper_bound=bound
-    )
-    found = (neighbours < real.size) & finite
-    indices = real[np.where(found, neighbours, 0)].astype(np.int32)
+    ranks = list(range(1, n_taps + 1))
+    _, neighbours = tree.query(queries, k=ranks, distance_upper_bound=bound)
+    in_tree = neighbours < real.size
+    found = einx.logical_and("target tap, target -> target tap", in_tree, finite)
+    tree_index = np.where(found, neighbours, 0)
+    source_index = real[tree_index]
+    indices = source_index.astype(np.int32)
     return jnp.asarray(indices), jnp.asarray(found)
 
 
@@ -221,30 +253,42 @@ def _brute_force_neighbours(
     fixed_targets = jax.lax.stop_gradient(targets)
 
     def nearest(
-        block_sources: jax.Array, block_targets: jax.Array
+        block_sources: Float[Array, "source space"],
+        block_targets: Float[Array, "target space"],
     ) -> Int[Array, "tap target"]:
+        # x − x_*
         difference = einx.subtract(
-            "source c, target c -> target source c", block_sources, block_targets
+            "source space, target space -> target source space",
+            block_sources,
+            block_targets,
         )
-        squared = einx.sum("target source [c]", difference**2)
+        squared_difference = difference**2
+        # ‖x − x_*‖²
+        squared = einx.sum("target source [space]", squared_difference)
         if source_valid is not None:
             inf = jnp.asarray(jnp.inf, dtype=squared.dtype)
             squared = einx.where(
                 "source, target source, -> target source", source_valid, squared, inf
             )
-        # the Q smallest ‖x − x*‖², nearest first
-        _, block_indices = jax.lax.top_k(-squared, n_taps)
+        # the Q smallest ‖x − x_*‖², nearest first
+        negated = -squared
+        _, block_indices = jax.lax.top_k(negated, n_taps)
         return einx.id("target tap -> tap target", block_indices)
 
     columns = _chunked(nearest, fixed_sources, fixed_targets, MAX_PAIRS)
-    indices = einx.id("tap target -> target tap", columns).astype(jnp.int32)
+    rows = einx.id("tap target -> target tap", columns)
+    indices = rows.astype(jnp.int32)
     distances = _tap_distances(fixed_sources, fixed_targets, indices)
     bound = jnp.inf if radius is None else radius
     # cKDTree's rule: a neighbour counts when d < r (and is a real source)
-    found = jnp.isfinite(distances) & (distances < bound)
+    finite_distance = jnp.isfinite(distances)
+    within = distances < bound
+    found = finite_distance & within
     if source_valid is not None:
-        found = found & source_valid[indices]
-    finite = einx.all("target [c]", jnp.isfinite(fixed_targets))
+        tap_valid = source_valid[indices]
+        found = found & tap_valid
+    is_finite = jnp.isfinite(fixed_targets)
+    finite = einx.all("target [space]", is_finite)
     found = einx.logical_and("target tap, target -> target tap", found, finite)
     return indices, found
 
@@ -260,8 +304,9 @@ def nearest_sources(
 
     A SciPy k-d tree on the host when every coordinate is concrete, a chunked
     brute force inside the trace otherwise; both give the same neighbours. A
-    neighbour counts when d < r; a missing one (fewer than Q real sources,
-    none within the radius, or a non-finite target) comes back not found.
+    neighbour counts when its distance is below the radius r; a missing one
+    (fewer than Q real sources, none within the radius, or a non-finite
+    target) comes back not found.
 
     Raises:
         MissingExtraError: If SciPy is missing and the coordinates are
@@ -280,25 +325,33 @@ def _inverse_distance_stencil(
     power: float,
     floor: float,
 ) -> Stencil:
-    """wᵢⱼ = max(dᵢⱼ, ε)⁻ᵖ / ∑ⱼ′ max(dᵢⱼ′, ε)⁻ᵖ over the found taps."""
+    """wᵢⱼ = max(dᵢⱼ, d_min)⁻ᵖ / ∑ⱼ′ max(dᵢⱼ′, d_min)⁻ᵖ over the found taps."""
+    # max(dᵢⱼ, d_min)
     floored = jnp.maximum(distances, floor)
     inf = jnp.asarray(jnp.inf, dtype=floored.dtype)
-    row_ok = einx.any("target [tap]", found)
-    # mᵢ = minⱼ max(dᵢⱼ, ε), the nearest found distance; vᵢⱼ is scaled by mᵢᵖ
-    # so it lies in (0, 1] and cannot overflow (ε⁻ᵖ does in float32 for p ≥ 4)
-    nearest = einx.min("target [tap]", jnp.where(found, floored, inf))
-    safe_nearest = jnp.where(row_ok, nearest, jnp.ones((), floored.dtype))
-    # vᵢⱼ = (mᵢ / max(dᵢⱼ, ε))ᵖ
-    ratio = einx.divide("target, target tap -> target tap", safe_nearest, floored)
+    one = jnp.ones((), floored.dtype)
     zero = jnp.zeros((), floored.dtype)
-    scaled = jnp.where(found, ratio**power, zero)
+    row_ok = einx.any("target [tap]", found)
+    # d_{near,i} = minⱼ max(dᵢⱼ, d_min), the nearest found distance; w̃ᵢⱼ is
+    # scaled by d_{near,i}ᵖ so it lies in (0, 1] and cannot overflow (d_min⁻ᵖ
+    # does in float32 for p ≥ 4); the scale cancels in wᵢⱼ
+    found_distances = jnp.where(found, floored, inf)
+    nearest = einx.min("target [tap]", found_distances)
+    safe_nearest = jnp.where(row_ok, nearest, one)
+    # d_{near,i} / max(dᵢⱼ, d_min)
+    ratio = einx.divide("target, target tap -> target tap", safe_nearest, floored)
+    # d_{near,i}ᵖ w̃ᵢⱼ = (d_{near,i} / max(dᵢⱼ, d_min))ᵖ
+    powered = ratio**power
+    scaled = jnp.where(found, powered, zero)
+    # d_{near,i}ᵖ ∑ⱼ′ w̃ᵢⱼ′
     total = einx.sum("target [tap]", scaled)
-    safe_total = jnp.where(row_ok, total, jnp.ones((), total.dtype))
-    # wᵢⱼ = vᵢⱼ / ∑ⱼ′ vᵢⱼ′
+    safe_total = jnp.where(row_ok, total, one)
+    # wᵢⱼ = w̃ᵢⱼ / ∑ⱼ′ w̃ᵢⱼ′
     weights = einx.divide("target tap, target -> target tap", scaled, safe_total)
     # a missing tap repeats the row's nearest index (index 0 in an empty row),
     # so it reads only a source the row reads anyway
-    first = jnp.where(row_ok, indices[:, 0], jnp.zeros((), indices.dtype))
+    zero_index = jnp.zeros((), indices.dtype)
+    first = jnp.where(row_ok, indices[:, 0], zero_index)
     padded = einx.where(
         "target tap, target tap, target -> target tap", found, indices, first
     )
@@ -308,27 +361,27 @@ def _inverse_distance_stencil(
 class InverseDistance(Scheme):
     """Inverse-distance weighting of the Q nearest scattered sources.
 
-    For target i with neighbour distances dᵢⱼ, j = 1, …, Q, power p and
-    floor ε,
+    For target x_{*,i}, i over the M targets, with taps j = 1, …, Q at the
+    sources x_{nᵢⱼ}, neighbour distances dᵢⱼ, power p and floor d_min,
 
-        vᵢⱼ = max(dᵢⱼ, ε)⁻ᵖ  and  wᵢⱼ = vᵢⱼ / ∑ⱼ′ vᵢⱼ′,
+        w̃ᵢⱼ = max(dᵢⱼ, d_min)⁻ᵖ  and  wᵢⱼ = w̃ᵢⱼ / ∑ⱼ′ w̃ᵢⱼ′,
 
-    so f̂(x*ᵢ) = ∑ⱼ wᵢⱼ y_{iᵢⱼ}. A target that coincides with a source takes
-    that source's value, through the floor. The distance is the source
-    `Points.metric`: ``"euclidean"`` on the coordinates as given, or, on
-    (λ, φ), ``"chord"``, the straight line c between unit vectors, or
-    ``"geodesic"``, the great-circle angle θ = 2 arcsin(c/2) (haversine IDW).
-    Both sphere metrics search on unit vectors, across the dateline and the
-    poles; c is monotone in θ, so they pick the same neighbours and differ
-    only in the weights.
+    so f̂(x_{*,i}) = ∑ⱼ wᵢⱼ y_{nᵢⱼ}. A target that coincides with a source
+    takes that source's value, through the floor. The distance is the source
+    `Points.metric`: ``"euclidean"`` on the coordinates as given, or, on the
+    longitude and latitude (λ, φ), ``"chord"``, the straight line c between
+    unit vectors, or ``"geodesic"``, the great-circle angle 2 arcsin(c/2)
+    (haversine IDW). Both sphere metrics search on unit vectors, across the
+    dateline and the poles; the angle is monotone in c, so they pick the same
+    neighbours and differ only in the weights.
 
     Algorithm:
         1. Lift the coordinates into the search space (unit vectors for a
            chord).
-        2. Find the Q = min(k, N) nearest real sources of each target: by a
+        2. Find the Q = min(``k``, N) nearest real sources of each target: by a
            SciPy k-d tree on the host when the coordinates are concrete, by a
            chunked brute force (``lax.map`` over chunks of targets) inside the
-           trace when they are traced. A neighbour counts when d < r.
+           trace when they are traced. A neighbour counts when dᵢⱼ < r.
         3. Recompute the distances of the neighbours in JAX and weigh them,
            so both searches give the same stencil and gradients reach the
            coordinates through the weights (the neighbour set is piecewise
@@ -342,10 +395,10 @@ class InverseDistance(Scheme):
         k: The number of neighbours, at least 1.
         power: p ≥ 0; 0 gives the unweighted mean of the neighbours.
         radius: r, the search radius in the metric's units: coordinate units,
-            the chord of the unit sphere (2 sin(θ/2) for an angle θ), or, for
-            ``"geodesic"``, the angle θ in radians of arc (π or more for no
+            the chord of the unit sphere (2 sin(r/2) for an arc r), or, for
+            ``"geodesic"``, the angle in radians of arc (π or more for no
             limit); ``None`` for no limit.
-        floor: ε > 0, the distance below which a neighbour counts as
+        floor: d_min > 0, the distance below which a neighbour counts as
             coincident (in radians under ``"geodesic"``).
 
     Raises:
@@ -478,7 +531,7 @@ class InverseDistance(Scheme):
         n_source = source.xy.shape[0]
         n_taps = min(self.k, n_source)
         geodesic = source.metric == "geodesic"
-        # the search runs in chords, so an arc radius becomes 2 sin(r/2)
+        # the search runs in chords, so an arc radius r becomes 2 sin(r/2)
         radius = _chord_radius(self.radius) if geodesic else self.radius
         indices, found = nearest_sources(sources, targets, source.valid, n_taps, radius)
         if target_valid is not None:

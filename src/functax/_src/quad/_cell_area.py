@@ -18,6 +18,7 @@ from typing import Any
 import einx
 import jax.numpy as jnp
 import numpy as np
+from jaxtyping import Array, Float
 
 from functax._src.geometry._affine import pixel_centres
 from functax._src.geometry._sphere import _check_unit
@@ -47,7 +48,7 @@ def cell_area(
       area |ae − bd|, the weights are (rows, cols) like the image, and the
       nodes are the pixel centres (x, y), (rows, cols, 2).
     - `RectilinearGrid` with D axes of N₀, …, N_{D−1} nodes: cell k has the
-      volume ∏_d |e_{d,k+1} − e_{d,k}| from each axis's `Axis.cell_edges`
+      volume ∏_d |x_{d,k+½} − x_{d,k−½}| from each axis's `Axis.cell_edges`
       (its ``edges``, or the midpoints between nodes), the weights are
       (N₀, …, N_{D−1}), one axis per grid axis, and the nodes are the axis
       values, (N₀, …, N_{D−1}, D). Two axes give areas, one lengths.
@@ -56,12 +57,12 @@ def cell_area(
     against a (λ, φ) grid) then fails integrix's shape check rather than
     pairing each value with another cell's area.
 
-    With ``sphere_radius`` a the coordinates are longitude λ and latitude φ
+    With ``sphere_radius`` R the coordinates are longitude λ and latitude φ
     in ``unit``, and a lon/lat cell has the area
 
-        |C| = a² |Δλ| |sin φ_top − sin φ_bottom|,
+        |C| = R² |Δλ| |sin φ_top − sin φ_bottom|,
 
-    so a global grid sums to 4πa². An `AffineGrid` must then be north-up
+    so a global grid sums to 4πR². An `AffineGrid` must then be north-up
     (b = d = 0), x being λ and y being φ; a `RectilinearGrid` must have two
     axes in (λ, φ) order, as `Conservative` reads it with ``sphere=True``.
     Latitude edges past a pole are clipped to it, as `Conservative` does.
@@ -76,7 +77,7 @@ def cell_area(
 
     Args:
         grid: The grid of cells.
-        sphere_radius: a, the radius of the sphere the lon/lat cells lie on,
+        sphere_radius: R, the radius of the sphere the lon/lat cells lie on,
             positive; ``None`` for cells in the plane.
         unit: ``"degrees"`` or ``"radians"``, the unit of (λ, φ); required
             with ``sphere_radius`` and ``None`` without it.
@@ -84,7 +85,7 @@ def cell_area(
     Returns:
         A `Rule` of weights in the grid's shape and nodes in that shape with
         a trailing axis of D coordinates: the grid's units squared in the
-        plane, a²'s units on the sphere. An `AffineGrid` gives float64; a
+        plane, R²'s units on the sphere. An `AffineGrid` gives float64; a
         `RectilinearGrid` keeps the dtype of its axes.
 
     Raises:
@@ -139,8 +140,10 @@ def cell_area(
         pattern = f"{outer}, axis{axis} -> {outer} axis{axis}"
         weights = einx.multiply(pattern, weights, width)
     if sphere_radius is not None:
-        # a² |Δλ| |Δ sin φ|
-        weights = weights * sphere_radius**2
+        # R²
+        squared_radius = sphere_radius**2
+        # R² |Δλ| |Δ sin φ|
+        weights = weights * squared_radius
     return Rule(nodes, weights)
 
 
@@ -163,7 +166,9 @@ def _check_sphere(sphere_radius: Any, unit: Any) -> None:
         raise ValidationError(msg)
 
 
-def _affine_cells(grid: AffineGrid, *, unit: str | None) -> tuple[list[Any], Any]:
+def _affine_cells(
+    grid: AffineGrid, *, unit: str | None
+) -> tuple[list[Float[Array, " _node"]], Float[Array, "row col dim"]]:
     """The widths along rows, then columns, and the (rows, cols, 2) pixel centres.
 
     In the plane every pixel has area |ae − bd|, carried as one width per row
@@ -171,7 +176,8 @@ def _affine_cells(grid: AffineGrid, *, unit: str | None) -> tuple[list[Any], Any
     latitude bands between edges f + e·i and the columns the longitude
     intervals between edges c + a·j.
     """
-    a, b, c, d, e, f = as_transform(np.asarray(grid.transform)).tolist()
+    host_transform = np.asarray(grid.transform)
+    a, b, c, d, e, f = as_transform(host_transform).tolist()
     rows, cols = grid.shape
     # (x, y) of every pixel centre
     x, y = pixel_centres(grid)
@@ -188,16 +194,19 @@ def _affine_cells(grid: AffineGrid, *, unit: str | None) -> tuple[list[Any], Any
             f"got b={b}, d={d}"
         )
         raise GeometryError(msg)
-    # φ = f + e·i at row edge i, λ = c + a·j at column edge j
-    lat_edges = f + e * jnp.arange(rows + 1, dtype=jnp.float64)
-    lon_edges = c + a * jnp.arange(cols + 1, dtype=jnp.float64)
+    row_edges = jnp.arange(rows + 1, dtype=jnp.float64)
+    col_edges = jnp.arange(cols + 1, dtype=jnp.float64)
+    # φ = f + e·i at row edge i
+    lat_edges = f + e * row_edges
+    # λ = c + a·j at column edge j
+    lon_edges = c + a * col_edges
     lon_widths, band_heights = _lonlat_widths(lon_edges, lat_edges, unit=unit)
     return [band_heights, lon_widths], nodes
 
 
 def _rectilinear_cells(
     grid: RectilinearGrid, *, unit: str | None
-) -> tuple[list[Any], Any]:
+) -> tuple[list[Float[Array, " _node"]], Float[Array, "*grid dim"]]:
     """The widths along each axis and the (N₀, …, N_{D−1}, D) node coordinates."""
     if unit is not None and len(grid.axes) != 2:
         msg = f"'grid' must have two axes (λ, φ) on the sphere, got {len(grid.axes)}"
@@ -205,18 +214,28 @@ def _rectilinear_cells(
     edges = [axis.cell_edges() for axis in grid.axes]
     # the node coordinates of every cell, one axis per grid axis
     names = " ".join(f"axis{index}" for index in range(len(grid.axes)))
-    meshes = jnp.meshgrid(*(axis.values for axis in grid.axes), indexing="ij")
+    axis_values = [axis.values for axis in grid.axes]
+    meshes = jnp.meshgrid(*axis_values, indexing="ij")
     stacked = jnp.stack(meshes)
     nodes = einx.id(f"dim {names} -> {names} dim", stacked)
     if unit is not None:
         lon_widths, band_heights = _lonlat_widths(*edges, unit=unit)
         return [lon_widths, band_heights], nodes
-    # |eₖ₊₁ − eₖ|, positive on a descending axis too
-    widths = [jnp.abs(jnp.diff(edge)) for edge in edges]
+    widths = []
+    for edge in edges:
+        # x_{k+½} − x_{k−½}
+        signed_widths = jnp.diff(edge)
+        # |x_{k+½} − x_{k−½}|, positive on a descending axis too
+        widths.append(jnp.abs(signed_widths))
     return widths, nodes
 
 
-def _lonlat_widths(lon_edges: Any, lat_edges: Any, *, unit: str) -> tuple[Any, Any]:
+def _lonlat_widths(
+    lon_edges: Float[Array, " lon_edge"],
+    lat_edges: Float[Array, " lat_edge"],
+    *,
+    unit: str,
+) -> tuple[Float[Array, " lon_node"], Float[Array, " lat_node"]]:
     """|Δλ| in radians and |sin φ_top − sin φ_bottom| from lon and lat edges."""
     if unit == "degrees":
         lon_edges = jnp.deg2rad(lon_edges)
@@ -224,6 +243,14 @@ def _lonlat_widths(lon_edges: Any, lat_edges: Any, *, unit: str) -> tuple[Any, A
     # a latitude edge past a pole would fold the band back over it
     half_pi = jnp.asarray(math.pi / 2, dtype=lat_edges.dtype)
     lat_edges = jnp.clip(lat_edges, -half_pi, half_pi)
-    lon_widths = jnp.abs(jnp.diff(lon_edges))
-    band_heights = jnp.abs(jnp.diff(jnp.sin(lat_edges)))
+    # λⱼ₊₁ − λⱼ
+    lon_steps = jnp.diff(lon_edges)
+    # |Δλ|
+    lon_widths = jnp.abs(lon_steps)
+    # sin φ at each latitude edge
+    sine_edges = jnp.sin(lat_edges)
+    # sin φ_top − sin φ_bottom
+    sine_steps = jnp.diff(sine_edges)
+    # |Δ sin φ|
+    band_heights = jnp.abs(sine_steps)
     return lon_widths, band_heights

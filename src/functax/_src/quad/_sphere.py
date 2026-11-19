@@ -1,8 +1,8 @@
 """Quadrature rules on the sphere: `SphereRule` and its four constructors.
 
 Each constructor wraps one of the point sets in `functax.geometry` (built on the
-host in float64) as a rule for ∫_{S²} g dΩ, with its weights scaled by a² on a
-sphere of radius a and the spherical-harmonic degree it integrates exactly.
+host in float64) as a rule for ∫_{S²} g dA, with its weights scaled by R² on a
+sphere of radius R and the spherical-harmonic degree it integrates exactly.
 """
 
 from __future__ import annotations
@@ -12,9 +12,8 @@ from functax._src._backend import require_jax
 
 require_jax(__name__)
 
-from typing import Any
-
 import equinox as eqx
+from jaxtyping import Array, Float
 
 from functax._src.geometry._sphere import _check_radius
 from functax._src.geometry._sphere_grids import (
@@ -37,18 +36,18 @@ __all__ = [
 
 
 class SphereRule(Rule):
-    """A rule on a sphere of radius a: ∫_{S²} g dA ≈ ∑_q w_q g(u_q).
+    """A rule on a sphere of radius R: ∫_{S²} g dA ≈ ∑_q w_q g(u_q).
 
     A `Rule` whose nodes u_q are unit vectors, so integrix sums with it like
     any other rule and ``nodes, weights = rule`` still unpacks. The weights
-    sum to 4πa². ``degree`` is the highest L for which every spherical
-    harmonic Y_l^m with l ≤ L is integrated exactly; a band-limited g of
+    sum to 4πR². ``degree`` is the highest L for which every spherical
+    harmonic Y_ℓm with ℓ ≤ L is integrated exactly; a band-limited g of
     degree at most L is then integrated exactly too.
 
     Attributes:
         nodes: The unit vectors u_q, one row (x, y, z) per node.
-        weights: The weights w_q, in units of a².
-        radius: a, the radius of the sphere the weights are scaled to.
+        weights: The weights w_q, in units of R².
+        radius: R, the radius of the sphere the weights are scaled to.
         degree: L, the exactness degree (0 when only constants are exact).
 
     Raises:
@@ -64,6 +63,16 @@ class SphereRule(Rule):
         >>> nodes, weights = rule
         >>> math.isclose(float(weights.sum()), 4 * math.pi)
         True
+
+        The nodes must be (Q, 3) unit vectors:
+
+        >>> import jax.numpy as jnp
+        >>> SphereRule(  # doctest: +IGNORE_EXCEPTION_DETAIL
+        ...     jnp.zeros((2, 2)), jnp.ones(2), radius=1.0, degree=0
+        ... )
+        Traceback (most recent call last):
+        ...
+        ValidationError: 'nodes' must be (Q, 3) unit vectors on the sphere
     """
 
     radius: float = eqx.field(static=True, kw_only=True)
@@ -94,21 +103,21 @@ def sphere_gauss_legendre(
 
     The sines of latitude are the n_lat Gauss–Legendre nodes tₖ on [−1, 1]
     (ascending, south to north) and the longitudes are uniform from −π,
-    λⱼ = −π + 2πj/n_lon; node (k, j) has weight a² ωₖ 2π/n_lon. The rule
-    integrates every Y_l^m with l ≤ min(2 n_lat − 1, n_lon − 1) exactly: the
+    λⱼ = −π + 2πj/n_lon; node (k, j) has weight R² ωₖ 2π/n_lon. The rule
+    integrates every Y_ℓm with ℓ ≤ min(2 n_lat − 1, n_lon − 1) exactly: the
     longitude sum kills every m ≠ 0 below n_lon, and Gauss–Legendre is exact
-    for P_l(t) up to degree 2 n_lat − 1. Nodes are latitude-major, as in
-    `gauss_legendre_grid`. spectraldiffx orders its nodes cos θ from north
+    for P_ℓ(t) up to degree 2 n_lat − 1. Nodes are latitude-major, as in
+    `gauss_legendre_grid`. spectraldiffx orders its nodes sin φ from north
     to south and its longitudes from 0, so its latitudes are these reversed.
 
     Algorithm:
         1. The grid and its weights on the unit sphere (`gauss_legendre_grid`).
-        2. Scale the weights by a².
+        2. Scale the weights by R².
 
     Args:
         n_lat: The number of latitudes.
         n_lon: The number of longitudes; ``2 * n_lat`` by default.
-        radius: a, the radius of the sphere, positive.
+        radius: R, the radius of the sphere, positive.
 
     Returns:
         A `SphereRule` of n_lat · n_lon nodes, ``degree`` min(2 n_lat − 1,
@@ -139,21 +148,21 @@ def sphere_latlon(n_lat: int, n_lon: int, *, radius: float = 1.0) -> SphereRule:
     """The cell-centred lon/lat rule: equiangular cells weighted by their exact areas.
 
     Latitude splits into n_lat and longitude into n_lon equal intervals from
-    −π; each node is a cell centre with the cell's area a² Δλ (sin φ_top −
+    −π; each node is a cell centre with the cell's area R² Δλ (sin φ_top −
     sin φ_bottom) as its weight, as in `latlon_grid`. A field constant on
     each cell is integrated exactly, but the rule is exact only to degree
-    min(1, n_lon − 1): the grid's symmetry about the equator kills Y_1^0,
+    min(1, n_lon − 1): the grid's symmetry about the equator kills Y₁₀,
     and the midpoint rule in latitude misses P_2. It converges at second
     order in the cell size.
 
     Algorithm:
         1. The cell centres and areas on the unit sphere (`latlon_grid`).
-        2. Scale the areas by a².
+        2. Scale the areas by R².
 
     Args:
         n_lat: The number of latitude bands.
         n_lon: The number of longitude bands.
-        radius: a, the radius of the sphere, positive.
+        radius: R, the radius of the sphere, positive.
 
     Returns:
         A `SphereRule` of n_lat · n_lon nodes, latitude-major, ``degree``
@@ -171,6 +180,11 @@ def sphere_latlon(n_lat: int, n_lon: int, *, radius: float = 1.0) -> SphereRule:
         ((648, 3), 1)
         >>> math.isclose(float(rule.weights.sum()), 4 * math.pi)
         True
+
+        A single longitude band integrates only constants exactly:
+
+        >>> sphere_latlon(4, 1).degree
+        0
     """
     points, weights = latlon_grid(n_lat, n_lon)
     degree = min(1, n_lon - 1)
@@ -178,24 +192,24 @@ def sphere_latlon(n_lat: int, n_lon: int, *, radius: float = 1.0) -> SphereRule:
 
 
 def sphere_healpix(nside: int, *, nest: bool = True, radius: float = 1.0) -> SphereRule:
-    """The HEALPix rule: 12 N_side² pixel centres of equal weight 4πa²/Q.
+    """The HEALPix rule: 12 N_side² pixel centres of equal weight 4πR²/Q.
 
     The pixels are equal-area, so every weight is the pixel area, not a
     quadrature weight fitted to the harmonics: the rule is not exact for any
-    degree l ≥ 2, and its error falls with the pixel size. Its symmetry
-    (north–south and a quarter turn in longitude) makes every Y_1^m sum to
+    degree ℓ ≥ 2, and its error falls with the pixel size. Its symmetry
+    (north–south and a quarter turn in longitude) makes every Y_1m sum to
     zero, so ``degree`` is 1. Pixel order and longitudes as in
     `healpix_grid`.
 
     Algorithm:
         1. The pixel centres and areas on the unit sphere (`healpix_grid`).
-        2. Scale the areas by a².
+        2. Scale the areas by R².
 
     Args:
         nside: N_side, the resolution.
         nest: The nested order (``True``, N_side a power of two) or the ring
             order (``False``).
-        radius: a, the radius of the sphere, positive.
+        radius: R, the radius of the sphere, positive.
 
     Returns:
         A `SphereRule` of 12 N_side² nodes, ``degree`` 1.
@@ -212,13 +226,20 @@ def sphere_healpix(nside: int, *, nest: bool = True, radius: float = 1.0) -> Sph
         ((48, 3), 1)
         >>> math.isclose(float(rule.weights.sum()), 4 * math.pi)
         True
+
+        The nested order needs N_side a power of two:
+
+        >>> sphere_healpix(3)  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        GeometryError: 'nside' must be a power of two with nest=True
     """
     points, weights = healpix_grid(nside, nest=nest)
     return _sphere_rule(points, weights, radius=radius, degree=1)
 
 
 def sphere_fibonacci(n: int, *, radius: float = 1.0) -> SphereRule:
-    """The Fibonacci rule: n near-uniform points of equal weight 4πa²/n.
+    """The Fibonacci rule: n near-uniform points of equal weight 4πR²/n.
 
     Each point stands for an equal share of the area, so the rule is not
     exact for any degree beyond constants (``degree`` 0): it is a
@@ -228,11 +249,11 @@ def sphere_fibonacci(n: int, *, radius: float = 1.0) -> SphereRule:
     Algorithm:
         1. The lattice and its equal weights on the unit sphere
            (`fibonacci_sphere`).
-        2. Scale the weights by a².
+        2. Scale the weights by R².
 
     Args:
         n: The number of points.
-        radius: a, the radius of the sphere, positive.
+        radius: R, the radius of the sphere, positive.
 
     Returns:
         A `SphereRule` of n nodes, ``degree`` 0.
@@ -249,16 +270,32 @@ def sphere_fibonacci(n: int, *, radius: float = 1.0) -> SphereRule:
         ((100, 3), 0)
         >>> math.isclose(float(rule.weights.sum()), 36 * math.pi)
         True
+
+        The mean of z over the sphere, ∑_q w_q z_q / 4π, is near zero:
+
+        >>> import jax.numpy as jnp
+        >>> unit_rule = sphere_fibonacci(200)
+        >>> mean_z = unit_rule.weights @ unit_rule.nodes[:, 2] / (4 * math.pi)
+        >>> bool(jnp.abs(mean_z) < 1e-2)
+        True
     """
     points, weights = fibonacci_sphere(n)
     return _sphere_rule(points, weights, radius=radius, degree=0)
 
 
-def _sphere_rule(points: Any, weights: Any, *, radius: Any, degree: int) -> SphereRule:
-    """A `SphereRule` with the unit-sphere weights scaled by a²."""
+def _sphere_rule(
+    points: Float[Array, "node 3"],
+    weights: Float[Array, " node"],
+    *,
+    radius: float,
+    degree: int,
+) -> SphereRule:
+    """A `SphereRule` with the unit-sphere weights scaled by R²."""
     _check_radius(radius)
     # a static field, so a concrete Python float
     radius = float(radius)
-    # w_q a², the area element of a sphere of radius a
-    scaled = weights * radius**2
+    # R²
+    squared_radius = radius**2
+    # w_q R², the area element of a sphere of radius R
+    scaled = weights * squared_radius
     return SphereRule(points, scaled, radius=radius, degree=int(degree))

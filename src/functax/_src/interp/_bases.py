@@ -18,7 +18,6 @@ from typing import ClassVar
 
 import einx
 import equinox as eqx
-import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
@@ -39,8 +38,19 @@ class Basis(eqx.Module):
     """A local basis on one axis: S relative taps, and weights from the offsets.
 
     ``support`` is (r_min, r_max), the range of relative taps for offsets in
-    [0, 1); `outside="extrapolate"` keeps the cell within
-    [−r_min, N − 1 − r_max], so every tap stays on the axis.
+    [0, 1); `outside="extrapolate"` keeps the cell of an axis of N nodes
+    within [−r_min, N − 1 − r_max], so every tap stays on the axis.
+
+    Examples:
+        Every local basis implements the protocol; linear interpolation reads
+        two taps, i and i + 1:
+
+        >>> from functax.interp import Basis, LinearBasis
+        >>> basis = LinearBasis()
+        >>> isinstance(basis, Basis), basis.taps, basis.support
+        (True, 2, (0, 1))
+        >>> basis.prefilter_order is None
+        True
     """
 
     @property
@@ -98,9 +108,12 @@ class NearestBasis(Basis):
                 coordinate on a decreasing axis; it may be traced.
         """
         # r = 1 when t > ½, else 0: ties go to i, unless they go up
-        upper = jnp.where(ties_up, offsets >= 0.5, offsets > 0.5).astype(jnp.int32)
+        goes_up = jnp.where(ties_up, offsets >= 0.5, offsets > 0.5)
+        upper = goes_up.astype(jnp.int32)
         taps = einx.id("target -> target 1", upper)
-        weights = einx.id("target -> target 1", jnp.ones_like(offsets))
+        # w = 1 on the one tap
+        ones = jnp.ones_like(offsets)
+        weights = einx.id("target -> target 1", ones)
         return taps, weights
 
 
@@ -126,11 +139,12 @@ class LinearBasis(Basis):
         self, offsets: Float[Array, " target"]
     ) -> tuple[Int[Array, "target tap"], Float[Array, "target tap"]]:
         n_targets = offsets.shape[0]
-        taps = einx.id(
-            "tap -> target tap", jnp.arange(2, dtype=jnp.int32), target=n_targets
-        )
+        # r = (0, 1) for every target
+        relative = jnp.arange(2, dtype=jnp.int32)
+        taps = einx.id("tap -> target tap", relative, target=n_targets)
         # w = (1 − t, t)
-        weights = einx.id("target, target -> target (1 + 1)", 1.0 - offsets, offsets)
+        lower_weight = 1.0 - offsets
+        weights = einx.id("target, target -> target (1 + 1)", lower_weight, offsets)
         return taps, weights
 
 
@@ -166,9 +180,11 @@ class CubicBasis(Basis):
         self, offsets: Float[Array, " target"]
     ) -> tuple[Int[Array, "target tap"], Float[Array, "target tap"]]:
         n_targets = offsets.shape[0]
+        # r = (−1, 0, 1, 2) for every target
         relative = jnp.arange(-1, 3, dtype=jnp.int32)
         taps = einx.id("tap -> target tap", relative, target=n_targets)
         a = self.a
+        # s = |u − j| for the taps i + 1, i + 2 and i − 1
         near = 1.0 - offsets
         far = 2.0 - offsets
         left = 1.0 + offsets
@@ -188,11 +204,18 @@ class CubicBasis(Basis):
         return taps, weights
 
 
-def _truncated_power(values: jax.Array, degree: int) -> jax.Array:
+def _truncated_power(
+    values: Float[Array, "*shape"], degree: int
+) -> Float[Array, "*shape"]:
     """(z)₊ᵏ: zᵏ for z > 0 and 0 otherwise, with (z)₊⁰ = 1 for z ≥ 0."""
     if degree == 0:
-        return (values >= 0).astype(values.dtype)
-    positive = jnp.where(values > 0, values, jnp.zeros((), values.dtype))
+        # (z)₊⁰ = [z ≥ 0]
+        non_negative = values >= 0
+        return non_negative.astype(values.dtype)
+    zero = jnp.zeros((), values.dtype)
+    # (z)₊ = max(z, 0)
+    positive = jnp.where(values > 0, values, zero)
+    # (z)₊ᵏ
     return positive**degree
 
 
@@ -202,18 +225,45 @@ def bspline(values: Float[Array, "*shape"], order: int) -> Float[Array, "*shape"
     βᵏ(x) = (1/k!) ∑ₗ₌₀^{k+1} (−1)ˡ C(k + 1, l) (x + (k + 1)/2 − l)₊ᵏ,
     supported on |x| < (k + 1)/2, with β⁰ = 1 on [−½, ½).
 
+    Args:
+        values: x, where to evaluate, any shape.
+        order: k, the degree.
+
+    Returns:
+        βᵏ(x), the shape of ``values``.
+
     Examples:
+        The cubic B-spline at the integers is (1/6, 2/3, 1/6):
+
         >>> import jax.numpy as jnp
         >>> from functax.interp import bspline
-        >>> bspline(jnp.array([-1.0, 0.0, 1.0]), 3).tolist()
-        [0.16666666666666666, 0.6666666666666666, 0.16666666666666666]
+        >>> values = bspline(jnp.array([-1.0, 0.0, 1.0]), 3)
+        >>> bool(jnp.allclose(values, jnp.array([1.0, 4.0, 1.0]) / 6.0))
+        True
+
+        It vanishes from |x| = (k + 1)/2 on:
+
+        >>> bspline(jnp.array([-2.0, 2.0, 3.0]), 3).tolist()
+        [0.0, 0.0, 0.0]
+
+        Its integer shifts sum to one (partition of unity), here for the hat β¹:
+
+        >>> shifts = jnp.array([-0.7, 0.3, 1.3])
+        >>> bool(jnp.allclose(bspline(shifts, 1).sum(), 1.0))
+        True
     """
     half_width = (order + 1) / 2.0
     total = jnp.zeros_like(values)
     for term in range(order + 2):
-        # (−1)ˡ C(k + 1, l) (x + (k + 1)/2 − l)₊ᵏ
+        # (−1)ˡ C(k + 1, l)
         sign = (-1.0) ** term * math.comb(order + 1, term)
-        total = total + sign * _truncated_power(values + half_width - term, order)
+        # x + (k + 1)/2 − l
+        shifted = values + half_width - term
+        # (x + (k + 1)/2 − l)₊ᵏ
+        power = _truncated_power(shifted, order)
+        # ∑ₗ (−1)ˡ C(k + 1, l) (x + (k + 1)/2 − l)₊ᵏ
+        total = total + sign * power
+    # βᵏ(x) = (1/k!) ∑ₗ …
     return total / math.factorial(order)
 
 
@@ -235,8 +285,21 @@ class BSplineBasis(Basis):
         >>> import jax.numpy as jnp
         >>> from functax.interp import BSplineBasis
         >>> taps, weights = BSplineBasis(3).stencil(jnp.array([0.0]))
-        >>> taps.tolist(), [round(w, 12) for w in weights.tolist()[0]]
-        ([[-1, 0, 1, 2]], [0.166666666667, 0.666666666667, 0.166666666667, 0.0])
+        >>> taps.tolist()
+        [[-1, 0, 1, 2]]
+        >>> bool(jnp.allclose(weights, jnp.array([[1.0, 4.0, 1.0, 0.0]]) / 6.0))
+        True
+
+        Even orders centre on the nearest node, so a tie rounds up:
+
+        >>> BSplineBasis(2).stencil(jnp.array([0.25, 0.5]))[0].tolist()
+        [[-1, 0, 1], [0, 1, 2]]
+
+        An order past 5 is refused:
+
+        >>> BSplineBasis(6)  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        functax.exceptions.ValidationError: 'order' must be an integer in [0, 5]
     """
 
     order: int = eqx.field(static=True)
@@ -267,7 +330,6 @@ class BSplineBasis(Basis):
     def stencil(
         self, offsets: Float[Array, " target"]
     ) -> tuple[Int[Array, "target tap"], Float[Array, "target tap"]]:
-        n_targets = offsets.shape[0]
         relative = jnp.arange(self.order + 1, dtype=jnp.int32)
         if self.order % 2:
             # odd: the first tap is (k − 1)/2 left of the cell
@@ -275,11 +337,13 @@ class BSplineBasis(Basis):
         else:
             # even: centred on the nearest node, a tie (t = ½) rounding up
             first = (offsets >= 0.5).astype(jnp.int32) - self.order // 2
+        # r = r₀ + (0, …, k)
         taps = einx.add("target, tap -> target tap", first, relative)
+        float_taps = taps.astype(offsets.dtype)
         # x = u − j = t − r for each tap r
         distance = einx.subtract(
-            "target, target tap -> target tap", offsets, taps.astype(offsets.dtype)
+            "target, target tap -> target tap", offsets, float_taps
         )
+        # w = βᵏ(t − r)
         weights = bspline(distance, self.order)
-        del n_targets
         return taps, weights

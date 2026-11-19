@@ -1,7 +1,8 @@
 """Kernels k(x, x′) for the global schemes: a protocol and two radial families.
 
-Any callable that takes the targets and the sources and returns their
-(M, N) cross-kernel, as an array or as a lineax operator, is a `Kernel`, so a
+Any callable that takes the M targets X_* and the N sources X and returns
+their cross-kernel K_*X = k(X_*, X) ∈ ℝ^{M×N}, as an array or as a lineax
+operator, is a `Kernel`, so a
 kernel library hands its kernels to functax without functax importing it.
 functax ships only the kernels that are about interpolation rather than about
 Gaussian processes: the conditionally positive definite polyharmonic splines,
@@ -48,6 +49,34 @@ class Kernel(Protocol):
     ``lineax.MatrixLinearOperator`` Gram, say), which the global schemes
     materialise with ``as_matrix()``. Distances, metrics and length scales are
     the kernel's own business; the schemes only pass coordinates.
+
+    K_*X = k(X_*, X) ∈ ℝ^{M×N}, k evaluated at every pair of the M targets X_*
+    and the N sources X.
+
+    Examples:
+        A plain function is a kernel:
+
+        >>> import einx
+        >>> import jax.numpy as jnp
+        >>> from functax.interp import Kernel
+        >>> def exponential(targets, sources):
+        ...     difference = einx.subtract("t d, s d -> t s d", targets, sources)
+        ...     distance = jnp.sqrt(einx.sum("t s [d]", difference**2))
+        ...     return jnp.exp(-distance)
+        >>> isinstance(exponential, Kernel)
+        True
+        >>> exponential(jnp.zeros((2, 2)), jnp.ones((3, 2))).shape
+        (2, 3)
+
+        A kernel may return a lineax operator, which the schemes materialise:
+
+        >>> import lineax as lx
+        >>> from functax._src.interp._kernels import kernel_matrix
+        >>> def flat(targets, sources):
+        ...     ones = jnp.ones((targets.shape[0], sources.shape[0]))
+        ...     return lx.MatrixLinearOperator(ones)
+        >>> kernel_matrix(flat, jnp.zeros((2, 1)), jnp.zeros((4, 1))).shape
+        (2, 4)
     """
 
     def __call__(
@@ -55,7 +84,7 @@ class Kernel(Protocol):
         targets: Float[Array, "target dim"],
         sources: Float[Array, "source dim"],
     ) -> Float[Array, "target source"] | lx.AbstractLinearOperator:
-        """K with Kₖⱼ = k(x*ₖ, xⱼ)."""
+        """K_*X = k(X_*, X), the kernel at every target–source pair."""
         ...
 
 
@@ -68,15 +97,31 @@ def kernel_matrix(
 
     Args:
         kernel: k, any `Kernel`.
-        targets: x*, the M target coordinates.
-        sources: x, the N source coordinates.
+        targets: X_*, the M target coordinates.
+        sources: X, the N source coordinates.
 
     Returns:
-        K with Kₖⱼ = k(x*ₖ, xⱼ); a lineax operator is materialised.
+        K_*X = k(X_*, X) ∈ ℝ^{M×N}; a lineax operator is materialised.
 
     Raises:
         ValidationError: If the kernel returns anything but an (M, N) array or
             operator.
+
+    Examples:
+        A radial kernel, then a kernel that returns the wrong shape:
+
+        >>> import jax.numpy as jnp
+        >>> from functax._src.interp._kernels import kernel_matrix
+        >>> from functax.interp import Polyharmonic
+        >>> targets, sources = jnp.zeros((2, 1)), jnp.ones((3, 1))
+        >>> kernel_matrix(Polyharmonic(3), targets, sources).shape
+        (2, 3)
+        >>> kernel_matrix(
+        ...     lambda targets, sources: jnp.ones(3), targets, sources
+        ... )  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        ValidationError: 'kernel' must return the (2, 3) cross-kernel
     """
     value = kernel(targets, sources)
     if isinstance(value, lx.AbstractLinearOperator):
@@ -99,6 +144,23 @@ class RadialKernel(eqx.Module):
     positive definite, the lowest polynomial degree its tail needs. Radial
     kernels are configuration, so they round-trip through strict JSON with
     `get_config` and `from_config` inside a scheme's config.
+
+    Examples:
+        A subclass gives only the profile, here the Gaussian φ(r) = exp(−r²):
+
+        >>> import jax.numpy as jnp
+        >>> from functax.interp import Kernel, RadialKernel
+        >>> class Gaussian(RadialKernel):
+        ...     def profile(self, distance):
+        ...         return jnp.exp(-(distance**2))
+        >>> gram = Gaussian()(jnp.zeros((2, 2)), jnp.zeros((3, 2)))
+        >>> gram.shape, bool(jnp.allclose(gram, 1.0))
+        ((2, 3), True)
+
+        It is a `Kernel`, and positive definite, so it needs no tail:
+
+        >>> isinstance(Gaussian(), Kernel), Gaussian().min_degree
+        (True, -1)
     """
 
     @abc.abstractmethod
@@ -115,8 +177,8 @@ class RadialKernel(eqx.Module):
         targets: Float[Array, "target dim"],
         sources: Float[Array, "source dim"],
     ) -> Float[Array, "target source"]:
-        """Kₖⱼ = φ(‖x*ₖ − xⱼ‖), with a zero gradient of r at coincident points."""
-        # r = ‖x* − x‖, guarded at r = 0
+        """K_*X = φ(‖x_* − x‖) at every pair, with a zero gradient of r at r = 0."""
+        # r = ‖x_* − x‖, guarded at r = 0
         distance = _euclidean_distance(targets, sources)
         return self.profile(distance)
 
@@ -144,26 +206,29 @@ class RadialKernel(eqx.Module):
 
 
 def _conditional_order(order: int) -> int:
-    """m, the order of conditional positive definiteness of r^k (k odd) or r^k log r."""
+    """m, the order of conditional positive definiteness of rᵖ (p odd) or rᵖ log r."""
     if order % 2 == 1:
+        # m = ⌈p/2⌉
         return (order + 1) // 2
+    # m = p/2 + 1
     return order // 2 + 1
 
 
 class Polyharmonic(RadialKernel):
-    """The polyharmonic spline φ(r) = ±rᵏ for odd k, ±rᵏ log r for even k.
+    """The polyharmonic spline φ(r) = ±rᵖ for odd p, ±rᵖ log r for even p.
 
-    It is conditionally positive definite of order m = ⌈k/2⌉ (odd k) or
-    k/2 + 1 (even k), so the interpolant needs a polynomial tail of degree at
-    least m − 1, and the sign (−1)ᵐ makes the kernel positive on the
-    polynomials' null space. These are SciPy's ``RBFInterpolator`` kernels:
-    k = 1 is ``"linear"`` (−r), 2 ``"thin_plate_spline"`` (r² log r), 3
+    With r = ‖x − x′‖ and the power p, it is conditionally positive definite
+    of order m = ⌈p/2⌉ (odd p) or p/2 + 1 (even p), so the interpolant needs a
+    polynomial tail of degree at least m − 1, and the sign (−1)ᵐ makes the
+    kernel positive on the polynomials' null space. These are SciPy's
+    ``RBFInterpolator`` kernels: p = 1 is ``"linear"`` (−r), 2
+    ``"thin_plate_spline"`` (r² log r), 3
     ``"cubic"`` (r³) and 5 ``"quintic"`` (−r⁵). The thin-plate kernel is
     guarded at r = 0 by the double ``where``, so its value there is 0 and its
     gradient finite.
 
     Args:
-        order: k ≥ 1; 2 is the thin-plate spline, which minimises the bending
+        order: p ≥ 1; 2 is the thin-plate spline, which minimises the bending
             energy in 2-D.
 
     Raises:
@@ -195,28 +260,36 @@ class Polyharmonic(RadialKernel):
         return _conditional_order(self.order) - 1
 
     def profile(self, distance: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
-        """φ(r) = (−1)ᵐ rᵏ, or (−1)ᵐ rᵏ log r for even k."""
-        sign = (-1.0) ** _conditional_order(self.order)
+        """φ(r) = (−1)ᵐ rᵖ, or (−1)ᵐ rᵖ log r for even p."""
+        conditional_order = _conditional_order(self.order)
+        # (−1)ᵐ
+        sign = (-1.0) ** conditional_order
+        # rᵖ
         power = distance**self.order
         if self.order % 2 == 1:
+            # φ(r) = (−1)ᵐ rᵖ
             return sign * power
         # the double where: log never sees r = 0, so the gradient stays finite
         positive = distance > 0
-        safe_distance = jnp.where(positive, distance, jnp.ones((), distance.dtype))
+        one = jnp.ones((), distance.dtype)
+        zero = jnp.zeros((), distance.dtype)
+        safe_distance = jnp.where(positive, distance, one)
+        # log r
         logarithm = jnp.log(safe_distance)
-        # φ(r) = (−1)ᵐ rᵏ log r, and φ(0) = 0
+        # φ(r) = (−1)ᵐ rᵖ log r, and φ(0) = 0
         value = sign * safe_distance**self.order * logarithm
-        return jnp.where(positive, value, jnp.zeros((), distance.dtype))
+        return jnp.where(positive, value, zero)
 
 
 class Wendland(RadialKernel):
     """The compact Wendland kernel φ(r) = ψ(r/ρ), zero for r ≥ ρ.
 
-    ψ is `wendland_c2`, (1 − s)₊⁴ (4s + 1), for ``smoothness=2``, and
-    `wendland_c4`, (1 − s)₊⁶ (35s² + 18s + 3)/3, for ``smoothness=4``. Both are
-    positive definite in up to three dimensions, so the interpolant needs no
-    polynomial tail, and K is sparse when ρ is small (the plan still stores
-    it dense).
+    With r = ‖x − x′‖ and the scaled distance r̃ = r/ρ, ψ is `wendland_c2`,
+    (1 − r̃)₊⁴ (4r̃ + 1), for ``smoothness=2``, and `wendland_c4`,
+    (1 − r̃)₊⁶ (35r̃² + 18r̃ + 3)/3, for ``smoothness=4``. Both are positive
+    definite in up to three dimensions, so the interpolant needs no
+    polynomial tail, and K_XX is sparse when ρ is small (the plan still
+    stores it dense).
 
     Args:
         smoothness: 2 (C²) or 4 (C⁴).
@@ -251,8 +324,8 @@ class Wendland(RadialKernel):
             raise ValidationError(msg)
 
     def profile(self, distance: Float[Array, "*batch"]) -> Float[Array, "*batch"]:
-        """φ(r) = ψ(r/ρ)."""
-        # s = r/ρ
+        """φ(r) = ψ(r̃), r̃ = r/ρ."""
+        # r̃ = r/ρ
         scaled = distance / self.support
         if self.smoothness == 2:
             return wendland_c2(scaled)
