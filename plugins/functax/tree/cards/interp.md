@@ -1,0 +1,7 @@
+- **Provides.** Interpolation as a scheme frozen into a plan: f̂(X*) = H 𝒮(y), with the adjoint 𝒮ᵀ Hᵀ written by hand.
+- **Nouns.** Schemes `functax.interp.Nearest`, `functax.interp.Linear`, `functax.interp.Cubic`, `functax.interp.BSpline`, `functax.interp.Tensor`, `functax.interp.Conservative`, `functax.interp.Binning`, `functax.interp.RBF`, `functax.interp.Kriging`; the result is a `functax.interp.Plan`.
+- **Verbs.** `plan = scheme.plan(source, target)`, then `plan(field)` and `plan.adjoint(residual)`; `plan.operator()` is a lineax operator, `plan.derivative(axis)` reads a derivative, `scheme.fit(source, data)` gives a field read at targets chosen inside the trace.
+- **Adverbs.** `policies=functax.interp.Policies(outside=..., missing=..., boundary=..., extent=...)`; `plan.valid` marks the targets the plan could read.
+- **Keep.** Build a plan once, outside `jit`, and call it on many fields; a field is flattened to `(..., N)` in the source's row-major order.
+- **Never.** Write a `searchsorted`, a gather with hand-made weights or a scatter-add for the adjoint; never differentiate through a plan's construction when `plan.adjoint` is what you need.
+- **One rung down.** Open `functax:interpolation-with-functax` to choose a scheme, set the policies, regrid conservatively, krige or write a new scheme.

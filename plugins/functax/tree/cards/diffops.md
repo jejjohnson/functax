@@ -1,0 +1,6 @@
+- **Provides.** Derivatives of a field given as a function of one point, by automatic differentiation.
+- **Verbs.** `functax.diffops.gradient`, `functax.diffops.divergence`, `functax.diffops.curl2d`, `functax.diffops.laplacian`, `functax.diffops.jacobian_field`; on the unit sphere `functax.diffops.surface_grad`, `functax.diffops.surface_grad_enu` and `functax.diffops.laplace_beltrami`.
+- **Keep.** Each takes a callable `f(x)` of one point of shape `(D,)` and returns a callable of one point: wrap it in `jax.vmap` for many points.
+- **Keep.** The sphere operators take `f` as a function of a 3-vector and differentiate along the surface only.
+- **Never.** Use these on gridded samples: a field on a grid is differentiated with `plan.derivative(axis)` from `functax.interp`, or with a finite-volume or spectral library.
+- **One rung down.** Open `functax:bases-quadrature-and-transforms` for the east and north components of a surface gradient.

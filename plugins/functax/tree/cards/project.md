@@ -1,0 +1,7 @@
+- **Provides.** Fits of data onto a basis, and gap filling of an image.
+- **Verbs.** `functax.project.least_squares(Φ, y, ridge=...)` for c = argmin ‖Φc − y‖² + α‖c‖²; `functax.project.galerkin(Φ, y, weights=...)` with quadrature weights; `functax.project.fill_gaps(image, mask=...)` for Laplace or biharmonic inpainting.
+- **Nouns.** `functax.project.Variational`, the smoothing fit x = argmin (Hx − y)ᵀR⁻¹(Hx − y) + λ‖Lx‖², built from lineax operators and matrix-free.
+- **Adverbs.** `ridge=` for Tikhonov regularisation; `method="laplace"` or `"biharmonic"` and `periodic=` on `functax.project.fill_gaps`; `solver=` takes a lineax solver.
+- **Keep.** `y` may carry leading batch dimensions, and the coefficients keep them.
+- **Never.** Call `jnp.linalg.lstsq` or form `(ΦᵀΦ)⁻¹` by hand for a fit onto a functax basis.
+- **One rung down.** Open `functax:bases-quadrature-and-transforms` to choose between the fits or to set up the variational fit's operators.

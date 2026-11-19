@@ -1,0 +1,7 @@
+- **Provides.** Quadrature rules as data: nodes and weights, with ∫ g ≈ ∑ₙ wₙ g(xₙ).
+- **Nouns.** `functax.quad.Rule`, `functax.quad.SphereRule`, `functax.quad.CurveRule`, each with `.nodes` and `.weights`.
+- **Verbs.** On an interval: `functax.quad.gauss_legendre`, `functax.quad.clenshaw_curtis`, `functax.quad.trapezoid`, `functax.quad.simpson`. On the sphere: `functax.quad.sphere_gauss_legendre`, `functax.quad.sphere_healpix`, `functax.quad.sphere_latlon`, `functax.quad.sphere_fibonacci`. On a grid's cells: `functax.quad.cell_area`. Along a transect: `functax.quad.polyline`.
+- **Adverbs.** `interval=(a, b)` on the 1-D rules; `radius=` on the sphere rules; `sphere_radius=` and `unit=` on `functax.quad.cell_area` for a lon/lat grid.
+- **Keep.** A rule only holds nodes and weights: you evaluate the integrand at `rule.nodes` and contract with `rule.weights`.
+- **Never.** Hard-code Gauss nodes, or weight a lon/lat grid by `cos(lat)` by hand: the sphere rules carry exact cell areas.
+- **One rung down.** Open `functax:bases-quadrature-and-transforms` to choose a rule for an accuracy, or to integrate a flux across a curve with its normals.

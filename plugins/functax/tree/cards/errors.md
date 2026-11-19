@@ -1,0 +1,6 @@
+- **Provides.** One exception hierarchy and the rule for the two installs.
+- **Nouns.** `functax.FunctaxError` at the root; `functax.ValidationError`, `functax.GeometryError`, `functax.PolicyError`, `functax.OutsideDomainError`, `functax.NonlinearSchemeError`, `functax.MissingExtraError`.
+- **Keep.** Each error is also the closest standard exception, so `except ValueError` and `except ImportError` still catch it; catch `functax.FunctaxError` to catch them all.
+- **Keep.** The base install needs NumPy alone and gives `functax` and `functax.geometry.affine`; every other module needs the `functax[jax]` extra.
+- **Never.** Import a module that needs the extra on a NumPy-only path: it raises `functax.MissingExtraError`, which names the extra to install.
+- **One rung down.** Open `functax:function-approximation-with-functax` when you handle one of these errors or decide which install a dependent needs.
