@@ -128,16 +128,8 @@ class TestBSplineFunction:
         total = jnp.sum(bspline(jnp.asarray(x - shifts), order), axis=-1)
         assert_matches_oracle(total, np.ones(16), rtol=1e-12, atol=1e-12)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "bspline cancels its truncated powers right of the support instead "
-            "of returning 0: bspline(1000.0, 5) = 1/120 and bspline(4.37, 5) = "
-            "-1.3e-13, where the docstring says it vanishes from |x| = (k + 1)/2"
-        ),
-    )
     def test_vanishes_off_its_support(self) -> None:
-        # βᵏ(x) = 0 for |x| ≥ (k + 1)/2; the left side is exact, the right not
+        # βᵏ(x) = 0 for |x| ≥ (k + 1)/2, on both sides
         x = jnp.array([-1000.0, -4.37, 4.37, 1000.0])
         np.testing.assert_array_equal(bspline(x, 5), np.zeros(4))
 

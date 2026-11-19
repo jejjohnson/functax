@@ -93,6 +93,19 @@ def test_gradient_in_the_edges_matches_finite_differences() -> None:
     assert_grad_matches_fd(lambda edges: _lonlat_areas(*edges), (lon_edges, lat_edges))
 
 
+def test_gradient_in_the_sphere_radius_is_twice_the_area_over_r() -> None:
+    # A = R² Δλ Δsin φ summed, so ∂A/∂R = 2A/R; the radius arrives traced
+    globe = AffineGrid([10.0, 0.0, -180.0, 0.0, -10.0, 90.0], (18, 36))
+
+    def total_area(radius):  # type: ignore[no-untyped-def]
+        return cell_area(globe, sphere_radius=radius, unit="degrees").weights.sum()
+
+    radius = jnp.asarray(2.0)
+    assert_grad_matches_fd(total_area, radius)
+    expected = 2.0 * total_area(radius) / radius
+    assert_matches_oracle(jax.grad(total_area)(radius), expected, rtol=1e-12)
+
+
 def test_jit_and_vmap_agree_with_a_loop() -> None:
     pairs = [_random_edges(seed) for seed in range(3)]
     lon_edges = jnp.asarray(np.stack([lon for lon, _ in pairs]))

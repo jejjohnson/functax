@@ -136,14 +136,6 @@ class TestTransforms:
         assert float(_gap(targets, sources)) > 0.05
         assert_grad_matches_fd(lambda xy: kernel(xy, sources), targets)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Wendland.support is annotated `float`, so the suite's jaxtyping hook "
-            "rejects the tracer of jax.jacrev at support=0.6 (TypeCheckError in "
-            "Wendland.__init__), though __check_init__ documents a traced support"
-        ),
-    )
     def test_gradient_in_the_wendland_support_matches_finite_differences(self) -> None:
         # ∂K / ∂ρ, the continuous parameter, with distances on both sides of ρ
         sources = jnp.asarray(_random_points(1, 6))

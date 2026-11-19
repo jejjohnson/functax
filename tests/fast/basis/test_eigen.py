@@ -201,9 +201,6 @@ class TestGraphLaplacian:
         assert values.shape == (3,) and vectors.shape == (8, 3)
         assert bool(np.all(np.diff(np.asarray(values)) >= 0))
 
-    # an isolated vertex is valid input: the module computes d^{−½} for every
-    # vertex before it zeroes the isolated ones, so NumPy warns on 0^{−½}
-    @pytest.mark.filterwarnings("ignore:divide by zero encountered in power")
     @settings(max_examples=20, deadline=None)
     @given(seed=st.integers(0, 2**31 - 1), normalized=st.booleans())
     def test_spectrum_is_invariant_under_relabelling(
