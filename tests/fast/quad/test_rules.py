@@ -48,6 +48,17 @@ class TestExactness:
             exact = _monomial_integral(degree, *interval)
             assert_matches_oracle(estimate, exact, rtol=1e-13, atol=1e-15)
 
+    @pytest.mark.parametrize("n", [2, 3, 5, 9, 17])
+    def test_clenshaw_curtis_is_exact_to_its_degree(self, n: int) -> None:
+        rule = clenshaw_curtis(n, interval=(0.0, 2.0))
+        degree_of_nodes = n - 1
+        # N + 1 when N is even, by symmetry
+        top = degree_of_nodes + 1 if degree_of_nodes % 2 == 0 else degree_of_nodes
+        for degree in range(top + 1):
+            estimate = np.sum(rule.weights * rule.nodes**degree)
+            exact = _monomial_integral(degree, 0.0, 2.0)
+            assert_matches_oracle(estimate, exact, rtol=1e-13, atol=1e-15)
+
     def test_trapezoid_is_exact_for_lines(self) -> None:
         nodes = jnp.asarray(_random_nodes(7, seed=5))
         rule = trapezoid(nodes)
@@ -65,7 +76,10 @@ class TestMatchesScipy:
         expected = _scipy_weights(scipy_trapezoid, nodes)
         assert_matches_oracle(rule.weights, expected, rtol=1e-14, atol=1e-15)
 
-    @pytest.mark.parametrize("count", [1, 2, 3, 4, 5, 8, 11])
+    # one count per branch of `simpson`: no pair, the trapezoid, one pair, one
+    # pair and the last-interval correction, and two pairs sharing a node;
+    # longer node vectors are in the slow tier, since each count compiles
+    @pytest.mark.parametrize("count", [1, 2, 3, 4, 5])
     @pytest.mark.parametrize("descending", [False, True])
     def test_simpson_weights(self, count: int, descending: bool) -> None:
         nodes = _random_nodes(count, seed=10 + count)

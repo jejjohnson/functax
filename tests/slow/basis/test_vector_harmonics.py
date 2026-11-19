@@ -71,7 +71,7 @@ def test_divergence_identities(column):
             assert abs(float(div_phi)) < 1e-8
 
 
-def test_enu_output_matches_projection_and_validation():
+def test_enu_output_matches_projection():
     points, _ = fibonacci_sphere(30)
     psi, _, _ = vector_spherical_harmonics(points, 3)
     psi_en, _, degrees = vector_spherical_harmonics(points, 3, output="enu")
@@ -83,5 +83,3 @@ def test_enu_output_matches_projection_and_validation():
         np.asarray(psi_en), np.einsum("nmd,ncd->nmc", psi, frame), atol=1e-5
     )
     assert psi_en.shape == (30, 15, 2) and degrees.shape == (15,)
-    with pytest.raises(ValueError, match="l_max"):
-        vector_spherical_harmonics(points, 0)

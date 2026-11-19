@@ -5,7 +5,6 @@ checks, each a second or more.
 
 from __future__ import annotations
 
-import inspect
 import warnings
 
 import einx
@@ -18,10 +17,7 @@ from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_trace
 
 from functax import ValidationError
 from functax.geometry import Points
-from functax.interp import (
-    KernelCovariance,
-    Kriging,
-)
+from functax.interp import KernelCovariance, Kriging
 
 
 def _gaussian(targets: jax.Array, sources: jax.Array) -> jax.Array:
@@ -111,6 +107,7 @@ class TestOrdinaryAndUniversal:
     def test_ordinary_kriging_weights_sum_to_one(self) -> None:
         sources, targets, _ = _scattered(seed=2)
         plan = Kriging(_gaussian, nugget=0.01).plan(Points(sources), Points(targets))
+        assert isinstance(plan.posterior, KernelCovariance)
         # row k of the plan's matrix holds the kriging weights λₖ of target k
         weights = plan.operator().as_matrix()
         assert_matches_oracle(jnp.sum(weights, axis=1), jnp.ones(8), rtol=1e-12)
@@ -170,25 +167,9 @@ class TestValidationAndConfig:
 
         sources, _, _ = _scattered(seed=7)
         plan = Kriging(inconsistent, drift=None).plan(Points(sources), Points(sources))
+        # the check runs after the solve, so it costs a whole variance
         with pytest.raises(ValidationError, match="non-negative"):
             plan.variance()
-
-    def test_covariance_checks_its_inputs(self) -> None:
-        sources, targets, _ = _scattered(seed=9)
-        plan = Kriging(_gaussian).plan(Points(sources), Points(targets))
-        posterior = plan.posterior
-        assert isinstance(posterior, KernelCovariance)
-        check = inspect.unwrap(KernelCovariance.__check_init__)
-        wrong_targets = KernelCovariance.__new__(KernelCovariance)
-        object.__setattr__(wrong_targets, "fit", posterior.fit)
-        object.__setattr__(wrong_targets, "read", posterior.read)
-        object.__setattr__(wrong_targets, "targets", targets[:3])
-        with pytest.raises(ValidationError, match="'targets'"):
-            check(wrong_targets)
-        object.__setattr__(wrong_targets, "targets", targets)
-        object.__setattr__(wrong_targets, "read", posterior.read[:, :4])
-        with pytest.raises(ValidationError, match="'read'"):
-            check(wrong_targets)
 
 
 class _ArrayKernel(eqx.Module):

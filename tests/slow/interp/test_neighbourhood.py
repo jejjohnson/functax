@@ -1,6 +1,7 @@
 """Tests for `InverseDistance`: the weights against a NumPy re-implementation, the
 oracle sweep, the tree and brute-force searches, the chord metric, grid targets, the
-dot-product test and gradients. The slow tier: each compiles new shapes eagerly.
+dot-product test, gradients, the radius, padding taps and coincident targets. The
+slow tier: each compiles new shapes eagerly.
 """
 
 from __future__ import annotations
@@ -189,6 +190,7 @@ def test_a_radius_with_no_neighbours_is_invalid() -> None:
     # the empty row reads nothing
     assert plan.read.weights[0].tolist() == [0.0, 0.0, 0.0]
     assert plan.read.indices[0].tolist() == [0, 0, 0]
+    # outside="raise" checks the stencil, so it costs a whole plan
     with pytest.raises(OutsideDomainError, match="1 of 2 targets"):
         InverseDistance(k=3, radius=1.0).plan(
             Points(SOURCE_XY), Points(far), policies=Policies(outside="raise")
@@ -207,7 +209,7 @@ def test_a_high_power_does_not_overflow_in_float32() -> None:
     assert plan.read.weights.dtype == jnp.float32
     assert np.isfinite(np.asarray(plan.read.weights)).all()
     values = plan(jnp.asarray(VALUES, dtype=jnp.float32))
-    np.testing.assert_allclose(values, VALUES[:2], rtol=1e-6)
+    assert_matches_oracle(values, VALUES[:2], rtol=1e-6)
 
 
 def test_renormalise_drops_a_missing_source() -> None:
@@ -265,8 +267,9 @@ class TestGeodesic:
         }
         chord, geodesic = plans["chord"].read, plans["geodesic"].read
         assert chord.indices.tolist() == geodesic.indices.tolist()
-        # the weights differ, and each row sums to one
-        assert not np.allclose(chord.weights, geodesic.weights)
+        # the weights differ (by up to about 6e-3 here), and each row sums to one
+        difference = np.abs(np.asarray(chord.weights) - np.asarray(geodesic.weights))
+        assert float(difference.max()) > 1e-3
         assert_matches_oracle(
             einx.sum("target [tap]", geodesic.weights), np.ones(20), rtol=1e-14
         )

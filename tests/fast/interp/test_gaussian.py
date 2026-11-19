@@ -31,8 +31,8 @@ RATE = 2.5
 
 class TestPlan:
     axis = Axis(jnp.arange(4.0))
-    targets = Points(jnp.array([[-1.0], [0.5], [2.25], [5.0]]))
-    data = jnp.array([1.0, 2.0, 4.0, 8.0])
+    # one target, the shape every plan in this file uses, so einx compiles once
+    targets = Points(jnp.array([[0.5]]))
 
     def test_without_a_rate_the_plan_is_plain(self) -> None:
         plan = Linear().plan(self.axis, self.targets)
@@ -41,9 +41,7 @@ class TestPlan:
 
     def test_outside_raise_is_supported(self) -> None:
         plan = Linear(prior_variance_rate=RATE).plan(
-            self.axis,
-            Points(jnp.array([[0.5]])),
-            policies=Policies(outside="raise"),
+            self.axis, self.targets, policies=Policies(outside="raise")
         )
         assert_matches_oracle(plan.variance(), jnp.array([RATE / 4]), rtol=1e-15)
 

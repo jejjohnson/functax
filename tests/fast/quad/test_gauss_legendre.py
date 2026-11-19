@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from _harness import assert_matches_oracle
 
 from functax import ValidationError
 from functax.quad import gauss_legendre
@@ -17,7 +18,8 @@ def test_is_exact_up_to_degree_2n_minus_1(n: int) -> None:
     for degree in (2 * n - 2, 2 * n - 1):
         # ∫₋₁¹ tᵈ dt = (1 − (−1)^(d+1)) / (d + 1)
         exact = (1.0 - (-1.0) ** (degree + 1)) / (degree + 1)
-        assert abs(np.sum(weights * nodes**degree) - exact) < 1e-13
+        estimate = np.sum(weights * nodes**degree)
+        assert_matches_oracle(estimate, exact, rtol=0, atol=1e-13)
 
 
 def test_nodes_ascend_inside_the_interval() -> None:

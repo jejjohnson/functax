@@ -9,6 +9,7 @@ import math
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from _harness import assert_matches_oracle
 
 from functax import GeometryError, OutsideDomainError, PolicyError, ValidationError
 from functax.geometry import AffineGrid, Axis, Points, RectilinearGrid
@@ -61,6 +62,15 @@ class TestOutside:
     axis = Axis(jnp.arange(4.0))
     field = jnp.array([1.0, 2.0, 4.0, 8.0])
     targets = Points(jnp.array([[-1.0], [1.5], [5.0]]))
+
+    def test_nan_writes_the_fill_value(self) -> None:
+        plan = Linear().plan(self.axis, self.targets)
+        values = plan(self.field)
+        assert bool(jnp.isnan(values[0])) and bool(jnp.isnan(values[2]))
+        filled = Linear().plan(
+            self.axis, self.targets, policies=Policies(fill_value=-9.0)
+        )
+        assert filled(self.field).tolist() == [-9.0, 3.0, -9.0]
 
     def test_clamp_reads_the_boundary(self) -> None:
         plan = Linear().plan(
@@ -225,7 +235,7 @@ class TestRepeatedNodes:
         targets = np.concatenate([np.linspace(0.0, 3.0, 25), nodes])
         axis = Axis(jnp.asarray(nodes), repeats="allow")
         plan = Linear().plan(axis, Points(jnp.asarray(targets)[:, None]))
-        np.testing.assert_allclose(
+        assert_matches_oracle(
             plan(jnp.asarray(values)),
             np.interp(targets, nodes, values),
             rtol=1e-14,

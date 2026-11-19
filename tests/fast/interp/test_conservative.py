@@ -1,4 +1,6 @@
-"""Conservative remapping on tensor grids (#40): overlaps, conservation, policies."""
+"""Conservative remapping (#40, #41): 1-D overlaps, policies, geometries and
+validation. The fast tier: behaviour, validation and small closed-form checks.
+"""
 
 from __future__ import annotations
 
@@ -32,7 +34,7 @@ def random_edges(rng: np.random.Generator, n: int, lo: float, hi: float) -> np.n
 
 
 class TestOverlapWeights:
-    def test_closed_form(self) -> None:
+    def test_matches_the_overlap_lengths_by_hand(self) -> None:
         dense = overlap_weights_1d(
             np.array([0.0, 1.0, 2.0, 3.0]), np.array([0.5, 2.5, 4.0])
         )
@@ -108,7 +110,7 @@ class TestPolicies:
     )
     field = jnp.array([1.0, 2.0, 3.0, 4.0])
 
-    def test_raise(self) -> None:
+    def test_raise_counts_the_targets_not_fully_covered(self) -> None:
         with pytest.raises(OutsideDomainError, match="2 of 4 targets"):
             Conservative().plan(
                 self.source, self.target, policies=Policies(outside="raise")
@@ -127,7 +129,7 @@ class TestPolicies:
         )
         assert_matches_oracle(plan(self.field), [1.0, 2.5, 4.0, np.nan], rtol=1e-15)
 
-    def test_fill_value(self) -> None:
+    def test_fill_value_marks_the_targets_not_fully_covered(self) -> None:
         plan = Conservative().plan(
             self.source, self.target, policies=Policies(fill_value=-9.0)
         )
@@ -160,8 +162,9 @@ class TestPolygonPath:
         return CurvilinearGrid(x=jnp.asarray(cols), y=jnp.asarray(rows))
 
     def test_non_overlapping_cells_give_zero_weight(self) -> None:
-        near = self.swath(np.arange(3.0), np.arange(3.0))
-        far = self.swath(np.arange(3.0) + 10.0, np.arange(3.0))
+        # 2 × 2 nodes, the shape of the concave test below, so einx compiles once
+        near = self.swath(np.arange(2.0), np.arange(2.0))
+        far = self.swath(np.arange(2.0) + 10.0, np.arange(2.0))
         plan = Conservative().plan(near, far, policies=Policies(outside="extrapolate"))
         assert not bool(plan.valid.any())
         assert bool(jnp.all(plan.read.weights == 0.0))
@@ -172,11 +175,12 @@ class TestPolygonPath:
             Conservative().plan(Axis(jnp.arange(3.0)), swath)
 
     def test_rejects_a_concave_target_cell(self) -> None:
-        source = self.swath(np.arange(4.0), np.arange(4.0))
-        rows, cols = np.meshgrid(np.arange(4.0), np.arange(4.0), indexing="ij")
-        # pull one node far past its neighbours, so the corners around it dent
-        cols[1, 1] = 2.9
-        rows[1, 1] = 2.9
+        source = self.swath(np.arange(2.0), np.arange(2.0))
+        rows, cols = np.meshgrid(np.arange(2.0), np.arange(2.0), indexing="ij")
+        # pull one node almost onto its diagonal neighbour, so the corners
+        # around it dent
+        cols[0, 0] = 0.9
+        rows[0, 0] = 0.9
         dented = CurvilinearGrid(x=jnp.asarray(cols), y=jnp.asarray(rows))
         with pytest.raises(GeometryError, match="cells must be convex"):
             Conservative().plan(source, dented)

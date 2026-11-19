@@ -1,6 +1,7 @@
 """Conservative remapping (#40, #41): conservation, block means, adjoint, oracles.
 
-Over a second each, mostly einx compiling each new shape in an eager call.
+The slow tier: over a second each, mostly einx compiling each new shape in an
+eager call.
 """
 
 from __future__ import annotations

@@ -255,15 +255,6 @@ class TestOutside:
     field = jnp.array([1.0, 2.0, 4.0, 8.0])
     targets = Points(jnp.array([[-1.0], [1.5], [5.0]]))
 
-    def test_nan_writes_the_fill_value(self) -> None:
-        plan = Linear().plan(self.axis, self.targets)
-        values = plan(self.field)
-        assert bool(jnp.isnan(values[0])) and bool(jnp.isnan(values[2]))
-        filled = Linear().plan(
-            self.axis, self.targets, policies=Policies(fill_value=-9.0)
-        )
-        assert filled(self.field).tolist() == [-9.0, 3.0, -9.0]
-
     def test_non_finite_targets_are_invalid_under_every_policy(self) -> None:
         targets = Points(jnp.array([[jnp.nan], [1.0]]))
         for outside in ("nan", "clamp", "extrapolate"):

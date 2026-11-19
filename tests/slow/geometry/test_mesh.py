@@ -1,8 +1,5 @@
-"""Tests for the icosphere and the lumped vertex areas of `functax.geometry`. The
-fast tier: counts, orientation, areas and validation, each well under a second.
-The slow tier:
-sweeps, oracle and dot-product checks, gradient and trace checks, anything over
-0.3 s on CI (mostly einx and XLA compiling new shapes).
+"""Tests for the icosphere of `functax.geometry`. The slow tier: the flat-triangle
+area of every level up to 5 grows towards the sphere's 4π.
 """
 
 from __future__ import annotations

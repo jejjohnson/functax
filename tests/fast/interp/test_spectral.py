@@ -3,7 +3,7 @@ dot-product test on one up- and one downsampling, exactness on band-limited fiel
 and validation. The sweeps over odd and even sizes are in tests/slow. Then
 `clenshaw`, `Chebyshev`, `ChebyshevFit` and `ChebyshevInterpolant`: ``chebval``,
 exactness on band-limited samples, the dot-product test, the outside rules and
-validation.
+validation. The fast tier.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 from _harness import assert_matches_oracle
 
-from functax import GeometryError, PolicyError, ValidationError
+from functax import GeometryError, OutsideDomainError, PolicyError, ValidationError
 from functax.geometry import Axis, Points, chebyshev_nodes
 from functax.interp import (
     Chebyshev,
@@ -103,6 +103,16 @@ def test_clenshaw_equals_numpy_chebval(n_coefficients: int) -> None:
     assert_matches_oracle(mapped, expected, rtol=0.0, atol=1e-13 * scale)
 
 
+def test_clenshaw_validates_its_arguments() -> None:
+    unwrapped = inspect.unwrap(clenshaw)
+    with pytest.raises(ValidationError, match="'coefficients' must be 1-D"):
+        unwrapped(jnp.zeros(3), jnp.ones((2, 2)))
+    with pytest.raises(ValidationError, match="'coefficients' must be 1-D"):
+        unwrapped(jnp.zeros(3), jnp.ones(0))
+    with pytest.raises(ValidationError, match="'interval' must have a < b"):
+        clenshaw(jnp.zeros(3), jnp.ones(2), interval=(1.0, 1.0))
+
+
 def test_read_out_is_the_dense_chebyshev_table() -> None:
     # T_pk = Tₖ(ξ_p)
     axis = _chebyshev_axis(6, "lobatto")
@@ -153,3 +163,12 @@ def test_chebyshev_validates_its_arguments() -> None:
         inspect.unwrap(ChebyshevFit.apply)(fit, jnp.ones(4))
     with pytest.raises(ValidationError, match="'coefficients'"):
         inspect.unwrap(ChebyshevFit.apply_adjoint)(fit, jnp.ones(4))
+
+
+def test_chebyshev_outside_raise_counts_the_targets() -> None:
+    axis = _chebyshev_axis(4, "lobatto")
+    targets = Points(jnp.array([[-2.0], [1.0], [4.0]]))
+    with pytest.raises(OutsideDomainError, match="2 of 3 targets"):
+        Chebyshev(n_coefficients=3).plan(
+            axis, targets, policies=Policies(outside="raise")
+        )

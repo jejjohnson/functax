@@ -13,6 +13,7 @@ import pytest
 from functax import (
     GeometryError,
     NonlinearSchemeError,
+    OutsideDomainError,
     PolicyError,
     ValidationError,
 )
@@ -40,6 +41,14 @@ def test_padding_counts_in_no_cell() -> None:
     padded = Points(SAMPLES.xy, valid=jnp.array([True, False, True, False, False]))
     plan = Binning("sum").plan(padded, CELLS, policies=Policies(outside="raise"))
     assert plan(VALUES).tolist() == [1.0, 0.0, 5.0, 0.0]
+
+
+def test_samples_off_the_grid_are_dropped_not_clamped() -> None:
+    counts = Binning("count").plan(SAMPLES, CELLS)
+    assert counts(VALUES).tolist() == [2.0, 0.0, 1.0, 0.0]
+    assert counts.counts.tolist() == [2.0, 0.0, 1.0, 0.0]
+    with pytest.raises(OutsideDomainError, match="2 of 5 targets"):
+        Binning().plan(SAMPLES, CELLS, policies=Policies(outside="raise"))
 
 
 def test_round_trips_through_json() -> None:

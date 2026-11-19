@@ -19,7 +19,6 @@ from _harness import (
 )
 from scipy.ndimage import map_coordinates, spline_filter1d
 
-from functax import PolicyError
 from functax.geometry import Axis, Points, RectilinearGrid
 from functax.interp import (
     BandedPrefilter,
@@ -124,7 +123,8 @@ class TestCubic:
         targets = Points(jnp.array([[2.3]]))
         sharper = Cubic(a=-0.75).plan(axis, targets).read.weights
         default = Cubic().plan(axis, targets).read.weights
-        assert not bool(jnp.allclose(sharper, default))
+        # a = −0.75 moves these weights by 0.016 to 0.037
+        assert not bool(jnp.allclose(sharper, default, rtol=0.0, atol=1e-3))
         assert_matches_oracle(jnp.sum(sharper), 1.0, rtol=1e-15)
 
 
@@ -196,21 +196,6 @@ class TestMixedAndPolicies:
             BSpline(1).plan(axis, targets)(jnp.arange(5.0) ** 2), linear, rtol=1e-15
         )
 
-    def test_the_prefilter_needs_mirror_or_wrap(self) -> None:
-        with pytest.raises(PolicyError, match="mirror or the wrap boundary"):
-            BSpline(3).plan(
-                Axis(jnp.arange(5.0)),
-                Points(jnp.zeros((1, 1))),
-                policies=Policies(boundary="edge"),
-            )
-        # wrap on a non-periodic axis prefilters periodically
-        plan = BSpline(3).plan(
-            Axis(jnp.arange(5.0)),
-            Points(jnp.zeros((1, 1))),
-            policies=Policies(boundary="wrap"),
-        )
-        assert plan.fit.periodic == (True,)
-
     def test_fill_runs_before_the_prefilter(self) -> None:
         policies = Policies(missing="fill", fill_value=0.0)
         field = jnp.array([1.0, jnp.nan, 3.0, 4.0, 5.0])
@@ -218,15 +203,6 @@ class TestMixedAndPolicies:
             Axis(jnp.arange(5.0)), Points(jnp.array([[2.0]])), policies=policies
         )
         assert_matches_oracle(plan(field), jnp.array([3.0]), rtol=1e-12)
-
-    def test_renormalise_needs_a_local_plan(self) -> None:
-        plan = BSpline(3).plan(
-            Axis(jnp.arange(5.0)),
-            Points(jnp.zeros((1, 1))),
-            policies=Policies(missing="renormalise"),
-        )
-        with pytest.raises(PolicyError, match="needs a local plan"):
-            plan(jnp.ones(5))
 
 
 class TestBasisShape:

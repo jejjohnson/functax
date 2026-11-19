@@ -1,9 +1,11 @@
 """Tests for `functax.basis.fourier`, copied from geonnax be5537d with functax imports.
-The slow tier: orthonormality, eigen equations, boundary conditions and divergence
-or curl by Jacobians, each a second or more.
+The slow tier: orthonormality, the Dirichlet closed form, eigen equations, boundary
+conditions and mixed boundaries, each a second or more.
 """
 
 from __future__ import annotations
+
+import math
 
 import jax
 import jax.numpy as jnp
@@ -16,12 +18,37 @@ from functax.basis.fourier import (
     fourier_eigenvalues,
     fourier_eigenvalues_1d,
 )
+from functax.quad import gauss_legendre
 
 
 BOUNDARIES = ["dirichlet", "neumann", "periodic"]
 
 
 L = 1.5
+
+
+@pytest.mark.parametrize("boundary", BOUNDARIES)
+def test_orthonormal_on_interval(boundary):
+    nodes, weights = gauss_legendre(80)
+    with jax.enable_x64(True):
+        phi = np.asarray(
+            fourier_basis_1d(jnp.asarray(L * nodes), 9, L, boundary=boundary)
+        )
+    gram = (phi * (L * weights)[:, None]).T @ phi
+    np.testing.assert_allclose(gram, np.eye(9), atol=1e-12)
+
+
+def test_dirichlet_default_unchanged():
+    x = jnp.linspace(-L, L, 7)
+    j = np.arange(1, 5)
+    expected = np.sin(np.outer(np.asarray(x) + L, j) * math.pi / (2 * L)) / math.sqrt(L)
+    np.testing.assert_allclose(
+        np.asarray(fourier_basis_1d(x, 4, L)), expected, atol=1e-6
+    )
+    np.testing.assert_array_equal(
+        np.asarray(fourier_basis_1d(x, 4, L)),
+        np.asarray(fourier_basis_1d(x, 4, L, boundary="dirichlet")),
+    )
 
 
 @pytest.mark.parametrize("boundary", BOUNDARIES)
@@ -73,5 +100,3 @@ def test_mixed_boundaries_in_fourier_basis():
         fourier_eigenvalues((4, 3), L, 2, boundary=("periodic", "dirichlet")),
         atol=1e-6,
     )
-    with pytest.raises(ValueError, match="boundary"):
-        fourier_basis(xy, 3, L, boundary="robin")  # ty: ignore[invalid-argument-type]

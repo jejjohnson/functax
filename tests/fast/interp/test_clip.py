@@ -1,4 +1,7 @@
-"""The host-side polygon clipper of conservative remapping (#41)."""
+"""The host-side polygon clipper of conservative remapping (#41). The fast tier:
+closed-form clips of one pair, and validation. Every clip here is of one 4-gon
+against one 4-gon, so einx compiles that shape once for the whole file.
+"""
 
 from __future__ import annotations
 
@@ -36,13 +39,13 @@ class TestClipPolygons:
         assert_matches_oracle(area, [2 * (np.sqrt(2) - 1)], rtol=1e-14)
 
     def test_disjoint_and_degenerate_subjects_have_no_area(self) -> None:
-        points, counts = clip_polygons(
-            np.stack([UNIT_SQUARE + 3.0, np.zeros((4, 2)) + 0.5]),
-            np.array([4, 4]),
-            np.stack([UNIT_SQUARE, UNIT_SQUARE]),
-        )
-        assert counts[0] == 0
-        assert planar_polygon_area(points, counts).tolist() == [0.0, 0.0]
+        # one pair per call, the shape the other clips here compile
+        disjoint = UNIT_SQUARE + 3.0
+        points, counts = clip_polygons(disjoint[None], np.array([4]), UNIT_SQUARE[None])
+        assert counts.tolist() == [0]
+        assert planar_polygon_area(points, counts).tolist() == [0.0]
+        degenerate = np.zeros((4, 2)) + 0.5
+        assert clipped_area(degenerate, UNIT_SQUARE) == 0.0
 
     def test_a_subject_inside_is_kept(self) -> None:
         small = 0.25 + 0.5 * UNIT_SQUARE
@@ -54,16 +57,6 @@ class TestClipPolygons:
 
 
 class TestCellOverlaps:
-    def test_planar_pairs_partition_each_source_cell(self) -> None:
-        shift = np.array([1.0, 0.0])
-        source = np.stack([UNIT_SQUARE, UNIT_SQUARE + shift])
-        target = 2.0 * UNIT_SQUARE[None] - np.array([0.0, 0.5])
-        overlaps = cell_overlaps(source, target, sphere=False)
-        assert overlaps.target.tolist() == [0, 0]
-        assert overlaps.source.tolist() == [0, 1]
-        assert_matches_oracle(overlaps.areas, [1.0, 1.0], rtol=1e-15)
-        assert overlaps.target_areas.tolist() == [4.0]
-
     def test_rejects_a_concave_target(self) -> None:
         dart = np.array([[0.0, 0.0], [2.0, 1.0], [0.0, 2.0], [0.5, 1.0]])
         with pytest.raises(GeometryError, match="'target' cells must be convex"):

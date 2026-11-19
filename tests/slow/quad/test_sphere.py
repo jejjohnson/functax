@@ -9,6 +9,7 @@ import math
 
 import numpy as np
 import pytest
+from _harness import assert_matches_oracle
 
 from functax.basis.sphere import real_spherical_harmonics
 from functax.quad import (
@@ -47,7 +48,8 @@ RULES = [
 @pytest.mark.parametrize("make", RULES)
 def test_integrates_every_harmonic_up_to_its_degree(make) -> None:
     rule = make()
-    assert np.max(np.abs(_harmonic_integrals(rule, rule.degree))) < 1e-12
+    integrals = _harmonic_integrals(rule, rule.degree)
+    assert_matches_oracle(integrals, np.zeros_like(integrals), rtol=0, atol=1e-12)
 
 
 @pytest.mark.parametrize("make", RULES)

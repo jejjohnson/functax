@@ -7,8 +7,6 @@ interpolant, and gradients in the samples and the target positions.
 
 from __future__ import annotations
 
-import inspect
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -22,7 +20,6 @@ from _harness import (
     assert_transpose_matches,
 )
 
-from functax import OutsideDomainError, ValidationError
 from functax.geometry import Axis, Points, chebyshev_nodes
 from functax.interp import (
     Chebyshev,
@@ -215,17 +212,10 @@ def test_float32_is_kept() -> None:
     assert plan.adjoint(jnp.ones(12, dtype=jnp.float32)).dtype == jnp.float32
 
 
-def test_clenshaw_shapes_dtypes_and_validation() -> None:
+def test_clenshaw_keeps_the_target_shape_and_dtype() -> None:
     assert clenshaw(jnp.zeros((2, 3)), jnp.array([2.0])).tolist() == [[2.0] * 3] * 2
     x32 = jnp.linspace(-1.0, 1.0, 4, dtype=jnp.float32)
     assert clenshaw(x32, jnp.ones(3, dtype=jnp.float32)).dtype == jnp.float32
-    unwrapped = inspect.unwrap(clenshaw)
-    with pytest.raises(ValidationError, match="'coefficients' must be 1-D"):
-        unwrapped(jnp.zeros(3), jnp.ones((2, 2)))
-    with pytest.raises(ValidationError, match="'coefficients' must be 1-D"):
-        unwrapped(jnp.zeros(3), jnp.ones(0))
-    with pytest.raises(ValidationError, match="'interval' must have a < b"):
-        clenshaw(jnp.zeros(3), jnp.ones(2), interval=(1.0, 1.0))
 
 
 @pytest.mark.parametrize("kind", KINDS)
@@ -295,17 +285,20 @@ def test_outside_rules() -> None:
     nan = scheme.plan(axis, targets)(y)
     assert bool(jnp.isnan(nan[0])) and bool(jnp.isnan(nan[2]))
     clamp = scheme.plan(axis, targets, policies=Policies(outside="clamp"))(y)
-    assert jnp.allclose(clamp, jnp.array([4.0, 0.0, 4.0]))
+    assert_matches_oracle(clamp, jnp.array([4.0, 0.0, 4.0]), rtol=1e-15, atol=1e-15)
     extrapolate = Policies(outside="extrapolate")
-    assert jnp.allclose(
-        scheme.plan(axis, targets, policies=extrapolate)(y), jnp.array([9.0, 0.0, 9.0])
+    assert_matches_oracle(
+        scheme.plan(axis, targets, policies=extrapolate)(y),
+        jnp.array([9.0, 0.0, 9.0]),
+        rtol=1e-12,
+        atol=1e-14,
     )
-    assert jnp.allclose(
+    assert_matches_oracle(
         scheme.fit(axis, y, policies=extrapolate)(coordinates),
         jnp.array([9.0, 0.0, 9.0]),
+        rtol=1e-12,
+        atol=1e-14,
     )
-    with pytest.raises(OutsideDomainError, match="2 of 3 targets"):
-        scheme.plan(axis, targets, policies=Policies(outside="raise"))
     filled = scheme.fit(axis, y, policies=Policies(fill_value=-9.0))(coordinates)
     assert filled.tolist()[0] == -9.0
 
@@ -316,8 +309,11 @@ def test_missing_fill_and_float32() -> None:
     targets = Points(jnp.array([[0.0], [2.0]]))
     policies = Policies(missing="fill", fill_value=1.0)
     scheme = Chebyshev(n_coefficients=6, kind="gauss")
-    assert jnp.allclose(scheme.plan(axis, targets, policies=policies)(y), 1.0)
-    assert jnp.allclose(scheme.fit(axis, y, policies=policies)(targets), 1.0)
+    filled = scheme.plan(axis, targets, policies=policies)(y)
+    assert_matches_oracle(filled, jnp.ones(2), rtol=1e-14)
+    assert_matches_oracle(
+        scheme.fit(axis, y, policies=policies)(targets), jnp.ones(2), rtol=1e-14
+    )
     axis32 = Axis(chebyshev_nodes(6).astype(jnp.float32))
     y32 = jnp.ones(7, dtype=jnp.float32)
     field = Chebyshev(n_coefficients=7).fit(axis32, y32)
@@ -341,7 +337,7 @@ def test_clamp_keeps_the_derivative_at_the_ends() -> None:
         axis, axis.values**2, policies=Policies(outside="clamp")
     )
     gradient = jax.grad(lambda x: field(x).sum())(jnp.array([[1.0], [3.0], [4.0]]))
-    assert jnp.allclose(gradient[:, 0], jnp.array([2.0, 6.0, 0.0]))
+    assert_matches_oracle(gradient[:, 0], jnp.array([2.0, 6.0, 0.0]), rtol=1e-13)
 
 
 def test_missing_fill_replaces_non_finite_samples() -> None:

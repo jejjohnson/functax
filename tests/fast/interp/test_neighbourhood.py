@@ -1,6 +1,5 @@
-"""Tests for `InverseDistance`: the weights against a NumPy re-implementation, the
-radius, padding taps, coincident targets and validation. The fast tier: behaviour,
-validation and small closed-form checks, each well under a second.
+"""Tests for `InverseDistance`: the JSON round trip and validation of the fields,
+geometries, policies and units. The fast tier: each well under a second.
 """
 
 from __future__ import annotations

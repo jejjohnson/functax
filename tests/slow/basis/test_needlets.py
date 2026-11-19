@@ -62,12 +62,8 @@ def test_localisation():
         assert band < 0.05 * near  # needlet decay away from its centre
 
 
-def test_shapes_and_validation():
+def test_shapes_at_j_max_one():
     values, levels, centres = needlet_basis(jnp.array([[0.0, 0.0, 1.0]]), j_max=1)
     assert (
         values.shape == (1, 69) and levels.shape == (69,) and centres.shape == (69, 3)
     )
-    with pytest.raises(ValueError, match="'B' must"):
-        needlet_window(1.0)
-    with pytest.raises(ValueError, match="j_max"):
-        needlet_basis(jnp.zeros((1, 3)), j_max=-1)

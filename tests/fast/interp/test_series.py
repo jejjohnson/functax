@@ -6,11 +6,16 @@ from __future__ import annotations
 
 import inspect
 
-import einx
 import jax.numpy as jnp
 import pytest
 
-from functax import GeometryError, NonlinearSchemeError, ValidationError
+from functax import (
+    GeometryError,
+    NonlinearSchemeError,
+    OutsideDomainError,
+    PolicyError,
+    ValidationError,
+)
 from functax.geometry import Axis, Points
 from functax.interp import (
     CubicSpline,
@@ -49,6 +54,24 @@ class TestPoliciesAndValidation:
         with pytest.raises(ValidationError, match="non-periodic Axis"):
             Pchip().plan(Axis(jnp.arange(5.0), period=10.0), Points(jnp.zeros((1, 1))))
 
+    def test_outside_raise_rejects_targets_off_the_axis(self) -> None:
+        targets = Points(jnp.array([[-1.0], [2.5], [7.0]]))
+        with pytest.raises(OutsideDomainError, match="outside the domain"):
+            Pchip().plan(self.knots, targets, policies=Policies(outside="raise"))
+
+    def test_renormalise_needs_a_local_plan(self) -> None:
+        values = jnp.arange(6.0).at[2].set(jnp.nan)
+        targets = Points(jnp.array([[4.5]]))
+        with pytest.raises(PolicyError, match="needs a local plan"):
+            Pchip().plan(self.knots, targets, policies=Policies(missing="renormalise"))(
+                values
+            )
+
+    def test_periodic_spline_names_the_repeat(self) -> None:
+        axis = Axis(jnp.array([0.0, 1.0, 1.0, 2.0, 3.0]), repeats="allow")
+        with pytest.raises(GeometryError, match=r"bc='periodic'.* x\[1\] = x\[2\]"):
+            CubicSpline(bc="periodic").plan(axis, Points(jnp.array([[0.5]])))
+
     def test_spline_slopes_reject_an_unknown_condition(self) -> None:
         from functax._src.interp._spline1d import spline_slopes
 
@@ -72,21 +95,6 @@ class TestDerivatives:
         spline = CubicSpline().plan(Axis(jnp.arange(5.0)), Points(jnp.array([[1.5]])))
         assert type(spline.derivative(0)) is DerivativePlan
 
-    def test_the_derivative_at_a_knot_is_its_slope(self) -> None:
-        axis = Axis(jnp.array([0.0, 1.0, 2.0, 4.0]))
-        data = jnp.array([0.0, 1.0, 1.0, 3.0])
-        field = Pchip().fit(axis, data)
-        slopes = field.plan(Points(jnp.zeros((1, 1)))).fit.apply(data)[4:]
-        knots = einx.id("node -> node 1", axis.values)
-        assert field.derivative()(knots).tolist() == slopes.tolist()
-
-    def test_a_cubic_has_constant_third_and_zero_fourth_derivative(self) -> None:
-        axis = Axis(jnp.linspace(0.0, 3.0, 7))
-        field = CubicSpline().fit(axis, axis.values**3)
-        targets = jnp.array([[0.4], [1.7], [2.9]])
-        assert jnp.allclose(field.derivative(order=3)(targets), 6.0)
-        assert field.derivative(order=4)(targets).tolist() == [0.0, 0.0, 0.0]
-
     def test_rejects_bad_orders_axes_and_nesting(self) -> None:
         field = Pchip().fit(Axis(jnp.arange(4.0)), jnp.arange(4.0))
         with pytest.raises(ValidationError, match="'order' must be a positive"):
@@ -95,13 +103,3 @@ class TestDerivatives:
             field.derivative(axis=1)
         with pytest.raises(ValidationError, match="raise 'order' instead"):
             field.derivative().derivative()
-
-    def test_a_held_repeated_end_has_zero_slope(self) -> None:
-        axis = Axis(jnp.array([0.0, 1.0, 2.0, 3.0, 3.0]), repeats="allow")
-        field = Pchip().fit(
-            axis,
-            jnp.array([0.0, 1.0, 3.0, 4.0, 9.0]),
-            policies=Policies(outside="extrapolate"),
-        )
-        slopes = field.derivative()(jnp.array([[3.0], [3.5]]))
-        assert slopes.tolist() == [0.0, 0.0]

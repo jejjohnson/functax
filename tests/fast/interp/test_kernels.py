@@ -1,5 +1,5 @@
 """Tests for the `Kernel` protocol, `Polyharmonic` and `Wendland`. The fast tier:
-closed forms, gradients at r = 0, validation and configs.
+closed forms, validation and configs.
 """
 
 from __future__ import annotations

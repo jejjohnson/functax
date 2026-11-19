@@ -11,8 +11,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from _harness import assert_matches_oracle
 
-from functax import GeometryError, PolicyError, ValidationError
+from functax import GeometryError, OutsideDomainError, PolicyError, ValidationError
 from functax.geometry import Axis, Points
 from functax.interp import Delaunay, Policies, Scheme
 
@@ -33,6 +34,17 @@ def test_padding_sources_are_left_out() -> None:
     assert 4 not in reads
     mesh = Delaunay(simplices=[[0, 1, 4], [0, 1, 3], [0, 3, 2]]).plan(padded, TARGETS)
     assert 4 not in np.asarray(mesh.read.indices)
+
+
+def test_weights_sum_to_one_inside() -> None:
+    plan = Delaunay().plan(SQUARE, TARGETS)
+    totals = np.asarray(plan.read.weights).sum(axis=1)
+    assert_matches_oracle(totals[:2], np.ones(2), rtol=1e-14)
+
+
+def test_outside_raise_counts_the_targets_off_the_hull() -> None:
+    with pytest.raises(OutsideDomainError, match="2 of 4 targets"):
+        Delaunay().plan(SQUARE, TARGETS, policies=Policies(outside="raise"))
 
 
 def test_round_trips_through_json() -> None:

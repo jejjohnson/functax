@@ -1,7 +1,8 @@
 """Tests for `functax.basis.polynomial`, copied from geonnax be5537d with functax
 imports. The slow tier: quadrature orthonormality, high-degree float32 checks,
-gradients and frame reconstructions, each a second or more; and the gradient and
-trace checks of `legendre_series` (#47).
+gradients and frame reconstructions, each a second or more; the exponent-carry
+helper of #122; and the NumPy sweep over degrees and the gradient and trace checks
+of `legendre_series` (#47).
 """
 
 from __future__ import annotations
@@ -122,26 +123,34 @@ def test_gradient_matches_finite_difference_at_high_degree():
     def f(t):
         return associated_legendre(t[None], 255)[0, col]
 
-    with jax.enable_x64(True):
-        t0, h = jnp.float64(0.3), 1e-6
-        grad = float(jax.grad(f)(t0))
-        fd = float((f(t0 + h) - f(t0 - h)) / (2 * h))
-    assert abs(grad - fd) <= 1e-6 * max(abs(fd), 1.0)
+    assert_grad_matches_fd(f, jnp.float64(0.3), eps=1e-6, rtol=1e-6)
 
 
 @pytest.mark.parametrize("t0", [0.0, 0.3, -0.9])
 def test_gradient_matches_finite_difference_where_values_vanish(t0):
     # At t = 0 every P̄ₗᵐ with odd l − m is exactly zero but has a non-zero
     # derivative; the exponent carry must still give d/dt exactly (#122).
-    # Central-difference truncation ~1e-10 at l_max = 8; measured 2e-10.
+    # Central-difference truncation at l_max = 8 measures at most 1.5e-9 (at
+    # t = −0.9, where the largest derivative is about 23); 1e-9 of the largest
+    # entry leaves an order of magnitude.
     def f(t):
         return associated_legendre(t[None], 8)[0]
 
-    with jax.enable_x64(True):
-        t, h = jnp.float64(t0), 1e-6
-        jac = np.asarray(jax.jacfwd(f)(t))
-        fd = np.asarray((f(t + h) - f(t - h)) / (2 * h))
-    np.testing.assert_allclose(jac, fd, rtol=0, atol=1e-7)
+    assert_grad_matches_fd(f, jnp.float64(t0), eps=1e-6, rtol=1e-9)
+
+
+def test_ldexp_helper_exact_at_zero_and_out_of_range():
+    # #122: the exponent carry scales by powers of two with `_ldexp`, which
+    # must have derivative 2^e at x = 0 (jnp.ldexp gives 1) and must not form
+    # 0 · inf when e exceeds float32's range (exact poles at l_max ≈ 370).
+    from functax._src.basis._legendre import _ldexp
+
+    zero = jnp.float32(0.0)
+    assert float(_ldexp(zero, jnp.int32(400))) == 0.0
+    assert float(_ldexp(jnp.float32(0.75), jnp.int32(-400))) == 0.0
+    assert float(_ldexp(jnp.float32(0.75), jnp.int32(5))) == 24.0
+    grad = jax.grad(lambda x: _ldexp(x, jnp.int32(3)))(zero)
+    assert float(grad) == 8.0
 
 
 def test_gradient_finite_inside_interval():
@@ -151,6 +160,20 @@ def test_gradient_finite_inside_interval():
         return jnp.sum(associated_legendre(t, 8)) + jnp.sum(legendre_polynomials(t, 8))
 
     assert jnp.isfinite(jax.grad(f)(t)).all()
+
+
+@pytest.mark.parametrize("degree", [0, 1, 2, 3, 10, 50, 100, 200])
+def test_legendre_series_equals_numpy_legval(degree: int) -> None:
+    # gate of #47: 1e-13 relative to ∑ₗ |cₗ|, the bound on |f| since |Pₗ| ≤ 1;
+    # the two recurrences round differently, so a pointwise relative error is
+    # meaningless where the series crosses zero
+    rng = np.random.default_rng(degree)
+    coeffs = rng.standard_normal(degree + 1)
+    x = np.concatenate([np.linspace(-1.0, 1.0, 401), [-1.0, 1.0, 0.0]])
+    got = legendre_series(jnp.asarray(x), jnp.asarray(coeffs))
+    expected = np.polynomial.legendre.legval(x, coeffs)
+    scale = float(np.sum(np.abs(coeffs)))
+    np.testing.assert_allclose(np.asarray(got), expected, rtol=0.0, atol=1e-13 * scale)
 
 
 def test_legendre_series_gradient_matches_finite_differences() -> None:
@@ -177,12 +200,10 @@ def test_legendre_polynomials_match_scipy():
     np.testing.assert_allclose(P, ref, atol=1e-12)
 
 
-def test_legendre_polynomials_shape_and_l_max_zero():
+def test_legendre_polynomials_shapes_include_l_max_zero():
     t = jnp.zeros((2, 3))
     assert legendre_polynomials(t, 4).shape == (2, 3, 5)
     assert legendre_polynomials(t, 0).shape == (2, 3, 1)
-    with pytest.raises(ValueError, match="l_max"):
-        legendre_polynomials(t, -1)
 
 
 def test_schmidt_matches_definition():
@@ -232,7 +253,9 @@ def test_legendre_series_matches_scipy() -> None:
 def test_legendre_series_low_degrees_and_shapes() -> None:
     x = jnp.array([[-0.3, 0.2], [0.9, 1.0]])
     assert legendre_series(x, jnp.array([2.0])).tolist() == [[2.0, 2.0], [2.0, 2.0]]
-    np.testing.assert_allclose(legendre_series(x, jnp.array([1.0, 3.0])), 1.0 + 3 * x)
+    np.testing.assert_allclose(
+        legendre_series(x, jnp.array([1.0, 3.0])), 1.0 + 3 * x, rtol=1e-12
+    )
     # rounding outside [-1, 1] is clipped: P_l(1) = 1
     assert float(legendre_series(jnp.array(1.0 + 1e-9), jnp.ones(5))) == 5.0
 

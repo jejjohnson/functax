@@ -45,7 +45,9 @@ def test_curlfree_is_gradient_and_curl_free(boundary):
             jac = jax.vmap(jax.jacfwd(field), (0, None))(xy, m)  # (N, 2, 2)
             np.testing.assert_allclose(jac[:, 1, 0] - jac[:, 0, 1], 0.0, atol=1e-10)
         np.testing.assert_allclose(
-            lam, fourier_eigenvalues(3, L, 2, boundary=boundary, dtype=jnp.float64)
+            lam,
+            fourier_eigenvalues(3, L, 2, boundary=boundary, dtype=jnp.float64),
+            rtol=1e-12,
         )
 
 

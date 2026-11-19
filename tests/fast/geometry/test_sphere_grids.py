@@ -36,7 +36,7 @@ GRIDS: dict[str, Callable[..., tuple[jax.Array, jax.Array]]] = {
 def test_weights_sum_to_four_pi_on_unit_vectors(name: str) -> None:
     # gate of #20: each grid's weights sum to 4π to 1e-12
     points, weights = GRIDS[name]()
-    assert abs(float(weights.sum()) - 4.0 * math.pi) < 1e-12
+    assert_matches_oracle(weights.sum(), 4.0 * math.pi, rtol=0, atol=1e-12)
     assert_matches_oracle(
         np.linalg.norm(points, axis=1), np.ones(len(points)), rtol=0, atol=1e-12
     )

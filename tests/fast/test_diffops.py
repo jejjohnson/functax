@@ -26,6 +26,7 @@ def test_integer_points_are_promoted():
     np.testing.assert_allclose(
         diffops.gradient(lambda x: jnp.sum(x**2))(jnp.array([1, 2])),
         jnp.array([2.0, 4.0]),
+        rtol=1e-15,
     )
 
 

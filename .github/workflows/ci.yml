@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # the whole suite with coverage every night, and on demand
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -25,26 +29,53 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
       - name: Run the fast tier (tests/fast and the fast doctests)
-        run: uv run pytest --no-cov -m fast tests/fast src/functax
+        run: uv run pytest --no-cov -n auto --dist loadfile -m fast tests/fast src/functax
 
-  # Every tier, with coverage and the 90 % gate.
+  # Pull requests run the slow and integration tests their changes reach
+  # (scripts/affected_tests.py; the fast job above already runs the whole fast
+  # tier). Main, the nightly run, manual runs and release-please PRs run every
+  # tier with coverage and the 90 % gate. Both run in parallel (pytest-xdist).
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
       - name: Install dependencies
         run: uv sync --group dev
+      - name: Select the tests
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [[ "$EVENT" != "pull_request" || "$HEAD_REF" == release-please--* ]]; then
+            echo "paths=all" >> "$GITHUB_OUTPUT"
+          else
+            echo "paths=$(uv run python scripts/affected_tests.py --base "origin/$BASE_REF")" >> "$GITHUB_OUTPUT"
+          fi
       - name: Run every tier with coverage
-        run: uv run pytest -v
+        if: steps.select.outputs.paths == 'all'
+        run: uv run pytest -n auto --dist loadfile
+      - name: Run the affected slow and integration tests
+        if: steps.select.outputs.paths != 'all' && steps.select.outputs.paths != 'none'
+        env:
+          PATHS: ${{ steps.select.outputs.paths }}
+        # exit code 5 is "no tests collected": the change reaches fast tests only
+        run: |
+          uv run pytest --no-cov -n auto --dist loadfile -m "slow or integration" $PATHS || test $? -eq 5
       - name: Upload coverage report
+        if: steps.select.outputs.paths == 'all'
         uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: coverage.xml
       - name: Upload coverage to Codecov
+        if: steps.select.outputs.paths == 'all'
         uses: codecov/codecov-action@v7
         with:
           files: ./coverage.xml

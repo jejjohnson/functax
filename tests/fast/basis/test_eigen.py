@@ -1,8 +1,7 @@
 """Tests for `functax.basis.eigen`. The fast tier, each well under a second: the
-cotangent Laplacian (the icosphere spectrum, mass-orthonormality, an independent
-assembly, the Neumann square, validation); geonnax's EOF tests, copied from be5537d
-with functax imports; and graph-Laplacian tests written for functax (geonnax had
-none) against the closed-form spectra of the path and the cycle.
+validation of the cotangent Laplacian; the validation of geonnax's
+EOFs, copied from be5537d with functax imports; and graph-Laplacian tests written for
+functax (geonnax had none) against the closed-form spectra of the path and the cycle.
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ import math
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from _harness import assert_matches_oracle
 
 from functax import GeometryError, ValidationError
 from functax.basis.eigen import (
@@ -21,20 +19,12 @@ from functax.basis.eigen import (
     eof_basis,
     graph_laplacian_eigpairs,
 )
-from functax.geometry import icosphere, mesh_vertex_areas
 
 
 def _tetrahedron() -> tuple[np.ndarray, np.ndarray]:
     vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float)
     triangles = np.array([[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]])
     return vertices, triangles
-
-
-@pytest.fixture(scope="module")
-def sphere3() -> tuple[np.ndarray, ...]:
-    vertices, triangles = icosphere(3)
-    eigvals, eigvecs, areas = cotangent_laplacian_eigpairs(vertices, triangles, 16)
-    return tuple(map(np.asarray, (vertices, triangles, eigvals, eigvecs, areas)))
 
 
 def _path(n: int) -> np.ndarray:
@@ -48,34 +38,6 @@ def _cycle(n: int) -> np.ndarray:
     adjacency = _path(n)
     adjacency[0, -1] = adjacency[-1, 0] = 1.0
     return adjacency
-
-
-class TestIcosphereSpectrum:
-    def test_eigvecs_are_mass_orthonormal(
-        self, sphere3: tuple[np.ndarray, ...]
-    ) -> None:
-        eigvecs, areas = sphere3[3], sphere3[4]
-        gram = eigvecs.T @ (areas[:, None] * eigvecs)
-        assert_matches_oracle(gram, np.eye(16), rtol=0, atol=1e-10)
-
-    def test_the_constant_is_in_the_null_space(
-        self, sphere3: tuple[np.ndarray, ...]
-    ) -> None:
-        eigvecs, areas = sphere3[3], sphere3[4]
-        expected = np.full(len(areas), 1.0 / math.sqrt(areas.sum()))
-        assert_matches_oracle(np.abs(eigvecs[:, 0]), expected, rtol=1e-10)
-
-    def test_areas_are_the_vertex_areas(self, sphere3: tuple[np.ndarray, ...]) -> None:
-        vertices, triangles, *_, areas = sphere3
-        assert_matches_oracle(mesh_vertex_areas(vertices, triangles), areas, rtol=1e-14)
-
-
-def test_a_tetrahedron_runs() -> None:
-    vertices, triangles = _tetrahedron()
-    eigvals, eigvecs, _ = cotangent_laplacian_eigpairs(vertices, triangles, 4)
-    assert eigvals.shape == (4,)
-    assert eigvecs.shape == (4, 4)
-    assert abs(float(eigvals[0])) < 1e-10
 
 
 @pytest.mark.parametrize(
@@ -205,6 +167,8 @@ class TestGraphLaplacian:
         values, vectors = graph_laplacian_eigpairs(_cycle(n), n, normalized=False)
         expected = np.sort(2 - 2 * np.cos(2 * np.pi * np.arange(n) / n))
         np.testing.assert_allclose(values, expected, atol=1e-12)
+        # the Gram in NumPy: a JAX matmul would compile a kernel for this shape
+        vectors = np.asarray(vectors)
         np.testing.assert_allclose(vectors.T @ vectors, np.eye(n), atol=1e-12)
         # the constant spans the null space
         np.testing.assert_allclose(np.abs(vectors[:, 0]), 1 / math.sqrt(n), atol=1e-12)
@@ -224,7 +188,7 @@ class TestGraphLaplacian:
     def test_returns_the_lowest_modes(self):
         values, vectors = graph_laplacian_eigpairs(_cycle(8), 3)
         assert values.shape == (3,) and vectors.shape == (8, 3)
-        assert bool(jnp.all(jnp.diff(values) >= 0))
+        assert bool(np.all(np.diff(np.asarray(values)) >= 0))
 
     @pytest.mark.parametrize(
         ("adjacency", "num_basis", "match"),

@@ -1,6 +1,5 @@
 """Tests for the `Kernel` protocol, `Polyharmonic` and `Wendland`. The slow tier:
-sweeps, oracle and dot-product checks, gradient and trace checks, anything over
-0.3 s on CI (mostly einx and XLA compiling new shapes).
+finite gradients at zero distance, each compiling its own gradient.
 """
 
 from __future__ import annotations

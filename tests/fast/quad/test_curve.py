@@ -1,6 +1,6 @@
 """Tests for `functax.quad.polyline` and `CurveRule`. The fast tier: the weights sum
-to the length, Gauss–Legendre exactness along a straight segment, the normals'
-length, orientation and sign, the node layout, and validation.
+to the length, Gauss–Legendre and midpoint exactness, the normals' length,
+orientation and sign, the node layout, and validation.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import inspect
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from _harness import assert_matches_oracle
 from jaxtyping import TypeCheckError
 
 from functax import ValidationError
@@ -30,8 +31,8 @@ def test_gauss_legendre_is_exact_along_a_segment_to_degree_2n_minus_1(n: int) ->
     for degree in range(2 * n):
         # ∫₀^ℓ sᵈ ds = ℓᵈ⁺¹/(d + 1)
         exact = length ** (degree + 1) / (degree + 1)
-        approx = float(np.dot(transect.weights, arc**degree))
-        assert abs(approx - exact) < 1e-13 * exact
+        approx = np.dot(transect.weights, arc**degree)
+        assert_matches_oracle(approx, exact, rtol=1e-13)
     # one degree past exactness, the rule misses
     degree = 2 * n
     exact = length ** (degree + 1) / (degree + 1)
@@ -43,12 +44,12 @@ def test_gauss_legendre_is_exact_for_a_polynomial_in_the_coordinates() -> None:
     start, end = np.array([1.0, 2.0]), np.array([-2.0, 0.5])
     transect = polyline(jnp.asarray(np.stack([start, end])), 2, rule="gauss_legendre")
     x, y = np.asarray(transect.nodes).T
-    approx = float(np.dot(transect.weights, x**2 * y - 3 * x * y**2 + y**3))
+    approx = np.dot(transect.weights, x**2 * y - 3 * x * y**2 + y**3)
     # the same integral with 20 Gauss–Legendre nodes as the reference
     reference = polyline(jnp.asarray(np.stack([start, end])), 20, rule="gauss_legendre")
     rx, ry = np.asarray(reference.nodes).T
-    exact = float(np.dot(reference.weights, rx**2 * ry - 3 * rx * ry**2 + ry**3))
-    assert abs(approx - exact) < 1e-13 * abs(exact)
+    exact = np.dot(reference.weights, rx**2 * ry - 3 * rx * ry**2 + ry**3)
+    assert_matches_oracle(approx, exact, rtol=1e-13)
 
 
 @pytest.mark.parametrize("rule", ["midpoint", "gauss_legendre"])
@@ -63,6 +64,18 @@ def test_normals_are_unit_and_orthogonal_to_the_tangent(rule: str) -> None:
     # +90°: the cross product t × n is +1, the normal on the left
     cross = tangents[:, 0] * normals[:, 1] - tangents[:, 1] * normals[:, 0]
     np.testing.assert_allclose(cross, 1.0, atol=1e-15)
+
+
+def test_midpoint_is_exact_for_linear_fields() -> None:
+    transect = polyline(ZIGZAG, 3)
+    nodes = np.asarray(transect.nodes)
+    # c(x, y) = 2x − y + 1 integrates segment by segment as ℓⱼ c(midpoint)
+    vertices = np.asarray(ZIGZAG)
+    midpoints = 0.5 * (vertices[1:] + vertices[:-1])
+    lengths = np.linalg.norm(np.diff(vertices, axis=0), axis=1)
+    exact = np.dot(lengths, 2 * midpoints[:, 0] - midpoints[:, 1] + 1)
+    approx = np.dot(transect.weights, 2 * nodes[:, 0] - nodes[:, 1] + 1)
+    assert_matches_oracle(approx, exact, rtol=1e-13)
 
 
 def test_is_a_rule_that_unpacks() -> None:

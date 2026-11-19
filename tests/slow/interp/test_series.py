@@ -5,6 +5,7 @@ dot-product tests across policies, gradient and trace checks, each a second or m
 
 from __future__ import annotations
 
+import einx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -14,10 +15,10 @@ from _harness import (
     assert_adjoint,
     assert_grad_matches_fd,
     assert_matches_oracle,
+    assert_traces,
     assert_transpose_matches,
 )
 
-from functax import GeometryError, PolicyError
 from functax.geometry import Axis, Points
 from functax.interp import (
     Akima,
@@ -313,7 +314,7 @@ class TestFitInTheTrace:
             )
 
 
-class TestPoliciesAndValidation:
+class TestPolicies:
     knots = Axis(jnp.arange(6.0))
 
     def test_outside_policies(self) -> None:
@@ -325,8 +326,6 @@ class TestPoliciesAndValidation:
             values
         )
         assert clamp[0] == 0.0 and clamp[2] == 25.0
-        with pytest.raises(Exception, match="outside the domain"):
-            Pchip().plan(self.knots, targets, policies=Policies(outside="raise"))
 
     def test_missing_policies(self) -> None:
         values = jnp.arange(6.0).at[2].set(jnp.nan)
@@ -335,10 +334,6 @@ class TestPoliciesAndValidation:
             self.knots, targets, policies=Policies(missing="fill", fill_value=0.0)
         )(values)
         assert bool(jnp.isfinite(filled[0]))
-        with pytest.raises(PolicyError, match="needs a local plan"):
-            Pchip().plan(self.knots, targets, policies=Policies(missing="renormalise"))(
-                values
-            )
 
 
 def _pieces(
@@ -466,11 +461,6 @@ class TestRepeatedKnots:
             lambda y: operator.mv(y), plan.adjoint, 11, 21, key=jax.random.key(104)
         )
 
-    def test_periodic_spline_names_the_repeat(self) -> None:
-        axis = Axis(jnp.array([0.0, 1.0, 1.0, 2.0, 3.0]), repeats="allow")
-        with pytest.raises(GeometryError, match=r"bc='periodic'.* x\[1\] = x\[2\]"):
-            CubicSpline(bc="periodic").plan(axis, Points(jnp.array([[0.5]])))
-
     @pytest.mark.parametrize("scheme", [Linear(), Pchip()], ids=["linear", "pchip"])
     def test_a_float32_cdf_inverse_with_repeats_matches_float64(self, scheme) -> None:  # type: ignore[no-untyped-def]
         # gauss_flows's HistogramCDF: 1000 samples in 128 bins, counts + 1e-6,
@@ -539,6 +529,33 @@ class TestDerivatives:
         scale = np.abs(reference).max()
         assert_matches_oracle(derivative, reference, rtol=0.0, atol=1e-12 * scale)
 
+    def test_the_derivative_at_a_knot_is_its_slope(self) -> None:
+        axis = Axis(jnp.array([0.0, 1.0, 2.0, 4.0]))
+        data = jnp.array([0.0, 1.0, 1.0, 3.0])
+        field = Pchip().fit(axis, data)
+        slopes = field.plan(Points(jnp.zeros((1, 1)))).fit.apply(data)[4:]
+        knots = einx.id("node -> node 1", axis.values)
+        assert field.derivative()(knots).tolist() == slopes.tolist()
+
+    def test_a_cubic_has_constant_third_and_zero_fourth_derivative(self) -> None:
+        axis = Axis(jnp.linspace(0.0, 3.0, 7))
+        field = CubicSpline().fit(axis, axis.values**3)
+        targets = jnp.array([[0.4], [1.7], [2.9]])
+        assert_matches_oracle(
+            field.derivative(order=3)(targets), jnp.full(3, 6.0), rtol=1e-12
+        )
+        assert field.derivative(order=4)(targets).tolist() == [0.0, 0.0, 0.0]
+
+    def test_a_held_repeated_end_has_zero_slope(self) -> None:
+        axis = Axis(jnp.array([0.0, 1.0, 2.0, 3.0, 3.0]), repeats="allow")
+        field = Pchip().fit(
+            axis,
+            jnp.array([0.0, 1.0, 3.0, 4.0, 9.0]),
+            policies=Policies(outside="extrapolate"),
+        )
+        slopes = field.derivative()(jnp.array([[3.0], [3.5]]))
+        assert slopes.tolist() == [0.0, 0.0]
+
     def test_steffen_is_its_own_slope_at_the_knots(self) -> None:
         knots, data = _axis_and_data(seed=111)
         axis = Axis(jnp.asarray(knots))
@@ -589,8 +606,7 @@ class TestDerivatives:
             return Pchip().fit(axis, values).derivative()(targets)
 
         batch = jax.random.normal(jax.random.key(115), (3, knots.size))
-        eager = jnp.stack([density(row) for row in batch])
-        assert_matches_oracle(jax.jit(jax.vmap(density))(batch), eager, rtol=1e-12)
+        assert_traces(density, batch, rtol=1e-12)
 
     @pytest.mark.parametrize("bc", ["not-a-knot"])
     def test_spline_derivative_dot_product(self, bc: str) -> None:

@@ -11,6 +11,7 @@ import math
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from _harness import assert_matches_oracle
 
 from functax.geometry import AffineGrid, Axis, RectilinearGrid
 from functax.quad import cell_area
@@ -33,7 +34,7 @@ def test_global_one_degree_affine_grid_sums_to_the_sphere_area(radius: float) ->
     globe = AffineGrid([1.0, 0.0, -180.0, 0.0, -1.0, 90.0], (180, 360))
     rule = cell_area(globe, sphere_radius=radius, unit="degrees")
     expected = 4.0 * math.pi * radius**2
-    assert abs(float(rule.weights.sum()) - expected) < 1e-12 * expected
+    assert_matches_oracle(rule.weights.sum(), expected, rtol=1e-12)
 
 
 @pytest.mark.parametrize(
@@ -47,7 +48,7 @@ def test_global_one_degree_rectilinear_grid_sums_to_the_sphere_area(
     )
     expected = 4.0 * math.pi * EARTH_LIKE_RADIUS**2
     assert rule.weights.shape == (360, 180)
-    assert abs(float(rule.weights.sum()) - expected) < 1e-12 * expected
+    assert_matches_oracle(rule.weights.sum(), expected, rtol=1e-12)
 
 
 def test_affine_and_rectilinear_lonlat_rules_agree() -> None:
@@ -91,7 +92,7 @@ def test_rectilinear_areas_sum_to_the_domain_area() -> None:
     )
     rule = cell_area(RectilinearGrid(axes))
     domain = (x_edges[-1] - x_edges[0]) * (y_edges[-1] - y_edges[0])
-    assert abs(float(rule.weights.sum()) - domain) < 1e-14 * domain
+    assert_matches_oracle(rule.weights.sum(), domain, rtol=1e-14)
     # each cell is the product of its two widths, one axis per grid axis
     expected = np.outer(np.diff(x_edges), np.diff(y_edges))
     np.testing.assert_allclose(rule.weights, expected, rtol=1e-15)
@@ -103,4 +104,4 @@ def test_rectilinear_grid_of_any_dimension(count: int) -> None:
     rule = cell_area(RectilinearGrid(axes))
     assert rule.weights.shape == (3,) * count
     assert rule.nodes.shape == (*(3,) * count, count)
-    assert abs(float(rule.weights.sum()) - 3.0**count) < 1e-13
+    assert_matches_oracle(rule.weights.sum(), 3.0**count, rtol=0, atol=1e-13)

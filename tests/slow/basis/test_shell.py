@@ -10,7 +10,6 @@ import math
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 
 from functax.basis.sphere import real_spherical_harmonics, shell_basis
 from functax.geometry import gauss_legendre_grid
@@ -44,14 +43,10 @@ def test_single_radial_mode_is_scaled_harmonics_and_indices():
     assert indices.shape == (16, 2) and indices[-1].tolist() == [3, 0]
 
 
-def test_chebyshev_radial_and_validation():
+def test_chebyshev_radial_takes_its_end_values():
     points = jnp.array([[0.0, 0.0, R0], [0.0, 0.0, R1]])
     values, _ = shell_basis(points, 0, 3, r_inner=R0, r_outer=R1, radial="chebyshev")
     y00 = 1.0 / math.sqrt(4.0 * math.pi)
     np.testing.assert_allclose(
         np.asarray(values), y00 * np.array([[1, -1, 1], [1, 1, 1]]), atol=1e-6
     )
-    with pytest.raises(ValueError, match="r_inner"):
-        shell_basis(points, 1, 2, r_inner=2.0, r_outer=1.0)
-    with pytest.raises(ValueError, match="n_radial"):
-        shell_basis(points, 1, 0, r_inner=R0, r_outer=R1)

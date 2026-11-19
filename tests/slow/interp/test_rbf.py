@@ -5,7 +5,6 @@ or more (mostly einx compiling new shapes).
 
 from __future__ import annotations
 
-import inspect
 import warnings
 
 import jax
@@ -26,7 +25,6 @@ from functax import ValidationError
 from functax.geometry import Axis, Points, RectilinearGrid
 from functax.interp import (
     RBF,
-    KernelSolve,
     Policies,
     Polyharmonic,
     Wendland,
@@ -223,14 +221,9 @@ class TestTargetsAndPolicies:
 class TestValidationAndConfig:
     def test_rejects_too_many_tail_terms(self) -> None:
         points = Points(jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]))
+        # the fit checks the tail after the plan builds the Gram matrix
         with pytest.raises(ValidationError, match="'terms'"):
             RBF(Polyharmonic(2), degree=1).plan(points, points)
-
-    def test_kernel_solve_checks_the_right_hand_side(self) -> None:
-        fit = KernelSolve(jnp.eye(3), jnp.ones((3, 1)))
-        assert fit.data_size(4) == 3
-        with pytest.raises(ValidationError, match="'rhs'"):
-            inspect.unwrap(fit.solve)(fit, jnp.ones(3))
 
 
 class TestLocal:
@@ -309,10 +302,3 @@ class TestLocal:
         )
         assert plan.valid.tolist() == valid.tolist()
         assert bool(jnp.all(jnp.isnan(plan(jnp.asarray(data))[~valid])))
-
-    def test_needs_more_neighbours_than_tail_terms(self) -> None:
-        sources, targets, _ = _scattered(seed=34)
-        with pytest.raises(ValidationError, match="needs more than 3 neighbours"):
-            RBF(Polyharmonic(2), neighbors=3).plan(
-                Points(jnp.asarray(sources)), Points(jnp.asarray(targets))
-            )

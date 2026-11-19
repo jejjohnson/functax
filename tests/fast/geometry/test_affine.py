@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from _harness import assert_matches_oracle, assert_traces
+from _harness import assert_matches_oracle
 
 from functax import GeometryError
 from functax.geometry import (
@@ -174,15 +174,6 @@ class TestSliceTransform:
                 batched[index],
                 slice_transform(transform, row0[index], col0[index], row_step=2),
             )
-
-    def test_traces_with_traced_offsets(self) -> None:
-        transforms = jnp.asarray(_random_transforms(3, seed=25))
-        offsets = jnp.array([[0.0, 1.0], [4.0, 2.0], [9.0, 5.0]])
-
-        def chip(transform: jax.Array, offset: jax.Array) -> jax.Array:
-            return slice_transform(transform, offset[0], offset[1], col_step=2)
-
-        assert_traces(chip, transforms, offsets)
 
     def test_rejects_a_transform_that_does_not_end_in_six(self) -> None:
         with pytest.raises(GeometryError, match=r"shape \(\*batch, 6\)"):

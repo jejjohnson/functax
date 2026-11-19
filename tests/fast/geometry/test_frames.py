@@ -30,7 +30,7 @@ class TestRotationToPole:
             rotation @ unit_vector, [0.0, 0.0, 1.0], rtol=0, atol=1e-12
         )
         assert_matches_oracle(rotation @ rotation.T, np.eye(3), rtol=0, atol=1e-12)
-        assert abs(np.linalg.det(rotation) - 1.0) < 1e-12
+        assert_matches_oracle(np.linalg.det(rotation), 1.0, rtol=0, atol=1e-12)
 
 
 class TestValidation:
