@@ -1,0 +1,14 @@
+{
+  "name": "functax",
+  "owner": {
+    "name": "jejjohnson"
+  },
+  "description": "Claude Code plugins for function approximation in JAX with functax.",
+  "plugins": [
+    {
+      "name": "functax",
+      "source": "./plugins/functax",
+      "description": "Use functax's grids and point sets, interpolation plans with adjoints, quadrature rules, bases, differential operators, projections and transforms instead of hand-rolled gather, searchsorted and lstsq code: three skills (geometry and the front door, interpolation, bases with quadrature and transforms) and a reuse reviewer."
+    }
+  ]
+}

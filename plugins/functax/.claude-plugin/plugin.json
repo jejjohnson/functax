@@ -1,0 +1,10 @@
+{
+  "name": "functax",
+  "description": "Write function approximation in JAX on functax — CRS-free axes, grids and point sets, interpolation plans with hand-written adjoints, conservative remapping and gridding, kriging, quadrature rules, bases on boxes and on the sphere, differential operators, projections and transforms — instead of re-implementing them with gather, searchsorted and lstsq.",
+  "author": {
+    "name": "jejjohnson"
+  },
+  "repository": "https://github.com/jejjohnson/functax",
+  "license": "MIT",
+  "keywords": ["jax", "interpolation", "quadrature", "regridding", "spherical-harmonics", "basis-functions", "equinox"]
+}
