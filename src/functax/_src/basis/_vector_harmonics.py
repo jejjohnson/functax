@@ -1,9 +1,10 @@
 """Vector spherical harmonics, a basis for tangent vector fields on the sphere.
 
-For each real Y_lm with l ≥ 1, the gradient (poloidal, curl-free) harmonic
-Ψ_lm = ∇_S Y_lm and the toroidal (divergence-free) harmonic Φ_lm = r̂ × ∇_S Y_lm
+For each real Y_ℓm with degree ℓ ≥ 1 and order m, the gradient (poloidal,
+curl-free) harmonic Ψ_ℓm = ∇_S Y_ℓm and the toroidal (divergence-free) harmonic
+Φ_ℓm = r̂ × ∇_S Y_ℓm, with ∇_S the surface gradient and r̂ ∈ S² the point,
 together span the square-integrable tangent fields, a discrete Helmholtz
-decomposition: ∇_S · Ψ_lm = −l(l + 1) Y_lm and ∇_S · Φ_lm = 0. Moved from geonnax
+decomposition: ∇_S · Ψ_ℓm = −ℓ(ℓ + 1) Y_ℓm and ∇_S · Φ_ℓm = 0. Moved from geonnax
 ``_vector_spherical`` at ``be5537d``.
 """
 
@@ -47,36 +48,37 @@ def vector_spherical_harmonics(
     Float[Array, "obs feature component"],
     Int[Array, " feature"],
 ]:
-    """The gradient and toroidal vector spherical harmonics for 1 ≤ l ≤ l_max.
+    """The gradient and toroidal vector spherical harmonics for 1 ≤ ℓ ≤ ℓ_max.
 
-    The surface gradient is the tangential part of the ambient gradient of
-    any smooth extension: ∇_S Y(u) = (I − u uᵀ) ∇Ỹ(u). `real_spherical_harmonics`
-    is a polynomial in (x, y, z), so its Jacobian (``jax.jacfwd``) gives Ψ_lm
-    smoothly everywhere, poles included, and Φ_lm = u × Ψ_lm. Both have
-    ∫_{S²} ‖Ψ_lm‖² dΩ = ∫_{S²} ‖Φ_lm‖² dΩ = l(l + 1); with ``normalized=True``
-    each is divided by √(l(l + 1)), an orthonormal set of 2((l_max + 1)² − 1)
-    tangent fields.
+    At a point r̂ = (x, y, z) ∈ S², the surface gradient is the tangential part
+    of the ambient gradient ∇_r Ỹ of any smooth extension Ỹ of Y to r ∈ ℝ³: ∇_S
+    Y(r̂) = (I − r̂ r̂ᵀ) ∇_r Ỹ(r̂). `real_spherical_harmonics` is a polynomial
+    in (x, y, z), so its Jacobian (``jax.jacfwd``) gives Ψ_ℓm smoothly
+    everywhere, poles included, and Φ_ℓm = r̂ × Ψ_ℓm. Both have ∫_{S²} ‖Ψ_ℓm‖²
+    dΩ = ∫_{S²} ‖Φ_ℓm‖² dΩ = ℓ(ℓ + 1), with dΩ the area element of S²; with
+    ``normalized=True`` each is divided by √(ℓ(ℓ + 1)), an orthonormal set of
+    2((ℓ_max + 1)² − 1) tangent fields.
 
     Algorithm:
         1. Differentiate `real_spherical_harmonics` at each point with
-           ``jax.jacfwd``, the ambient gradient ∇Ỹ_lm.
-        2. Project out the radial part, Ψ_lm = ∇Ỹ_lm − (u · ∇Ỹ_lm) u.
-        3. Rotate by a quarter turn, Φ_lm = u × Ψ_lm.
-        4. Optionally divide both by √(l(l + 1)), and project onto the east and
+           ``jax.jacfwd``, the ambient gradient ∇_r Ỹ_ℓm.
+        2. Project out the radial part, Ψ_ℓm = ∇_r Ỹ_ℓm − (r̂ · ∇_r Ỹ_ℓm) r̂.
+        3. Rotate by a quarter turn, Φ_ℓm = r̂ × Ψ_ℓm.
+        4. Optionally divide both by √(ℓ(ℓ + 1)), and project onto the east and
            north directions for ``"enu"``.
 
     Args:
-        unit_xyz: Points on the unit sphere.
-        l_max: The highest degree, at least 1.
+        unit_xyz: The N points r̂ on the unit sphere.
+        l_max: ℓ_max, the highest degree, at least 1.
         output: ``"cartesian"`` for 3-D vectors, or ``"enu"`` for their east
             and north components (see `enu_basis`; at exactly the poles the
             frame is chosen by atan2(y, x)).
-        normalized: Divide by √(l(l + 1)).
+        normalized: Divide by √(ℓ(ℓ + 1)).
 
     Returns:
         ``(psi, phi, degrees)``: Ψ and Φ with 3 (or 2 for ``"enu"``)
-        components per column, (l_max + 1)² − 1 columns in the order of
-        `real_spherical_harmonics` without l = 0, and the degree of each.
+        components per column, (ℓ_max + 1)² − 1 columns in the order of
+        `real_spherical_harmonics` without ℓ = 0, and the degree of each.
 
     Raises:
         ValidationError: If ``unit_xyz`` is not (N, 3), ``l_max`` is not an
@@ -115,36 +117,36 @@ def vector_spherical_harmonics(
     # --- gradient harmonics Ψ ---
     jacobian = jax.jacfwd(harmonics)
     batched_jacobian = jax.vmap(jacobian)
-    # ∇Ỹ_lm, the ambient gradient of each harmonic at each point
+    # ∇_r Ỹ_ℓm, the ambient gradient of each harmonic at each point
     gradient = batched_jacobian(unit_xyz)
-    # u · ∇Ỹ_lm
+    # r̂ · ∇_r Ỹ_ℓm
     radial = einx.dot("obs feature dim, obs dim -> obs feature", gradient, unit_xyz)
-    # (u · ∇Ỹ_lm) u
+    # (r̂ · ∇_r Ỹ_ℓm) r̂
     normal_part = einx.multiply(
         "obs feature, obs dim -> obs feature dim", radial, unit_xyz
     )
-    # Ψ = (I − u uᵀ) ∇Ỹ
+    # Ψ = (I − r̂ r̂ᵀ) ∇_r Ỹ
     psi = gradient - normal_part
 
     # --- toroidal harmonics Φ ---
     column = einx.id("obs dim -> obs 1 dim", unit_xyz)
-    # Φ = u × Ψ
+    # Φ = r̂ × Ψ
     phi = jnp.cross(column, psi)
 
     degrees = np.asarray(harmonic_degrees(degree)[1:])
     if normalized:
-        # √(l(l + 1))
+        # √(ℓ(ℓ + 1))
         norm = np.sqrt(degrees * (degrees + 1.0))
         scale = jnp.asarray(1.0 / norm, dtype=psi.dtype)
-        # Ψ / √(l(l + 1))
+        # Ψ / √(ℓ(ℓ + 1))
         psi = einx.multiply("obs feature dim, feature", psi, scale)
-        # Φ / √(l(l + 1))
+        # Φ / √(ℓ(ℓ + 1))
         phi = einx.multiply("obs feature dim, feature", phi, scale)
     if output == "enu":
-        # λ = atan2(y, x)
+        # longitude λ = atan2(y, x)
         longitude = jnp.arctan2(unit_xyz[:, 1], unit_xyz[:, 0])
         sin_latitude = jnp.clip(unit_xyz[:, 2], -1.0, 1.0)
-        # φ = arcsin z
+        # latitude φ = arcsin z
         latitude = jnp.arcsin(sin_latitude)
         frame = _enu(longitude, latitude)
         east_north = frame[:, :2, :]

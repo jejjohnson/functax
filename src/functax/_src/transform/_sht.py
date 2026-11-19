@@ -1,10 +1,12 @@
 """The spherical-harmonic transform: dense analysis and synthesis on a lat/lon grid.
 
 A matrix transform built from `real_spherical_harmonics` and a Gauss–Legendre
-latitude rule, differentiable and with no external SHT package. Analysis is
-c_lm = ∑_q w_q y(x_q) Y_lm(x_q) and synthesis y(x) = ∑_{l ≤ l_max} ∑_m c_lm Y_lm(x);
-on a grid with n_lat > l_max and n_lon > 2 l_max, analysis after synthesis is
-exact for band-limited fields. Moved from geonnax ``layers/_spherical_transform``
+latitude rule, differentiable and with no external SHT package. On the grid
+nodes r̂_q ∈ S² with weights w_q, q = 1, …, Q (Q = n_lat n_lon), analysis maps
+the grid values y_q to the coefficients c_ℓm = ∑_q w_q y_q Y_ℓm(r̂_q), and
+synthesis evaluates f(r̂) = ∑_{ℓ=0}^{ℓ_max} ∑_{m=−ℓ}^{ℓ} c_ℓm Y_ℓm(r̂); on a
+grid with n_lat > ℓ_max and n_lon > 2ℓ_max, analysis after synthesis is exact
+for band-limited fields. Moved from geonnax ``layers/_spherical_transform``
 at ``be5537d``, apart from the spectral layers, which stay in geonnax.
 """
 
@@ -39,8 +41,9 @@ def _sht_grid(
 ) -> tuple[Float[np.ndarray, "node 3"], Float[np.ndarray, " node"]]:
     """The transform's grid: unit vectors and quadrature weights, latitude-major.
 
-    The sines of latitude are the Gauss–Legendre nodes (ascending, south to
-    north) and the longitudes are λ_j = 2πj/n_lon from 0, geonnax's layout.
+    The sines of the latitudes φ are the Gauss–Legendre nodes (ascending, south
+    to north) and the longitudes are λ_j = 2πj/n_lon for j = 0, …, n_lon − 1,
+    geonnax's layout.
     `gauss_legendre_grid` starts its longitudes at −π instead, which would roll
     every field by half a turn, so the transform keeps its own longitudes.
     """
@@ -50,14 +53,14 @@ def _sht_grid(
     cos_latitude = np.sqrt(cos_squared)
     # λ_j = 2πj / n_lon
     longitude = 2.0 * np.pi * np.arange(n_lon) / n_lon
-    # --- unit vectors u = (cos φ cos λ, cos φ sin λ, sin φ), latitude-major ---
+    # --- unit vectors r̂ = (cos φ cos λ, cos φ sin λ, sin φ), latitude-major ---
     x = einx.multiply("lat, lon -> lat lon", cos_latitude, np.cos(longitude))
     y = einx.multiply("lat, lon -> lat lon", cos_latitude, np.sin(longitude))
     sin_latitude = einx.id("lat -> lat lon", z, lon=n_lon)
     xyz = einx.id(
         "lat lon, lat lon, lat lon -> (lat lon) (1 + 1 + 1)", x, y, sin_latitude
     )
-    # --- weights w_q = w_φ · 2π/n_lon ---
+    # --- weights w_q = w_φ · 2π/n_lon, w_φ the latitude weight ---
     longitude_weight = 2.0 * np.pi / n_lon
     cell_weights = latitude_weights * longitude_weight
     weights = einx.id("lat -> (lat lon)", cell_weights, lon=n_lon)
@@ -67,24 +70,24 @@ def _sht_grid(
 class SphericalHarmonicTransform(eqx.Module):
     """Dense, differentiable spherical-harmonic analysis and synthesis on a grid.
 
-    Built for one Gauss–Legendre (n_lat, n_lon) grid and band limit l_max,
+    Built for one Gauss–Legendre (n_lat, n_lon) grid and band limit ℓ_max,
     with the coefficients in the layout of `real_spherical_harmonics`
-    ((l_max + 1)² real coefficients, degree l outermost). The tables are
+    ((ℓ_max + 1)² real coefficients, degree ℓ outermost). The tables are
     construction-time constants and pass through ``lax.stop_gradient``, so
     training a model that holds a transform never updates them.
 
-    spectraldiffx's complex transform û(l, m) (an FFT in longitude, then
-    orthonormal P̃_l^|m| in latitude, rows north to south) holds the same
-    information on the same grid: c_l0 = √(2π)/n_lon Re û(l, 0), and for m > 0,
-    c_lm = 2√π/n_lon Re û(l, m) and c_l,−m = −2√π/n_lon Im û(l, m).
+    spectraldiffx's complex coefficients a_ℓm (an FFT in longitude, then
+    orthonormal P̃_ℓ^{|m|} in latitude, rows north to south) hold the same
+    information on the same grid: c_ℓ0 = √(2π)/n_lon Re a_ℓ0, and for m > 0,
+    c_ℓm = 2√π/n_lon Re a_ℓm and c_{ℓ,−m} = −2√π/n_lon Im a_ℓm.
 
     Attributes:
         synth: The synthesis matrix, from coefficients to grid values.
         analy: The analysis matrix, from grid values to coefficients.
-        degrees: The degree l of each coefficient.
+        degrees: The degree ℓ of each coefficient.
         n_lat: The number of Gauss–Legendre latitudes.
         n_lon: The number of equispaced longitudes.
-        l_max: The band limit.
+        l_max: ℓ_max, the band limit.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -114,19 +117,20 @@ class SphericalHarmonicTransform(eqx.Module):
         """The transform matrices for a Gauss–Legendre lat/lon grid.
 
         The grid must resolve the band limit, or analysis and synthesis are
-        not inverse on l_max (high modes alias silently): Gauss–Legendre needs
-        n_lat > l_max (it is exact to degree 2 n_lat − 1), and equispaced
-        longitudes need n_lon > 2 l_max to hold every order m.
+        not inverse on ℓ_max (high modes alias silently): Gauss–Legendre needs
+        n_lat > ℓ_max (it is exact to degree 2 n_lat − 1), and equispaced
+        longitudes need n_lon > 2ℓ_max to hold every order m.
 
         Algorithm:
-            1. Lay out the Gauss–Legendre grid: unit vectors x_q and weights w_q.
-            2. Tabulate the synthesis matrix Y_lm(x_q) in float64.
+            1. Lay out the Gauss–Legendre grid: unit vectors r̂_q and weights
+               w_q.
+            2. Tabulate the synthesis matrix Y_ℓm(r̂_q) in float64.
             3. Weight it by w_q and transpose it into the analysis matrix.
 
         Args:
-            n_lat: The number of Gauss–Legendre latitudes, above l_max.
-            n_lon: The number of equispaced longitudes, above 2 l_max.
-            l_max: The band limit.
+            n_lat: The number of Gauss–Legendre latitudes, above ℓ_max.
+            n_lon: The number of equispaced longitudes, above 2ℓ_max.
+            l_max: ℓ_max, the band limit.
 
         Returns:
             The `SphericalHarmonicTransform`, its tables in the default dtype.
@@ -168,10 +172,10 @@ class SphericalHarmonicTransform(eqx.Module):
         # to the default dtype once
         with jax.enable_x64(True):
             points = jnp.asarray(xyz, dtype=jnp.float64)
-            # Y_lm(x_q)
+            # Y_ℓm(r̂_q)
             harmonics = real_spherical_harmonics(points, degree)
             synth = np.asarray(harmonics)
-        # w_q Y_lm(x_q)
+        # w_q Y_ℓm(r̂_q)
         weighted = einx.multiply("node feature, node -> node feature", synth, weights)
         analy = einx.id("node feature -> feature node", weighted)
         return cls(
@@ -186,13 +190,14 @@ class SphericalHarmonicTransform(eqx.Module):
     def forward(
         self, field: Float[Array, "channel lat lon"]
     ) -> Float[Array, "channel feature"]:
-        """Analysis, c_lm = ∑_q w_q y(x_q) Y_lm(x_q), for each channel.
+        """Analysis, c_ℓm = ∑_q w_q y_q Y_ℓm(r̂_q), for each channel.
 
         Args:
-            field: The values on the (n_lat, n_lon) grid, one field per channel.
+            field: The values y_q on the (n_lat, n_lon) grid, one field per
+                channel.
 
         Returns:
-            The (l_max + 1)² coefficients of each channel.
+            The (ℓ_max + 1)² coefficients of each channel.
 
         Examples:
             >>> import math
@@ -208,7 +213,7 @@ class SphericalHarmonicTransform(eqx.Module):
         """
         flat = einx.id("channel lat lon -> channel (lat lon)", field)
         analysis = jax.lax.stop_gradient(self.analy)
-        # c_lm = ∑_q w_q y(x_q) Y_lm(x_q)
+        # c_ℓm = ∑_q w_q y_q Y_ℓm(r̂_q)
         coeffs = einx.dot(
             "channel node, feature node -> channel feature", flat, analysis
         )
@@ -217,10 +222,13 @@ class SphericalHarmonicTransform(eqx.Module):
     def inverse(
         self, coeffs: Float[Array, "channel feature"]
     ) -> Float[Array, "channel lat lon"]:
-        """Synthesis, y(x) = ∑_{l ≤ l_max} ∑_m c_lm Y_lm(x), for each channel.
+        """Synthesis, f(r̂_q) = ∑_{ℓ,m} c_ℓm Y_ℓm(r̂_q), for each channel.
+
+        The sum runs over ℓ = 0, …, ℓ_max and m = −ℓ, …, ℓ, at the grid nodes
+        r̂_q.
 
         Args:
-            coeffs: The (l_max + 1)² coefficients of each channel.
+            coeffs: The (ℓ_max + 1)² coefficients of each channel.
 
         Returns:
             The values on the (n_lat, n_lon) grid.
@@ -238,7 +246,7 @@ class SphericalHarmonicTransform(eqx.Module):
             True
         """
         synthesis = jax.lax.stop_gradient(self.synth)
-        # y(x_q) = ∑_lm c_lm Y_lm(x_q)
+        # f(r̂_q) = ∑_{ℓ,m} c_ℓm Y_ℓm(r̂_q)
         flat = einx.dot(
             "channel feature, node feature -> channel node", coeffs, synthesis
         )

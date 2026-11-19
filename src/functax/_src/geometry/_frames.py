@@ -1,9 +1,13 @@
 """Frames on the sphere and the ellipsoid: ECEF, local east/north/up, rotations.
 
-Geographic inputs are (λ, φ) pairs, longitude first, and every function takes
-their ``unit`` explicitly. The ellipsoid enters as its semi-major axis a and
-flattening f: the WGS84 values belong to geophysix or the caller, not to
-functax. Moved from geonnax ``_frames`` at ``be5537d``.
+Geographic inputs are (λ, φ) pairs, longitude λ first and latitude φ second,
+and every function takes their ``unit`` explicitly. The ellipsoid enters as its
+semi-major axis a and flattening f: the WGS84 values belong to geophysix or the
+caller, not to functax. The geodesy letters keep their classic meanings (b the
+semi-minor axis, e² the squared eccentricity, N(φ) the prime-vertical radius,
+h the height), so the local unit vectors carry word labels, e_east, e_north and
+e_up, and a count of points is written out. Moved from geonnax ``_frames`` at
+``be5537d``.
 """
 
 from __future__ import annotations
@@ -89,18 +93,18 @@ def _enu(
     sin_lat = jnp.sin(latitude)
     cos_lat = jnp.cos(latitude)
     zero = jnp.zeros_like(longitude)
-    # ê = (−sin λ, cos λ, 0)
+    # e_east = (−sin λ, cos λ, 0)
     east_x = -sin_lon
     east = einx.id(stack, east_x, cos_lon, zero)
-    # n̂ = (−sin φ cos λ, −sin φ sin λ, cos φ)
+    # e_north = (−sin φ cos λ, −sin φ sin λ, cos φ)
     north_x = -sin_lat * cos_lon
     north_y = -sin_lat * sin_lon
     north = einx.id(stack, north_x, north_y, cos_lat)
-    # û = (cos φ cos λ, cos φ sin λ, sin φ)
+    # e_up = (cos φ cos λ, cos φ sin λ, sin φ)
     up_x = cos_lat * cos_lon
     up_y = cos_lat * sin_lon
     up = einx.id(stack, up_x, up_y, sin_lat)
-    # the frame, with rows ê, n̂, û
+    # the frame, with rows e_east, e_north, e_up
     return einx.id("obs dim, obs dim, obs dim -> obs (1 + 1 + 1) dim", east, north, up)
 
 
@@ -134,7 +138,7 @@ def lonlat_to_ecef(
         (X, Y, Z) of each point, in the units of a.
 
     Raises:
-        GeometryError: If ``lonlat`` is not (N, 2), ``unit`` is unknown, or a
+        GeometryError: If ``lonlat`` is not (points, 2), ``unit`` is unknown, or a
             concrete a is not positive or f not in [0, 1).
 
     Examples:
@@ -194,12 +198,13 @@ def ecef_to_lonlat(
     φ ← atan2(Z, p (1 − e² N / (N + h))) with p = √(X² + Y²), accurate to well
     under a millimetre on WGS84 for heights within ±10 km. The height is
     h = p cos φ + Z sin φ − a √(1 − e² sin² φ), which stays stable at the
-    poles. With f = 0 the steps reduce to φ = atan2(Z, p) and h = ‖x‖ − a.
+    poles. With f = 0 the steps reduce to φ = atan2(Z, p) and
+    h = √(X² + Y² + Z²) − a.
 
     Algorithm:
         1. λ = atan2(Y, X) and p = √(X² + Y²).
         2. Bowring's latitude from the parametric latitude
-           θ = atan2(Z a, p b).
+           β = atan2(Z a, p b).
         3. Two refinement steps φ ← atan2(Z, p (1 − e² N / (N + h))), a fixed
            count so the work has a static shape.
         4. h at the final φ.
@@ -214,7 +219,7 @@ def ecef_to_lonlat(
         ``(lonlat, altitude)``: (λ, φ) and h of each point.
 
     Raises:
-        GeometryError: If ``xyz`` is not (N, 3), ``unit`` is unknown, or a
+        GeometryError: If ``xyz`` is not (points, 3), ``unit`` is unknown, or a
             concrete a is not positive or f not in [0, 1).
 
     Examples:
@@ -230,7 +235,7 @@ def ecef_to_lonlat(
         >>> bool(jnp.allclose(height, 100.0, atol=1e-6))
         True
 
-        On the sphere (f = 0) the height is ‖x‖ − a:
+        On the sphere (f = 0) the height is √(X² + Y² + Z²) − a:
 
         >>> point = jnp.array([[0.0, 3.0, 4.0]])
         >>> _, height = ecef_to_lonlat(point, semi_major=4.0, unit="radians")
@@ -254,11 +259,11 @@ def ecef_to_lonlat(
     second_eccentricity_sq = eccentricity_sq / (1.0 - eccentricity_sq)
 
     # --- Bowring's latitude ---
-    # θ = atan2(Z a, p b)
+    # β = atan2(Z a, p b)
     parametric = jnp.arctan2(z * semi_major, horizontal * semi_minor)
     sin_parametric = jnp.sin(parametric)
     cos_parametric = jnp.cos(parametric)
-    # φ = atan2(Z + e′² b sin³ θ, p − e² a cos³ θ)
+    # φ = atan2(Z + e′² b sin³ β, p − e² a cos³ β)
     numerator = z + second_eccentricity_sq * semi_minor * sin_parametric**3
     denominator = horizontal - eccentricity_sq * semi_major * cos_parametric**3
     latitude = jnp.arctan2(numerator, denominator)
@@ -292,21 +297,21 @@ def ecef_to_lonlat(
 def enu_basis(lonlat: Float[Array, "obs 2"], *, unit: str) -> Float[Array, "obs 3 3"]:
     """The local east, north and up unit vectors at each point.
 
-    At longitude λ and latitude φ, ê = (−sin λ, cos λ, 0),
-    n̂ = (−sin φ cos λ, −sin φ sin λ, cos φ) and
-    û = (cos φ cos λ, cos φ sin λ, sin φ). The frame is orthonormal and
-    right-handed (ê × n̂ = û). At φ = ±90° east and north are not unique; the
-    formula still applies, so the given longitude picks the frame.
+    At longitude λ and latitude φ, e_east = (−sin λ, cos λ, 0),
+    e_north = (−sin φ cos λ, −sin φ sin λ, cos φ) and
+    e_up = (cos φ cos λ, cos φ sin λ, sin φ). The frame is orthonormal and
+    right-handed (e_east × e_north = e_up). At φ = ±90° east and north are not
+    unique; the formula still applies, so the given longitude picks the frame.
 
     Args:
         lonlat: (λ, φ) of each point.
         unit: ``"degrees"`` or ``"radians"``, the unit of ``lonlat``.
 
     Returns:
-        One 3 × 3 frame per point, with rows ê, n̂ and û.
+        One 3 × 3 frame per point, with rows e_east, e_north and e_up.
 
     Raises:
-        GeometryError: If ``lonlat`` is not (N, 2) or ``unit`` is unknown.
+        GeometryError: If ``lonlat`` is not (points, 2) or ``unit`` is unknown.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -329,7 +334,7 @@ def tangent_to_cartesian(
     *,
     unit: str,
 ) -> Float[Array, "obs 3"]:
-    """East and north components (u, v) to the 3-D tangent vector u ê + v n̂.
+    """East and north components (u, v) to the tangent vector u e_east + v e_north.
 
     Args:
         lonlat: (λ, φ) of each vector's base point.
@@ -340,7 +345,7 @@ def tangent_to_cartesian(
         The Cartesian tangent vectors.
 
     Raises:
-        GeometryError: If ``lonlat`` is not (N, 2) or ``unit`` is unknown.
+        GeometryError: If ``lonlat`` is not (points, 2) or ``unit`` is unknown.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -350,7 +355,7 @@ def tangent_to_cartesian(
         >>> (tangent_to_cartesian(origin, east, unit="degrees") + 0.0).tolist()
         [[0.0, 1.0, 0.0]]
 
-        The result is tangent: it is orthogonal to û at every point:
+        The result is tangent: it is orthogonal to e_up at every point:
 
         >>> from functax.geometry import enu_basis
         >>> lonlat = jnp.array([[10.0, 20.0], [-30.0, 60.0]])
@@ -363,10 +368,10 @@ def tangent_to_cartesian(
         True
     """
     frame = enu_basis(lonlat, unit=unit)
-    # the rows ê and n̂ of each frame
+    # the rows e_east and e_north of each frame
     tangent_frame = frame[:, :2, :]
     components = jnp.asarray(uv)
-    # v = u ê + v n̂
+    # u e_east + v e_north
     return einx.dot(
         "obs component, obs component dim -> obs dim", components, tangent_frame
     )
@@ -378,21 +383,21 @@ def cartesian_to_tangent(
     *,
     unit: str,
 ) -> Float[Array, "obs 2"]:
-    """3-D vectors to their east and north components (v · ê, v · n̂).
+    """3-D vectors w to their east and north components (w · e_east, w · e_north).
 
     The radial part is dropped, so on tangent vectors this inverts
     `tangent_to_cartesian`.
 
     Args:
         lonlat: (λ, φ) of each vector's base point.
-        vec: The Cartesian vectors.
+        vec: w, the Cartesian vectors.
         unit: ``"degrees"`` or ``"radians"``, the unit of ``lonlat``.
 
     Returns:
         The eastward and northward components.
 
     Raises:
-        GeometryError: If ``lonlat`` is not (N, 2) or ``unit`` is unknown.
+        GeometryError: If ``lonlat`` is not (points, 2) or ``unit`` is unknown.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -413,10 +418,10 @@ def cartesian_to_tangent(
         True
     """
     frame = enu_basis(lonlat, unit=unit)
-    # the rows ê and n̂ of each frame
+    # the rows e_east and e_north of each frame
     tangent_frame = frame[:, :2, :]
     vectors = jnp.asarray(vec)
-    # (v · ê, v · n̂)
+    # (w · e_east, w · e_north)
     return einx.dot(
         "obs component dim, obs dim -> obs component", tangent_frame, vectors
     )
@@ -432,11 +437,12 @@ def local_tangent_plane(
 ) -> Float[Array, "obs 2"]:
     """Project points onto the tangent plane at ``origin``, as (east, north).
 
-    With ê₀, n̂₀, û₀ the frame at the origin and p a point's unit vector, let
-    x = p · ê₀, y = p · n̂₀ and z = p · û₀.
+    With e_east, e_north, e_up the frame at the origin and n a point's unit
+    vector, let x = n · e_east, y = n · e_north and z = n · e_up, the point's
+    Cartesian components in that frame.
 
     - ``"azimuthal_equidistant"`` keeps the distance and bearing from the
-      origin: R (x, y) θ / sin θ, with θ = atan2(√(x² + y²), z) the
+      origin: R (x, y) ψ / sin ψ, with ψ = atan2(√(x² + y²), z) the
       great-circle angle.
     - ``"gnomonic"`` is the central projection R (x, y) / z, which maps great
       circles to straight lines; only the hemisphere around the origin (z > 0)
@@ -454,7 +460,7 @@ def local_tangent_plane(
         The (east, north) plane coordinates of each point.
 
     Raises:
-        GeometryError: If ``lonlat`` is not (N, 2), ``unit`` or
+        GeometryError: If ``lonlat`` is not (points, 2), ``unit`` or
             ``projection`` is unknown, or a concrete R is not positive.
 
     Examples:
@@ -487,13 +493,13 @@ def local_tangent_plane(
         raise GeometryError(msg)
     radians = _to_radians(lonlat, unit)
     centre = _to_radians(origin, unit)
-    # the rows ê₀, n̂₀, û₀ at the origin
+    # the rows e_east, e_north, e_up at the origin
     origin_frames = _enu(centre[0:1], centre[1:2])
     frame = origin_frames[0]
-    # p = û, the unit vector of each point
+    # n = e_up, the unit vector of each point
     point_frames = _enu(radians[:, 0], radians[:, 1])
     unit_vectors = point_frames[:, 2, :]
-    # (x, y, z) = (p · ê₀, p · n̂₀, p · û₀)
+    # (x, y, z) = (n · e_east, n · e_north, n · e_up), the frame at the origin
     local = einx.dot("obs dim, component dim -> obs component", unit_vectors, frame)
     plane = local[:, :2]
     height = local[:, 2]
@@ -510,32 +516,32 @@ def local_tangent_plane(
     # s = √(x² + y²), with 1 at the origin so √ keeps a finite gradient
     safe_squared = jnp.where(positive, squared, 1.0)
     chord = jnp.sqrt(safe_squared)
-    # θ = atan2(s, z)
+    # ψ = atan2(s, z)
     angle = jnp.arctan2(chord, height)
-    # θ / sin θ → 1 at the origin; the where keeps its gradient finite there
+    # ψ / sin ψ → 1 at the origin; the where keeps its gradient finite there
     scale = jnp.where(positive, angle / chord, 1.0)
-    # (x, y) θ / sin θ
+    # (x, y) ψ / sin ψ
     scaled = einx.multiply("obs component, obs", plane, scale)
-    # R (x, y) θ / sin θ
+    # R (x, y) ψ / sin ψ
     return radius * scaled
 
 
 def rotation_to_pole(
     lonlat_centre: Float[Array, " 2"], *, unit: str
 ) -> Float[Array, "3 3"]:
-    """The rotation R with R û(centre) = (0, 0, 1).
+    """The rotation Q with Q e_up(centre) = (0, 0, 1).
 
     Its rows are the east, north and up vectors at the centre, so
-    R p = (p · ê, p · n̂, p · û): the centre goes to the north pole and its
-    local north to the +y axis. The Slepian cap bases are evaluated in this
-    frame.
+    Q n = (n · e_east, n · e_north, n · e_up) for a unit vector n: the centre
+    goes to the north pole and its local north to the +y axis. The Slepian
+    cap bases are evaluated in this frame.
 
     Args:
         lonlat_centre: (λ, φ) of the centre.
         unit: ``"degrees"`` or ``"radians"``, the unit of ``lonlat_centre``.
 
     Returns:
-        R, orthogonal with determinant 1.
+        Q, orthogonal with determinant 1.
 
     Raises:
         GeometryError: If ``lonlat_centre`` is not (2,) or ``unit`` is

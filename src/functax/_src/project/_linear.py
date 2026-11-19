@@ -1,6 +1,6 @@
 """Linear fits onto a basis: ridge least squares and Galerkin projection.
 
-Both take the basis already evaluated at the sites, Φ (M, J), so any basis of
+Both take the basis already evaluated at the sites, Φ (M, D_c), so any basis of
 `functax.basis` (or a user's feature map) plugs in, and both solve through
 lineax.
 """
@@ -32,7 +32,7 @@ __all__ = [
 def _check_design(
     design_matrix: Shaped[Array, "*shape"], data: Shaped[Array, "*data_shape"]
 ) -> None:
-    """Φ is a floating (M, J) matrix and y floating with M along its last axis."""
+    """Φ is a floating (M, D_c) matrix and y floating with M along its last axis."""
     if design_matrix.ndim != 2:
         msg = (
             "'design_matrix' must be 2-D (obs, feature), got shape "
@@ -70,30 +70,32 @@ def least_squares(
     *,
     ridge: float = 0.0,
 ) -> Float[Array, "*batch feature"]:
-    """c = argmin ‖Φc − y‖² + α‖c‖², the ridge least-squares coefficients.
+    """c = argmin_c ‖Φc − y‖₂² + β‖c‖₂², the ridge least-squares coefficients.
 
-    The minimiser solves (ΦᵀΦ + αI) c = Φᵀy. With α > 0 the normal matrix is
-    positive definite and is factorised by Cholesky; with α = 0 the problem is
-    solved by QR on Φ itself, which avoids squaring its condition number.
+    Here Φ ∈ ℝ^{M×D_c} is the design matrix, y ∈ ℝᴹ the data, c ∈ ℝ^{D_c} the
+    coefficients and β ≥ 0 the ridge weight. The minimiser solves
+    (ΦᵀΦ + βI) c = Φᵀy. With β > 0 the normal matrix is positive definite and
+    is factorised by Cholesky; with β = 0 the problem is solved by QR on Φ
+    itself, which avoids squaring its condition number.
 
     Algorithm:
-        1. α = 0: c = R⁻¹ Qᵀ y with Φ = QR (``lineax.QR``).
-        2. α > 0: A = ΦᵀΦ + αI and b = Φᵀy, then c = A⁻¹b by Cholesky.
+        1. β = 0: c = R⁻¹ Qᵀ y with Φ = QR (``lineax.QR``).
+        2. β > 0: A = ΦᵀΦ + βI and b = Φᵀy, then c = A⁻¹b by Cholesky.
 
     Args:
-        design_matrix: Φ, the J basis functions evaluated at the M sites,
-            Φₘⱼ = φⱼ(xₘ); M ≥ J when α = 0.
+        design_matrix: Φ, the D_c basis functions evaluated at the M sites,
+            Φₘⱼ = φⱼ(xₘ) for m = 1, …, M and j = 1, …, D_c; M ≥ D_c when β = 0.
         y: The data at the sites, M along the last axis, over any leading
             batch dims.
-        ridge: α ≥ 0, the ridge weight; a Python number, since it chooses the
+        ridge: β ≥ 0, the ridge weight; a Python number, since it chooses the
             factorisation.
 
     Returns:
-        c, the J coefficients, over the batch dims of ``y``.
+        c, the D_c coefficients, over the batch dims of ``y``.
 
     Raises:
         ValidationError: If Φ is not a floating 2-D matrix, ``y`` is not
-            floating with M along its last axis, or α is negative or not
+            floating with M along its last axis, or β is negative or not
             finite.
 
     Examples:
@@ -136,7 +138,7 @@ def least_squares(
     # ΦᵀΦ
     gram = einx.dot("obs row, obs col -> row col", design_matrix, design_matrix)
     identity = jnp.eye(gram.shape[0], dtype=gram.dtype)
-    # A = ΦᵀΦ + αI
+    # A = ΦᵀΦ + βI
     normal = gram + ridge * identity
     # b = Φᵀy
     rhs = einx.dot("obs feature, ... obs -> ... feature", design_matrix, y)
@@ -153,22 +155,23 @@ def galerkin(
 ) -> Float[Array, "*batch feature"]:
     """c = (ΦᵀWΦ)⁻¹ ΦᵀW y, the Galerkin projection with quadrature weights W.
 
-    With the sites the nodes of a quadrature rule and W = diag(w) its weights,
-    ΦᵀWΦ approximates the Gram matrix ∫ φᵢ φⱼ and ΦᵀWy the moments ∫ φᵢ f, so
-    c is the L² projection of f onto the span of the basis. For a basis
-    orthonormal under the rule, ΦᵀWΦ = I and c = ΦᵀWy.
+    With the M sites xₘ ∈ Ω the nodes of a quadrature rule, w ∈ ℝᴹ its weights
+    and W = diag(w), ΦᵀWΦ approximates the Gram matrix ∫_Ω φᵢ(x) φⱼ(x) dx and
+    ΦᵀWy the moments ∫_Ω φᵢ(x) f(x) dx for i, j = 1, …, D_c, so c ∈ ℝ^{D_c} is the L²
+    projection of f onto the span of the basis. For a basis orthonormal under
+    the rule, ΦᵀWΦ = I and c = ΦᵀWy.
 
     Algorithm:
         1. A = ΦᵀWΦ and b = ΦᵀWy.
         2. c = A⁻¹b by Cholesky.
 
     Args:
-        design_matrix: Φ, the J basis functions at the M quadrature nodes.
+        design_matrix: Φ, the D_c basis functions at the M quadrature nodes.
         y: f at the nodes, M along the last axis, over any leading batch dims.
         weights: w, the M quadrature weights, all positive.
 
     Returns:
-        c, the J coefficients, over the batch dims of ``y``.
+        c, the D_c coefficients, over the batch dims of ``y``.
 
     Raises:
         ValidationError: If the shapes disagree, an input is not floating, or

@@ -47,6 +47,9 @@ __all__ = [
 class Interpolant(eqx.Module):
     """A fitted field f̂(x) = ∑ₛ wₛ(t(x)) c_{iₛ(x)}, read at any targets.
 
+    A target x reads the coefficients c at its taps iₛ(x), s = 1, …, S, with
+    weights wₛ of its offsets t(x) in its cell.
+
     Made by ``scheme.fit(source, data)``. Calling it with target coordinates
     locates, weighs and gathers inside the trace, so it runs under ``jit``,
     ``vmap``, ``grad`` and ``lax.scan`` without host work; it equals
@@ -120,7 +123,7 @@ class Interpolant(eqx.Module):
 
         Args:
             targets: The (M, D) target coordinates (one per source axis, or
-                (x, y) on an `AffineGrid`), or `Points`.
+                the two map coordinates on an `AffineGrid`), or `Points`.
 
         Returns:
             f̂ with the batch dims of the coefficients and the targets last.
@@ -134,7 +137,7 @@ class Interpolant(eqx.Module):
             else jnp.asarray(targets)
         )
         plan = self._read_plan(coordinates)
-        # f̂(X*) = H(X*) c
+        # f̂(X_*) = H(X_*) c
         return plan(self.coefficients)
 
     def plan(self, target: Any) -> Plan:
@@ -165,10 +168,10 @@ class Interpolant(eqx.Module):
         return plan.derivative(self.derivative_axis, self.derivative_order)
 
     def derivative(self, axis: int, order: int = 1) -> Interpolant:
-        """∂ᵐf̂/∂x_cᵐ as an interpolant, with c = ``axis`` and m = ``order``.
+        """∂ᵐf̂/∂x_dᵐ as an interpolant, with d = ``axis`` and m = ``order``.
 
         Args:
-            axis: c, the target coordinate to differentiate along.
+            axis: d, the target coordinate x_d to differentiate along.
             order: m ≥ 1.
 
         Returns:
@@ -222,7 +225,7 @@ def fit_interpolant(
     if policies.missing == "fill":
         fill = jnp.asarray(policies.fill_value, dtype=data.dtype)
         finite = jnp.isfinite(data)
-        # yᵢ ← y_fill where yᵢ is not finite
+        # yⱼ ← y_fill where yⱼ is not finite
         data = jnp.where(finite, data, fill)
     if prefilter is None:
         # c = y

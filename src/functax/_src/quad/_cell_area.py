@@ -48,7 +48,7 @@ def cell_area(
       area |ae − bd|, the weights are (rows, cols) like the image, and the
       nodes are the pixel centres (x, y), (rows, cols, 2).
     - `RectilinearGrid` with D axes of N₀, …, N_{D−1} nodes: cell k has the
-      volume ∏_d |e_{d,k+1} − e_{d,k}| from each axis's `Axis.cell_edges`
+      volume ∏_d |x_{d,k+½} − x_{d,k−½}| from each axis's `Axis.cell_edges`
       (its ``edges``, or the midpoints between nodes), the weights are
       (N₀, …, N_{D−1}), one axis per grid axis, and the nodes are the axis
       values, (N₀, …, N_{D−1}, D). Two axes give areas, one lengths.
@@ -57,12 +57,12 @@ def cell_area(
     against a (λ, φ) grid) then fails integrix's shape check rather than
     pairing each value with another cell's area.
 
-    With ``sphere_radius`` a the coordinates are longitude λ and latitude φ
+    With ``sphere_radius`` R the coordinates are longitude λ and latitude φ
     in ``unit``, and a lon/lat cell has the area
 
-        |C| = a² |Δλ| |sin φ_top − sin φ_bottom|,
+        |C| = R² |Δλ| |sin φ_top − sin φ_bottom|,
 
-    so a global grid sums to 4πa². An `AffineGrid` must then be north-up
+    so a global grid sums to 4πR². An `AffineGrid` must then be north-up
     (b = d = 0), x being λ and y being φ; a `RectilinearGrid` must have two
     axes in (λ, φ) order, as `Conservative` reads it with ``sphere=True``.
     Latitude edges past a pole are clipped to it, as `Conservative` does.
@@ -77,7 +77,7 @@ def cell_area(
 
     Args:
         grid: The grid of cells.
-        sphere_radius: a, the radius of the sphere the lon/lat cells lie on,
+        sphere_radius: R, the radius of the sphere the lon/lat cells lie on,
             positive; ``None`` for cells in the plane.
         unit: ``"degrees"`` or ``"radians"``, the unit of (λ, φ); required
             with ``sphere_radius`` and ``None`` without it.
@@ -85,7 +85,7 @@ def cell_area(
     Returns:
         A `Rule` of weights in the grid's shape and nodes in that shape with
         a trailing axis of D coordinates: the grid's units squared in the
-        plane, a²'s units on the sphere. An `AffineGrid` gives float64; a
+        plane, R²'s units on the sphere. An `AffineGrid` gives float64; a
         `RectilinearGrid` keeps the dtype of its axes.
 
     Raises:
@@ -140,9 +140,9 @@ def cell_area(
         pattern = f"{outer}, axis{axis} -> {outer} axis{axis}"
         weights = einx.multiply(pattern, weights, width)
     if sphere_radius is not None:
-        # a²
+        # R²
         squared_radius = sphere_radius**2
-        # a² |Δλ| |Δ sin φ|
+        # R² |Δλ| |Δ sin φ|
         weights = weights * squared_radius
     return Rule(nodes, weights)
 
@@ -223,9 +223,9 @@ def _rectilinear_cells(
         return [lon_widths, band_heights], nodes
     widths = []
     for edge in edges:
-        # eₖ₊₁ − eₖ
+        # x_{k+½} − x_{k−½}
         signed_widths = jnp.diff(edge)
-        # |eₖ₊₁ − eₖ|, positive on a descending axis too
+        # |x_{k+½} − x_{k−½}|, positive on a descending axis too
         widths.append(jnp.abs(signed_widths))
     return widths, nodes
 

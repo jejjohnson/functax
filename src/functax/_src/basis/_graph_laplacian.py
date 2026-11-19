@@ -32,8 +32,10 @@ def graph_laplacian_eigpairs(
 ) -> tuple[Float[Array, " feature"], Float[Array, "vertex feature"]]:
     """The ``num_basis`` smallest Laplacian eigenpairs of an undirected graph.
 
-    The combinatorial Laplacian L = D − A, or with ``normalized=True`` the
-    symmetric normalised L = I − D^{−½} A D^{−½}, with D the diagonal of degrees.
+    For a graph of V vertices with adjacency A ∈ ℝ^{V×V}, the combinatorial
+    Laplacian is L = D − A, or with ``normalized=True`` the symmetric
+    normalised L = I − D^{−½} A D^{−½}, with D = diag(d) the degree matrix and
+    dᵢ = ∑ⱼ Aᵢⱼ.
     The adjacency is symmetrised and its diagonal ignored (no self-loops). This
     is a dense eigendecomposition on the host, O(V³) time and O(V²) memory,
     practical up to a few thousand nodes; large or structured graphs want a

@@ -3,8 +3,9 @@
 `ChebyshevTransform1D` and `ChebyshevTransform2D` are spectraldiffx's
 transforms at ``d68f8f6`` (``_src/chebyshev/transforms.py`` and the FFT kernels
 of ``ChebyshevGrid1D.transform``), with their method names and normalisation:
-u(x) = ∑ₖ aₖ Tₖ(ξ(x)) with the true coefficients aₖ, so a constant c maps to
-(c, 0, …, 0) and Tₙ to the unit vector eₙ. The nodes are those of
+u(x) = ∑ₖ aₖ Tₖ(ξ(x)) with the true coefficients aₖ, the Chebyshev polynomials
+Tₖ and ξ(x) ∈ [−1, 1] the affine image of x, so a constant c maps to
+(c, 0, …, 0) and Tₖ to the unit vector eₖ. The nodes are those of
 `chebyshev_nodes`, in spectraldiffx's order from the upper end down; the
 derivatives, filters and solvers stay in spectraldiffx.
 """
@@ -65,9 +66,9 @@ def _lobatto(
 ) -> Float[Array, "*batch node"]:
     """The DCT-I Chebyshev transform on the N + 1 Gauss–Lobatto nodes, last axis.
 
-    Forward: aₖ = (2 / (N cₖ)) ∑ⱼ'' uⱼ cos(πjk/N), with c₀ = c_N = 2 and
-    cₖ = 1 otherwise (the double prime halves the j = 0 and j = N terms): a
-    DCT-I, evaluated as a length-2N real FFT of the even extension.
+    Forward: aₖ = (2 / (N γₖ)) ∑ⱼ'' uⱼ cos(πjk/N), with γ₀ = γ_N = 2 and
+    γₖ = 1 otherwise (the double prime halves the j = 0 and j = N terms): a
+    DCT-I, evaluated as a length-2N real FFT of the even extension ũ.
     Inverse: uⱼ = ∑ₖ aₖ cos(πjk/N).
     """
     if not inverse:
@@ -80,19 +81,19 @@ def _lobatto(
             extended = einx.id(
                 "... node, ... interior -> ... (node + interior)", values, reflected
             )
-        # X = rfft(ũ), the DCT-I of u as the FFT of its even extension
+        # Z = rfft(ũ), the DCT-I of u as the FFT of its even extension
         spectrum = jnp.fft.rfft(extended)
-        # rfft/N gives the 2/cₖ-weighted values: halve the two end modes
+        # rfft/N gives the 2/γₖ-weighted values: halve the two end modes
         weighted = spectrum.real / degree
-        # a₀ = X₀ / (2N)
+        # a₀ = Z₀ / (2N)
         halved_first = weighted.at[..., 0].multiply(0.5)
-        # a_N = X_N / (2N)
+        # a_N = Z_N / (2N)
         return halved_first.at[..., degree].multiply(0.5)
-    # irfft(X, n=2N)[j] = (1/2N)[X₀ + X_N(−1)ʲ + 2 ∑_{0<k<N} Xₖ cos(πjk/N)], so
-    # X = N a with the end modes doubled gives ∑ₖ aₖ cos(πjk/N)
+    # irfft(Z, n=2N)[j] = (1/2N)[Z₀ + Z_N(−1)ʲ + 2 ∑_{0<k<N} Zₖ cos(πjk/N)], so
+    # Z = N a with the end modes doubled gives ∑ₖ aₖ cos(πjk/N)
     doubled_first = values.at[..., 0].multiply(2.0)
     doubled = doubled_first.at[..., degree].multiply(2.0)
-    # X = N a, end modes doubled
+    # Z = N a, end modes doubled
     spectrum = degree * doubled
     # irfft needs a complex input
     complex_spectrum = spectrum + 0j
@@ -108,7 +109,7 @@ def _gauss(
 
     Forward: a₀ = (1/N) ∑ⱼ uⱼ and aₖ = (2/N) ∑ⱼ uⱼ cos(πk(2j + 1)/(2N)) for
     k > 0, a length-2N real FFT of the zero-padded samples with a half-sample
-    phase shift. Inverse: uⱼ = ∑ₖ aₖ Tₖ(xⱼ), the synthesis, as a length-2N
+    phase shift. Inverse: uⱼ = ∑ₖ aₖ Tₖ(ξⱼ), the synthesis, as a length-2N
     inverse FFT.
     """
     # the real and complex dtypes of the input (float16 computes in float32),
@@ -131,17 +132,17 @@ def _gauss(
         coefficients = real_part * (2.0 / degree)
         # a₀ halved to (1/N) ∑ⱼ uⱼ
         return coefficients.at[..., 0].multiply(0.5)
-    # uₙ = Re ∑ₖ aₖ exp(iπk(2n + 1)/(2N)) = Re[2N IFFT_{2N}(h ⊕ 0)ₙ] with
-    # hₖ = aₖ exp(iπk/(2N)); a₀ is not doubled, as the forward halved it
+    # uⱼ = Re ∑ₖ aₖ exp(iπk(2j + 1)/(2N)) = Re[2N IFFT_{2N}(ã ⊕ 0)ⱼ] with
+    # ãₖ = aₖ exp(iπk/(2N)); a₀ is not doubled, as the forward halved it
     modes = jnp.arange(degree, dtype=real_dtype)
     # iπk/(2N)
     exponent = (1j * jnp.pi * modes / (2 * degree)).astype(complex_dtype)
     phase = jnp.exp(exponent)
     complex_values = values.astype(complex_dtype)
-    # hₖ = aₖ exp(iπk/(2N))
+    # ãₖ = aₖ exp(iπk/(2N))
     shifted = einx.multiply("... mode, mode -> ... mode", complex_values, phase)
     synthesis = jnp.fft.ifft(shifted, n=2 * degree)
-    # uₙ = 2N Re IFFT_{2N}(h ⊕ 0)ₙ, for n < N
+    # uⱼ = 2N Re IFFT_{2N}(ã ⊕ 0)ⱼ, for j < N
     scaled = 2 * degree * synthesis.real
     return scaled[..., :degree]
 
@@ -158,23 +159,24 @@ def _transform_last(
 class ChebyshevTransform1D(eqx.Module):
     """The forward and inverse Chebyshev transform on N Chebyshev nodes.
 
-    For u on the nodes xⱼ of `chebyshev_nodes` (ξⱼ = (2xⱼ − a − b)/(b − a)),
+    For u on the nodes xⱼ of `chebyshev_nodes`, with ξⱼ ∈ [−1, 1] their affine
+    image from the nodes' interval,
 
         u(xⱼ) = ∑ₖ aₖ Tₖ(ξⱼ),    Tₖ(ξ) = cos(k arccos ξ),
 
     with the true Chebyshev coefficients aₖ:
 
-        Gauss–Lobatto:  aₖ = (2 / (N cₖ)) ∑ⱼ'' uⱼ cos(πjk/N), c₀ = c_N = 2,
-        Gauss:          aₖ = (2 / (N cₖ)) ∑ⱼ uⱼ cos(πk(2j + 1)/(2N)), c₀ = 2,
+        Gauss–Lobatto:  aₖ = (2 / (N γₖ)) ∑ⱼ'' uⱼ cos(πjk/N), γ₀ = γ_N = 2,
+        Gauss:          aₖ = (2 / (N γₖ)) ∑ⱼ uⱼ cos(πk(2j + 1)/(2N)), γ₀ = 2,
 
-    and cₖ = 1 otherwise (the double prime halves the end terms). The
-    coefficients do not depend on the interval [a, b]. Forward then inverse,
-    or inverse then forward, is the identity up to rounding. spectraldiffx's
-    class (``d68f8f6``) with its method names and normalisation; it wrapped a
-    ``ChebyshevGrid1D``, and here it takes the grid's N and node type. The
-    values are ordered like the nodes, from the upper end of the interval
-    down (spectraldiffx's order); `clenshaw_curtis` ascends, so its rule pairs
-    with the values reversed.
+    and γₖ = 1 otherwise (the double prime halves the end terms), for the modes
+    k and nodes j. The coefficients do not depend on the interval of the nodes.
+    Forward then inverse, or inverse then forward, is the identity up to
+    rounding. spectraldiffx's class (``d68f8f6``) with its method names and
+    normalisation; it wrapped a ``ChebyshevGrid1D``, and here it takes the
+    grid's N and node type. The values are ordered like the nodes, from the
+    upper end of the interval down (spectraldiffx's order); `clenshaw_curtis`
+    ascends, so its rule pairs with the values reversed.
 
     Algorithm:
         1. Gauss–Lobatto: a length-2N real FFT of the even extension of u (a
@@ -297,7 +299,8 @@ class ChebyshevTransform2D(eqx.Module):
     """The tensor-product Chebyshev transform on an (N_y, N_x) grid of nodes.
 
     For u on the grid of `chebyshev_nodes` in y (second-to-last axis) and x
-    (last axis), spectraldiffx's (Ny_pts, Nx_pts) layout,
+    (last axis), spectraldiffx's (Ny_pts, Nx_pts) layout, with ηᵢ and ξⱼ the
+    nodes yᵢ and xⱼ mapped to [−1, 1],
 
         u(yᵢ, xⱼ) = ∑ₗ ∑ₖ a_{lk} Tₗ(ηᵢ) Tₖ(ξⱼ),
 

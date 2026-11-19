@@ -1,10 +1,12 @@
 """Aggregation: binning and cloud-in-cell gridding as adjoints of a sampling stencil.
 
-Sampling reads M grid cells at N sample positions through a stencil H (N rows,
-one tap for nearest and 2ᴰ for linear). Aggregation runs the other way: the
-sums of the samples in each cell are Hᵀ y, the counts n = Hᵀ 1, and the means
-diag(n)⁻¹ Hᵀ y. The counts depend only on the positions, so for fixed positions
-the sum and the mean are linear in y and form an ordinary plan with an adjoint.
+Sampling reads M grid cells at N sample positions through a stencil
+H ∈ ℝ^{N×M} (one tap per row for nearest and 2ᴰ on D grid axes for linear).
+Aggregation runs the other way: for the samples y ∈ ℝ^N the sums in each
+cell are Hᵀ y, the counts are (N₁, …, N_M) = Hᵀ 1, and the means are
+ȳⱼ = (Hᵀ y)ⱼ / Nⱼ in cell j. The counts depend only on the positions, so for
+fixed positions the sum and the mean are linear in y and form an ordinary
+plan with an adjoint.
 """
 
 from __future__ import annotations
@@ -55,16 +57,17 @@ __all__ = [
 
 
 class TransposedStencil(Readout):
-    """f̂ = diag(s) Hᵀ y: a sampling stencil H used backwards, scaled per cell.
+    """f̂ = diag(w) Hᵀ y: a sampling stencil H used backwards, scaled per cell.
 
-    H reads M cells at N sample positions (``stencil``, N rows); this read-out
-    maps the N samples to the M cells by its transpose, a scatter-add, and
-    scales cell j by sⱼ (1 for sums, 1/nⱼ for means). Its adjoint is
-    H diag(s), the gather of the stencil.
+    H ∈ ℝ^{N×M} reads M cells at N sample positions (``stencil``, N rows);
+    this read-out maps the N samples y to the M cells by its transpose, a
+    scatter-add, and scales cell j by wⱼ (1 for sums, 1/Nⱼ for means, with
+    Nⱼ the samples in cell j). Its adjoint is H diag(w), the gather of the
+    stencil.
 
     Args:
         stencil: H, with one row per sample and ``n_source`` = M cells.
-        scale: s, one factor per cell.
+        scale: w ∈ ℝ^M, one factor per cell.
         valid: Whether each cell is a real read-out (false for an empty cell
             under the mean).
 
@@ -98,23 +101,23 @@ class TransposedStencil(Readout):
     def apply(
         self, coefficients: Float[Array, "*batch obs"]
     ) -> Float[Array, "*batch cell"]:
-        """f̂ⱼ = sⱼ (Hᵀ y)ⱼ, over any leading batch dims."""
+        """f̂ⱼ = wⱼ (Hᵀ y)ⱼ, over any leading batch dims."""
         # Hᵀ y
         gathered = self.stencil.apply_adjoint(coefficients)
-        # f̂ⱼ = sⱼ (Hᵀ y)ⱼ
+        # f̂ⱼ = wⱼ (Hᵀ y)ⱼ
         return einx.multiply("... cell, cell -> ... cell", gathered, self.scale)
 
     def apply_adjoint(
         self, residual: Float[Array, "*batch cell"]
     ) -> Float[Array, "*batch obs"]:
-        """g = H diag(s) r, over any leading batch dims."""
-        # diag(s) r
+        """H diag(w) r for a residual r ∈ ℝ^M, over any leading batch dims."""
+        # diag(w) r
         scaled = einx.multiply("... cell, cell -> ... cell", residual, self.scale)
-        # g = H diag(s) r
+        # H diag(w) r
         return self.stencil.apply(scaled)
 
     def operator(self) -> lx.FunctionLinearOperator:
-        """diag(s) Hᵀ as an (M, N) lineax operator."""
+        """diag(w) Hᵀ as an (M, N) lineax operator."""
         structure = jax.ShapeDtypeStruct(
             (self.stencil.n_target,), self.stencil.weights.dtype
         )
@@ -125,15 +128,16 @@ class BinningPlan(Plan):
     """A plan from N samples to M cells: the sums, means or counts per cell.
 
     For ``"sum"`` and ``"mean"`` it is an ordinary linear plan: ``read`` is
-    diag(s) Hᵀ, its `adjoint` is H diag(s), and an empty cell under the mean is
+    diag(w) Hᵀ, its `adjoint` is H diag(w), and an empty cell under the mean is
     an invalid row that reads ``fill_value`` (NaN by default), with a zero row
     in `operator`, as a target outside the domain is for sampling. A count
-    does not depend on the data, so under ``"count"`` the plan returns n = Hᵀ 1
+    does not depend on the data, so under ``"count"`` the plan returns Hᵀ 1
     for every field and has no linear map: `operator`, `adjoint` and
     `linearize` raise `NonlinearSchemeError`.
 
     Args:
-        counts: n = Hᵀ 1, the (weighted) number of samples in each cell.
+        counts: (N₁, …, N_M) = Hᵀ 1, the (weighted) number of samples in
+            each cell.
         statistic: ``"mean"``, ``"sum"`` or ``"count"``.
 
     Examples:
@@ -180,7 +184,7 @@ class BinningPlan(Plan):
             The statistic per cell, with the cells last.
         """
         if self.statistic == "count":
-            # n = Hᵀ 1, whatever the data
+            # Hᵀ 1, whatever the data
             samples = jnp.asarray(data)
             data = jnp.ones_like(samples)
         return super().__call__(data)
@@ -196,7 +200,7 @@ class BinningPlan(Plan):
     def adjoint(
         self, residual: Float[Array, "*batch cell"]
     ) -> Float[Array, "*batch obs"]:
-        """g = H diag(s) r; invalid (empty) cells contribute nothing.
+        """H diag(w) r; invalid (empty) cells contribute nothing.
 
         Raises:
             NonlinearSchemeError: Under ``"count"``.
@@ -205,7 +209,7 @@ class BinningPlan(Plan):
         return super().adjoint(residual)
 
     def operator(self) -> lx.FunctionLinearOperator:
-        """diag(s) Hᵀ as an (M, N) lineax operator, with zero rows at empty means.
+        """diag(w) Hᵀ as an (M, N) lineax operator, with zero rows at empty means.
 
         Raises:
             NonlinearSchemeError: Under ``"count"``.
@@ -228,25 +232,26 @@ class BinningPlan(Plan):
 class Binning(Scheme):
     """Aggregate scattered samples into grid cells: Hᵀ y, normalised for the mean.
 
-    With H the sampling stencil from the M cells to the N sample positions,
+    With H ∈ ℝ^{N×M} the sampling stencil from the M cells to the N sample
+    positions and the samples y ∈ ℝ^N, cell j = 1, …, M holds
 
-        sums  Hᵀ y,   counts  n = Hᵀ 1,   means  ȳ = diag(n)⁻¹ Hᵀ y,
+        sums  (Hᵀ y)ⱼ,   counts  Nⱼ = (Hᵀ 1)ⱼ,   means  ȳⱼ = (Hᵀ y)ⱼ / Nⱼ,
 
-    with NaN (``fill_value``) where nⱼ = 0. With ``weights="nearest"`` H has
+    with NaN (``fill_value``) where Nⱼ = 0. With ``weights="nearest"`` H has
     one tap per sample, so each sample falls in the cell of its nearest node
     (the cell's boundaries sit half-way between nodes, and half a cell past the
     end nodes) and this is a histogram, as ``scipy.stats.binned_statistic_dd``.
-    With ``weights="linear"`` H is the 2ᴰ-tap linear stencil, so a sample
-    spreads over the nodes around it: cloud-in-cell gridding, which conserves
-    the total and is differentiable in the positions.
+    With ``weights="linear"`` H is the 2ᴰ-tap linear stencil on D grid axes,
+    so a sample spreads over the nodes around it: cloud-in-cell gridding,
+    which conserves the total and is differentiable in the positions.
 
     Algorithm:
         1. Build H by `tensor_stencil` at the sample positions, with
            ``outside="nan"``: a sample off the grid gets zero weights and is
            dropped from every cell, never clamped onto the edge.
-        2. n = Hᵀ 1 by the stencil's scatter-add (`Stencil.apply_adjoint`).
-        3. Read Hᵀ y through a `TransposedStencil`, scaled by 1/n for the mean
-           (by 1 where n = 0, then marked invalid).
+        2. Nⱼ = (Hᵀ 1)ⱼ by the stencil's scatter-add (`Stencil.apply_adjoint`).
+        3. Read Hᵀ y through a `TransposedStencil`, scaled by 1/Nⱼ for the
+           mean (by 1 where Nⱼ = 0, then marked invalid).
 
     The domain is the union of the cells for nearest weights, and the hull of
     the nodes for linear ones (a sample past the end nodes is dropped, so the
@@ -302,9 +307,9 @@ class Binning(Scheme):
 
         Args:
             source: `Points` with the ``"euclidean"`` metric, one coordinate per
-                grid axis (map coordinates (x, y) on an `AffineGrid` or a
-                `CurvilinearGrid`); padding points (``valid`` False) count in
-                no cell.
+                grid axis (map coordinates in (``x``, ``y``) order on an
+                `AffineGrid` or a `CurvilinearGrid`); padding points
+                (``valid`` False) count in no cell.
             target: The grid: an `Axis`, a `RectilinearGrid`, an `AffineGrid`
                 or a `CurvilinearGrid`, its cells flattened row-major.
             policies: ``outside`` (``"nan"`` or ``"raise"``) acts on samples
@@ -373,18 +378,18 @@ class Binning(Scheme):
             inside = inside | padding
         check_outside(inside, policies)
 
-        # --- n = Hᵀ 1, and the scale of each cell ---
+        # --- Nⱼ = (Hᵀ 1)ⱼ, and the scale of each cell ---
         ones = jnp.ones(stencil.n_target, stencil.weights.dtype)
-        # n = Hᵀ 1
+        # Nⱼ = (Hᵀ 1)ⱼ
         counts = stencil.apply_adjoint(ones)
         if self.statistic == "mean":
             occupied = counts > 0
             one = jnp.ones((), counts.dtype)
             safe_counts = jnp.where(occupied, counts, one)
             zero = jnp.zeros((), counts.dtype)
-            # 1/nⱼ
+            # 1/Nⱼ
             reciprocal = 1.0 / safe_counts
-            # sⱼ = 1/nⱼ, and 0 at an empty cell, whose row the plan marks invalid
+            # wⱼ = 1/Nⱼ, and 0 at an empty cell, whose row the plan marks invalid
             scale = jnp.where(occupied, reciprocal, zero)
         else:
             occupied = jnp.ones(counts.shape, dtype=bool)

@@ -38,8 +38,8 @@ class Basis(eqx.Module):
     """A local basis on one axis: S relative taps, and weights from the offsets.
 
     ``support`` is (r_min, r_max), the range of relative taps for offsets in
-    [0, 1); `outside="extrapolate"` keeps the cell within
-    [−r_min, N − 1 − r_max], so every tap stays on the axis.
+    [0, 1); `outside="extrapolate"` keeps the cell of an axis of N nodes
+    within [−r_min, N − 1 − r_max], so every tap stays on the axis.
 
     Examples:
         Every local basis implements the protocol; linear interpolation reads

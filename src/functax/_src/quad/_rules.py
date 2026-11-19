@@ -100,14 +100,14 @@ class Rule(eqx.Module):
 def gauss_legendre(n: int, interval: tuple[float, float] = (-1.0, 1.0)) -> Rule:
     """The n-point Gauss–Legendre rule on an interval [a, b].
 
-    ∫ₐᵇ p(x) dx = ∑ₙ wₙ p(xₙ) exactly for every polynomial p of degree at
-    most 2n − 1, with xₙ = (a + b)/2 + (b − a)/2 ξₙ and wₙ = (b − a)/2 ωₙ
-    from the rule (ξₙ, ωₙ) on [−1, 1]. The rule is a host-side constant
+    ∫ₐᵇ p(x) dx = ∑ₖ wₖ p(xₖ) exactly for every polynomial p of degree at
+    most 2n − 1, with xₖ = (a + b)/2 + (b − a)/2 ξₖ and wₖ = (b − a)/2 ωₖ
+    for k = 1, …, n, from the rule (ξₖ, ωₖ) on [−1, 1]. The rule is a host-side constant
     (NumPy's ``leggauss``, float64), as in geonnax, so it can size static
     arrays.
 
     Algorithm:
-        1. The nodes ξₙ and weights ωₙ on [−1, 1] from ``leggauss``.
+        1. The nodes ξₖ and weights ωₖ on [−1, 1] from ``leggauss``.
         2. Map them affinely onto [a, b].
 
     Args:

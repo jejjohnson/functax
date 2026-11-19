@@ -54,9 +54,9 @@ def _icosahedron() -> tuple[
         ],
         dtype=np.int64,
     )  # fmt: skip
-    # ‖v‖ of each vertex
+    # ‖v‖₂ of each vertex
     norms = np.linalg.norm(vertices, axis=1, keepdims=True)
-    # v / ‖v‖
+    # v / ‖v‖₂
     unit_vertices = vertices / norms
     return unit_vertices, triangles
 
@@ -71,7 +71,7 @@ def _subdivide(
     def middle(first: Any, second: Any) -> int:
         key = (first, second) if first < second else (second, first)
         if key not in midpoint:
-            # p + q, then projected back onto the sphere: (p + q) / ‖p + q‖
+            # p + q, then projected back onto the sphere: (p + q) / ‖p + q‖₂
             point = points[first] + points[second]
             norm = np.linalg.norm(point)
             points.append(point / norm)
@@ -98,7 +98,7 @@ def icosphere(
 
     Args:
         level: ℓ, the number of subdivisions.
-        radius: The sphere radius.
+        radius: R, the sphere radius.
 
     Returns:
         ``(vertices, triangles)``: V points and T triples of vertex indices.
@@ -133,7 +133,7 @@ def icosphere(
     vertices, triangles = _icosahedron()
     for _ in range(count):
         vertices, triangles = _subdivide(vertices, triangles)
-    # a u
+    # R v, the unit vertices scaled to the radius R
     scaled = radius * vertices
     return jnp.asarray(scaled), jnp.asarray(triangles)
 
@@ -189,16 +189,16 @@ def _corner_geometry(
     # --- areas ---
     # e₁ × e₂
     normal = np.cross(edge_next, edge_prev)
-    # 2|t| = ‖e₁ × e₂‖, the same at every corner of a triangle
+    # 2|t| = ‖e₁ × e₂‖₂, the same at every corner of a triangle
     double_area = np.linalg.norm(normal, axis=-1)
-    # ‖e₁‖ and ‖e₂‖
+    # ‖e₁‖₂ and ‖e₂‖₂
     next_length = np.linalg.norm(edge_next, axis=-1)
     prev_length = np.linalg.norm(edge_prev, axis=-1)
-    # ‖e₁‖ ‖e₂‖, the scale a zero area is measured against
+    # ‖e₁‖₂ ‖e₂‖₂, the scale a zero area is measured against
     scale = einx.multiply(
         "triangle corner, triangle corner -> triangle corner", next_length, prev_length
     )
-    # ‖e₁ × e₂‖ ≤ 10⁻¹² ‖e₁‖ ‖e₂‖ at any corner
+    # ‖e₁ × e₂‖₂ ≤ 10⁻¹² ‖e₁‖₂ ‖e₂‖₂ at any corner
     tolerance = 1e-12 * scale
     flat_corner = double_area <= tolerance
     degenerate = einx.any("triangle [corner]", flat_corner)
@@ -206,7 +206,7 @@ def _corner_geometry(
         bad = np.flatnonzero(degenerate)
         msg = f"{bad.size} triangle(s) have zero area, e.g. index {bad[0]}"
         raise GeometryError(msg)
-    # cot θ = (e₁ · e₂) / ‖e₁ × e₂‖
+    # cot α = (e₁ · e₂) / ‖e₁ × e₂‖₂, α the angle at the corner
     dot = einx.dot(
         "triangle corner dim, triangle corner dim -> triangle corner",
         edge_next,
@@ -238,10 +238,12 @@ def mesh_vertex_areas(
 ) -> Float[Array, " vertex"]:
     """The lumped (barycentric) vertex areas of a triangle mesh.
 
-    Each triangle gives a third of its area to each corner,
-    a_v = ∑_{t ∋ v} |t| / 3 with |t| = ½ ‖(x_q − x_p) × (x_r − x_p)‖, so ∑_v a_v
-    is the surface area and M = diag(a) the lumped finite-element mass matrix.
-    The areas are quadrature weights too: ∫_S g dA ≈ ∑_v a_v g(x_v). Meyer et
+    Each triangle gives a third of its area to each corner: for a vertex v at
+    x_v and a triangle t with corners p, q and r, a_v = ∑_{t ∋ v} |t| / 3 with
+    |t| = ½ ‖(x_q − x_p) × (x_r − x_p)‖₂, so ∑_v a_v is the surface area and
+    diag(a) the lumped finite-element mass matrix.
+    The areas are quadrature weights too: ∫_S f dA ≈ ∑_v a_v f(x_v) on the
+    surface S. Meyer et
     al. (2003) also describe a mixed Voronoi lumping, which differs at obtuse
     triangles and converges at the same rate.
 

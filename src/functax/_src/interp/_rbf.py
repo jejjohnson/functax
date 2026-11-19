@@ -1,9 +1,10 @@
 """Radial basis function interpolation: a kernel, a polynomial tail, one solve.
 
-The interpolant f̂(x) = ∑ⱼ cⱼ k(x, xⱼ) + ∑ₚ bₚ pₚ(x) is fitted once per field by
-`KernelSolve` and read at the targets by a dense `KernelReadout`,
-[K* P*], so an `RBF` plan is a `Plan` like any other, with an adjoint and a
-lineax operator. With ``neighbors=Q`` each target solves the same system on
+The interpolant f̂(x) = ∑ⱼ cⱼ k(x, xⱼ) + ∑ₚ bₚ pₚ(x), with j = 1, …, N over the
+sources and p = 1, …, N_tail over the tail monomials, is fitted once per field
+by `KernelSolve` and read at the targets by a dense `KernelReadout`,
+H = [K_*X P_*], so an `RBF` plan is a `Plan` like any other, with an adjoint
+and a lineax operator. With ``neighbors=Q`` each target solves the same system on
 its Q nearest sources instead, and the plan is a sparse `Stencil` of Q taps.
 """
 
@@ -49,18 +50,19 @@ __all__ = [
 
 
 type Tail = Callable[[Float[Array, "obs dim"]], Float[Array, "obs term"]]
-"""P(x), the (n, P) tail or drift matrix at n points."""
+"""P(X), the tail or drift matrix: one row per point of X, one column per term."""
 
 
 class KernelReadout(Readout):
-    """The dense read-out of a kernel scheme: f̂(X*) = K* c + P* b.
+    """The dense read-out of a kernel scheme: f̂(X_*) = K_*X c + P_* b.
 
-    Row k holds the cross-kernel k(x*ₖ, xⱼ) to every source and the tail
-    terms pₚ(x*ₖ), so H = [K* P*] is (M, N + P); its adjoint is
-    Hᵀ r = [K*ᵀ r; P*ᵀ r]. Invalid rows (padding targets) are zero.
+    Row i holds the cross-kernel k(x_{*,i}, xⱼ) to every source j and the
+    tail terms pₚ(x_{*,i}), so H = [K_*X P_*] ∈ ℝ^{M×(N+N_tail)}; its adjoint
+    takes a residual r ∈ ℝ^M to Hᵀ r = [K_*Xᵀ r; P_*ᵀ r]. Invalid rows
+    (padding targets) are zero.
 
     Args:
-        matrix: H, the (M, N + P) read-out.
+        matrix: H, the (M, N + N_tail) read-out.
         valid: Whether each row is a real target; all true when ``None``.
 
     Raises:
@@ -116,14 +118,15 @@ class KernelReadout(Readout):
     def apply(
         self, coefficients: Float[Array, "*batch coefficient"]
     ) -> Float[Array, "*batch target"]:
-        """f̂ = H c = K* c + P* b, over any leading batch dims.
+        """f̂(X_*) = H [c; b] = K_*X c + P_* b, over any leading batch dims.
 
         Raises:
-            ValidationError: If the last axis of ``coefficients`` is not N + P.
+            ValidationError: If the last axis of ``coefficients`` is not
+                N + N_tail.
         """
         coefficients = jnp.asarray(coefficients)
         self._check_last_axis(coefficients, self.matrix.shape[1], "coefficients")
-        # f̂ = H c
+        # f̂(X_*) = H [c; b]
         return einx.dot(
             "... coefficient, target coefficient -> ... target",
             coefficients,
@@ -133,14 +136,14 @@ class KernelReadout(Readout):
     def apply_adjoint(
         self, residual: Float[Array, "*batch target"]
     ) -> Float[Array, "*batch coefficient"]:
-        """g = Hᵀ r = [K*ᵀ r; P*ᵀ r], over any leading batch dims.
+        """Hᵀ r = [K_*Xᵀ r; P_*ᵀ r], over any leading batch dims.
 
         Raises:
             ValidationError: If the last axis of ``residual`` is not M.
         """
         residual = jnp.asarray(residual)
         self._check_last_axis(residual, self.matrix.shape[0], "residual")
-        # g = Hᵀ r
+        # Hᵀ r
         return einx.dot(
             "... target, target coefficient -> ... coefficient",
             residual,
@@ -148,7 +151,7 @@ class KernelReadout(Readout):
         )
 
     def operator(self) -> lx.MatrixLinearOperator:
-        """H as an (M, N + P) lineax operator."""
+        """H as an (M, N + N_tail) lineax operator."""
         return lx.MatrixLinearOperator(self.matrix)
 
 
@@ -162,17 +165,18 @@ def _monomial_powers(n_dims: int, degree: int) -> tuple[tuple[int, ...], ...]:
 
 
 class PolynomialTail(eqx.Module):
-    """The monomials pₚ(x) = ∏_d x̂_d^{a_pd} of total degree ≤ d in scaled coordinates.
+    """The monomials pₚ(x) = ∏_d x̃_d^{a_{p,d}} of bounded degree, in scaled coordinates.
 
-    x̂ = (x − s)/h maps the bounding box of the sources onto [−1, 1]ᴰ (an axis
-    of zero extent keeps h = 1), as SciPy's ``RBFInterpolator`` does; the
-    span, and so the interpolant, is the same as for the raw monomials, but
-    the tail matrix is far better conditioned.
+    For d = 1, …, D over the coordinates, x̃ = (x − x_mid)/x_half maps the
+    bounding box of the sources onto [−1, 1]ᴰ (an axis of zero extent keeps
+    x_half = 1), as SciPy's ``RBFInterpolator`` does; the span, and so the
+    interpolant, is the same as for the raw monomials, but the tail matrix is
+    far better conditioned.
 
     Args:
-        shift: s, the centre of the sources' bounding box.
-        scale: h, its half-widths.
-        powers: The exponents a_p of each of the P monomials.
+        shift: x_mid, the centre of the sources' bounding box.
+        scale: x_half, its half-widths.
+        powers: The exponents a_p ∈ ℕᴰ of each of the N_tail monomials.
 
     Examples:
         The degree-1 tail of three sources, scaled onto [−1, 1]²:
@@ -186,7 +190,7 @@ class PolynomialTail(eqx.Module):
         >>> tail(sources).tolist()
         [[1.0, -1.0, -1.0], [1.0, 1.0, -1.0], [1.0, -1.0, 1.0]]
 
-        An axis of zero extent keeps h = 1:
+        An axis of zero extent keeps x_half = 1:
 
         >>> flat = PolynomialTail.from_sources(
         ...     jnp.array([[0.0, 1.0], [2.0, 1.0]]), 2
@@ -206,9 +210,9 @@ class PolynomialTail(eqx.Module):
         """The tail of degree ``degree`` ≥ 0, scaled to the sources' bounding box."""
         lower = einx.min("[source] dim", sources)
         upper = einx.max("[source] dim", sources)
-        # s = (x_max + x_min)/2
+        # x_mid = (x_max + x_min)/2
         shift = (upper + lower) / 2
-        # h = (x_max − x_min)/2, or 1 on an axis of zero extent
+        # x_half = (x_max − x_min)/2, or 1 on an axis of zero extent
         half_width = (upper - lower) / 2
         flat = half_width == 0
         one = jnp.ones((), half_width.dtype)
@@ -218,12 +222,12 @@ class PolynomialTail(eqx.Module):
 
     @property
     def n_terms(self) -> int:
-        """P, the number of monomials."""
+        """N_tail, the number of monomials."""
         return len(self.powers)
 
     def __call__(self, points: Float[Array, "obs dim"]) -> Float[Array, "obs term"]:
-        """P with Pₖₚ = pₚ(xₖ), at n points."""
-        # x̂ = (x − s)/h
+        """P(X) with [P(X)]ᵢₚ = pₚ(xᵢ), one row per point xᵢ of X."""
+        # x̃ = (x − x_mid)/x_half
         shifted = einx.subtract("obs dim, dim -> obs dim", points, self.shift)
         scaled = einx.divide("obs dim, dim -> obs dim", shifted, self.scale)
         ones = jnp.ones(points.shape[0], points.dtype)
@@ -232,8 +236,8 @@ class PolynomialTail(eqx.Module):
             column = ones
             for dim, exponent in enumerate(power):
                 if exponent:
-                    # pₚ(x) = ∏_d x̂_d^{a_pd}; integer powers, so the gradient at
-                    # x̂ = 0 is finite
+                    # pₚ(x) = ∏_d x̃_d^{a_{p,d}}; integer powers, so the gradient
+                    # at x̃ = 0 is finite
                     column = column * scaled[:, dim] ** exponent
             columns.append(column)
         # one column per monomial, however many the degree gives
@@ -281,7 +285,7 @@ class KernelSystem(eqx.Module):
 
     Args:
         fit: The `KernelSolve`.
-        read: The `KernelReadout` [K* P*].
+        read: The `KernelReadout` H = [K_*X P_*].
         targets: The target coordinates, padding at the origin.
         target_shape: The shape of a grid target, or ``None``.
     """
@@ -308,9 +312,10 @@ def kernel_system(
         kernel: k.
         source: The `Points` sources (no padding).
         target: `Points` (padding allowed), an `Axis` or a `RectilinearGrid`.
-        tail_for: Given the source coordinates, the tail P(x) (a
+        tail_for: Given the source coordinates, the tail P(X) (a
             `PolynomialTail` or a kriging drift), or ``None`` for no tail.
-        diagonal: λ ≥ 0, added to the diagonal of K.
+        diagonal: β ≥ 0, added to the diagonal of K_XX: the RBF smoothing,
+            or the kriging nugget σ_ε².
         solver: The lineax solver of the inner system, or ``None`` for the
             `KernelSolve` default.
         positive_definite: Whether the inner system is positive definite.
@@ -325,25 +330,25 @@ def kernel_system(
     """
     sources = _scattered_source(source)
     coordinates, valid, target_shape = _targets(target)
-    # --- the fit: K̃ = K + λI and P on the sources ---
-    # K
+    # --- the fit: K̃ = K_XX + βI and P on the sources ---
+    # K_XX
     gram = kernel_matrix(kernel, sources, sources)
     if diagonal:
         identity = jnp.eye(gram.shape[0], dtype=gram.dtype)
-        # K̃ = K + λI
+        # K̃ = K_XX + βI
         gram = gram + diagonal * identity
     tail = tail_for(sources)
     source_terms = None if tail is None else tail(sources)
     fit = KernelSolve(
         gram, source_terms, solver=solver, positive_definite=positive_definite
     )
-    # --- the read-out: H = [K* P*] at the targets ---
-    # K*
+    # --- the read-out: H = [K_*X P_*] at the targets ---
+    # K_*X
     cross = kernel_matrix(kernel, coordinates, sources)
     if tail is not None:
-        # P*
+        # P_*
         target_terms = tail(coordinates)
-        # H = [K* P*]
+        # H = [K_*X P_*]
         cross = einx.id("target a, target b -> target (a + b)", cross, target_terms)
     zero = jnp.zeros((), cross.dtype)
     matrix = einx.where(
@@ -363,13 +368,15 @@ def _check_policies(policies: Policies) -> None:
 class RBF(Scheme):
     """Radial basis function interpolation: f̂(x) = ∑ⱼ cⱼ k(x, xⱼ) + ∑ₚ bₚ pₚ(x).
 
-    With K on the sources, smoothing λ ≥ 0 and the (N, P) matrix P of
-    monomials up to ``degree``, the weights solve
+    With the kernel matrix K_XX ∈ ℝ^{N×N} of the N sources X, the smoothing
+    β ≥ 0 and the matrix P = P(X) ∈ ℝ^{N×N_tail} of the N_tail monomials up to
+    ``degree``, the weights c ∈ ℝ^N and b ∈ ℝ^{N_tail} solve
 
-        [[K + λI, P], [Pᵀ, 0]] [c; b] = [y; 0],
+        [[K_XX + βI, P], [Pᵀ, 0]] [c; b] = [y; 0],
 
-    and f̂(X*) = K* c + P* b. With λ = 0 the interpolant passes through the
-    samples; λ > 0 trades that for smoothness. The plan's fit is a
+    and f̂(X_*) = K_*X c + P_* b at the M targets X_*, with P_* = P(X_*). With
+    β = 0 the interpolant passes through the samples y ∈ ℝ^N; β > 0 trades
+    that for smoothness. The plan's fit is a
     `KernelSolve` (factorised once, applied per field) and its read-out a
     dense `KernelReadout`, so the plan has an adjoint 𝒮ᵀ Hᵀ and a lineax
     operator like any other. It equals SciPy's ``RBFInterpolator`` for the
@@ -379,14 +386,16 @@ class RBF(Scheme):
     is defined everywhere), so ``outside`` and ``boundary`` do not apply.
 
     With ``neighbors=Q``, as SciPy's ``RBFInterpolator(neighbors=Q)``, each
-    target i solves the same system on its Q nearest sources 𝒩ᵢ only, with the
-    tail scaled to their bounding box:
+    target i solves the same system on its Q nearest sources 𝒩ᵢ only
+    (Q = |𝒩ᵢ|), with the tail scaled to their bounding box:
 
-        [[K_𝒩ᵢ + λI, P_𝒩ᵢ], [P_𝒩ᵢᵀ, 0]] [c; b] = [y_𝒩ᵢ; 0].
+        [[K_𝒩ᵢ𝒩ᵢ + βI, P_𝒩ᵢ], [P_𝒩ᵢᵀ, 0]] [c; b] = [y_𝒩ᵢ; 0].
 
-    The read-out is linear in y, f̂(x*ᵢ) = wᵢᵀ y_𝒩ᵢ with wᵢ = 𝒮ᵢᵀ [k*ᵢ; p*ᵢ], so
-    the plan is a `Stencil` of Q taps per target with the identity fit and
-    its own adjoint. Building costs O(M (Q + P)³) and applying O(MQ) per
+    With 𝒮ᵢ that local fit, k_{*,i} = k(X_𝒩ᵢ, x_{*,i}) ∈ ℝ^Q and p_{*,i} the
+    tail terms at the target, the read-out is linear in y,
+    f̂(x_{*,i}) = wᵢᵀ y_𝒩ᵢ with wᵢ = 𝒮ᵢᵀ [k_{*,i}; p_{*,i}], so the plan is a
+    `Stencil` of Q taps per target with the identity fit and its own
+    adjoint. Building costs O(M (Q + N_tail)³) and applying O(MQ) per
     field, so it scales to large gap-fill images. The neighbours come from a
     SciPy k-d tree on the host (the ``functax[scipy]`` extra) when the
     coordinates are concrete, and from a chunked brute force inside the trace
@@ -400,7 +409,7 @@ class RBF(Scheme):
             spline), or no tail for a kernel without one. A degree below
             ``min_degree`` is allowed, as in SciPy, but the system is then
             not guaranteed to be solvable.
-        smoothing: λ ≥ 0, added to the diagonal of K.
+        smoothing: β ≥ 0, added to the diagonal of K_XX.
         solver: The lineax solver of the inner system on the tail's null
             space; ``None`` (the default) takes ``lineax.Cholesky()``, or
             ``lineax.LU()`` when ``degree`` is below ``min_degree`` and that
@@ -558,26 +567,26 @@ class RBF(Scheme):
         def tap_weights(
             point: Float[Array, " dim"], taps: Int[Array, " tap"]
         ) -> Float[Array, " tap"]:
-            """wᵢ = 𝒮ᵢᵀ [k*ᵢ; p*ᵢ] on the neighbourhood 𝒩ᵢ of one target."""
+            """wᵢ = 𝒮ᵢᵀ [k_{*,i}; p_{*,i}] on the neighbourhood 𝒩ᵢ of one target."""
             neighbours = sources[taps]
             point_row = einx.id("dim -> 1 dim", point)
-            # --- the system on 𝒩ᵢ: K̃ = K + λI and P, scaled to its box ---
-            # K_𝒩ᵢ
+            # --- the system on 𝒩ᵢ: K̃ = K_𝒩ᵢ𝒩ᵢ + βI and P_𝒩ᵢ, scaled to its box ---
+            # K_𝒩ᵢ𝒩ᵢ
             gram = kernel_matrix(self.kernel, neighbours, neighbours)
             if self.smoothing:
                 identity = jnp.eye(gram.shape[0], dtype=gram.dtype)
-                # K̃ = K_𝒩ᵢ + λI
+                # K̃ = K_𝒩ᵢ𝒩ᵢ + βI
                 gram = gram + self.smoothing * identity
-            # k*ᵢ
+            # k_{*,i}ᵀ, one row
             cross = kernel_matrix(self.kernel, point_row, neighbours)
             terms = None
             if degree >= 0:
                 tail = PolynomialTail.from_sources(neighbours, degree)
                 # P_𝒩ᵢ
                 terms = tail(neighbours)
-                # p*ᵢ
+                # p_{*,i}ᵀ
                 point_terms = tail(point_row)
-                # [k*ᵢ p*ᵢ]
+                # [k_{*,i}ᵀ p_{*,i}ᵀ]
                 cross = einx.id("1 a, 1 b -> 1 (a + b)", cross, point_terms)
             fit = KernelSolve(
                 gram,
@@ -586,7 +595,7 @@ class RBF(Scheme):
                 positive_definite=positive_definite,
             )
             read_row = einx.id("1 coefficient -> coefficient", cross)
-            # f̂(x*ᵢ) = [k*ᵢ p*ᵢ] 𝒮ᵢ y_𝒩ᵢ, so its weights are 𝒮ᵢᵀ [k*ᵢ; p*ᵢ]
+            # f̂(x_{*,i}) = [k_{*,i}ᵀ p_{*,i}ᵀ] 𝒮ᵢ(y_𝒩ᵢ), so wᵢ = 𝒮ᵢᵀ [k_{*,i}; p_{*,i}]
             return fit.apply_adjoint(read_row)
 
         all_tap_weights = jax.vmap(tap_weights)

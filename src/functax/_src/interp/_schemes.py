@@ -72,8 +72,9 @@ class Scheme(eqx.Module):
     nested `RadialKernel` or lineax solver (an `RBF`'s kernel and solver) is
     found the same way among its own kind.
 
-    Every plan a scheme builds reads f̂(X*) = H 𝒮(y), with the fit 𝒮 and the
-    read-out H fixed by the scheme, the source and the target.
+    Every plan a scheme builds reads f̂(X_*) = H 𝒮(y) at the targets X_*, with
+    the fit 𝒮 and the read-out H fixed by the scheme, the source and the
+    target.
 
     Examples:
         Every concrete scheme is a `Scheme`, and plans the same way:
@@ -155,9 +156,9 @@ class Scheme(eqx.Module):
 class LocalScheme(Scheme):
     """A scheme with one local basis per axis and the identity fit.
 
-    H = ⊗_d B_d, the tensor product of the one-axis bases B_d of `bases`,
-    read after the prefilter that a B-spline basis needs (the identity fit
-    otherwise).
+    H = H₁ ⊗ … ⊗ H_D, the tensor product of the one-axis read-outs H_d of the
+    D `bases`, read after the prefilter that a B-spline basis needs (the
+    identity fit otherwise).
 
     Examples:
         A new local scheme supplies only its bases:
@@ -266,9 +267,10 @@ class Nearest(LocalScheme):
 
     A tie goes to the lower node, as in SciPy's ``RegularGridInterpolator``.
     The gradient with respect to the target positions is 0. On a
-    `CurvilinearGrid` it rounds the index position (r + s, c + t), the
-    nearest corner in the cell's own (s, t), which on a warped cell need not
-    be the nearest node in distance.
+    `CurvilinearGrid` it rounds the index position (i + s, j + t) of a target
+    in the cell of row i and column j, the nearest corner in the cell's own
+    coordinates (s, t), which on a warped cell need not be the nearest node in
+    distance.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -300,18 +302,18 @@ class Nearest(LocalScheme):
 class Linear(LocalScheme):
     """Linear on every axis: 2ᴰ taps per target, weights ∏_d (1 − t_d or t_d).
 
-    Bilinear on a 2-D grid, trilinear on 3-D. It reproduces any affine
-    function inside the domain, and its gradient in the target positions is
-    piecewise constant.
+    On D axes, t_d is the target's offset in its cell on axis d. Bilinear on a
+    2-D grid, trilinear on 3-D. It reproduces any affine function inside the
+    domain, and its gradient in the target positions is piecewise constant.
 
     On one axis, linear interpolation is the posterior mean of Brownian motion
     with variance rate σ² observed exactly at the knots. With
     ``prior_variance_rate=σ²`` the plan is a `GaussianPlan` whose covariance
     is the Brownian bridge of each cell (`BrownianBridge`):
 
-        Var[f(x*) ∣ y] = σ² Δᵢ t (1 − t),
+        𝕍[f(x_*) ∣ y] = σ² Δᵢ t (1 − t),
 
-    for a target at offset t in cell i of width Δᵢ.
+    for a target x_* at offset t in cell i of width Δᵢ.
 
     Args:
         prior_variance_rate: σ², the variance rate of the Brownian-motion
@@ -467,7 +469,7 @@ class BSpline(LocalScheme):
     boundary, or the wrap on a periodic axis or under ``boundary="wrap"``; it
     equals ``scipy.ndimage.spline_filter`` there. It reproduces polynomials of
     degree k only away from the ends: the mirror boundary's influence decays by
-    |z| per node (|z| ≈ 0.27 for the cubic).
+    |z| per node for the prefilter's pole z (|z| ≈ 0.27 for the cubic).
 
     Args:
         order: k, from 0 to 5 (3 is the cubic B-spline).

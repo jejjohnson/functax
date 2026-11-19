@@ -6,9 +6,10 @@ windowed features), ``fourier`` (box Laplacian eigenfunctions), ``local``
 (radial bumps, Gabor frames, wavelets), ``vector``
 (divergence-free and curl-free atoms), ``polynomial`` (Legendre), ``sphere``
 (scalar and vector harmonics, needlets, shell bases), ``slepian`` (caps, polar
-gaps, regions) and ``eigen`` (EOFs, graph and mesh Laplacians). θ may be
-learned: centres, widths and frequencies are ordinary arrays. Needs the
-``functax[jax]`` extra.
+gaps, regions) and ``eigen`` (EOFs, graph and mesh Laplacians). In the
+expansion, cⱼ are the coefficients of the basis functions φⱼ, j = 1, …, M, and
+θ their parameters, which may be learned: centres, widths and frequencies are
+ordinary arrays. Needs the ``functax[jax]`` extra.
 """
 
 from __future__ import annotations

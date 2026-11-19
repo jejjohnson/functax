@@ -1,15 +1,16 @@
 """Locate targets on an axis, and remap the taps that run off its ends.
 
 Every grid scheme first turns a target coordinate x into a fractional index
-position u on each axis, so that node j sits at u = j. On a regular axis with
-origin x₀ and spacing Δ, u = (x − x₀)/Δ; on a rectilinear axis, u = i + t
-with cell i from ``searchsorted`` and t = (x − xᵢ)/(xᵢ₊₁ − xᵢ), extended
-linearly past the end cells. A descending axis is located on its reversed
-values; a periodic axis of period P first maps x into one period and gains a
-wrap cell between its last node and the first one plus P. An axis of one node
-x₀ has no spacing: u = 0 at x₀, and its edges, when it has them, sit at
-u = ∓½. On an axis with repeats, u is right-continuous: a target at a
-repeated node sits at the last node of the repeat.
+position u on each axis of N nodes x₀, …, x_{N−1}, so that node j sits at
+u = j. On a regular axis with origin x₀ and spacing Δ, u = (x − x₀)/Δ; on a
+rectilinear axis, u = i + t with cell i from ``searchsorted`` and
+t = (x − xᵢ)/(xᵢ₊₁ − xᵢ), extended linearly past the end cells. A descending
+axis is located on its reversed values; a periodic axis of period P first maps
+x into one period and gains a wrap cell between its last node and the first
+one plus P. An axis of one node x₀ has no spacing: u = 0 at x₀, and its
+edges, when it has them, sit at u = ∓½. On an axis with repeats, u is
+right-continuous: a target at a repeated node sits at the last node of the
+repeat.
 """
 
 from __future__ import annotations
@@ -158,7 +159,7 @@ def hold_repeated_ends(
 def require_no_repeats(source: Any, reader: str, *, axes: Any = None) -> None:
     """Raise when an axis that ``reader`` cannot read with repeats has one.
 
-    A concrete axis is checked for a repeat xₖ = xₖ₊₁, which the message
+    A concrete axis is checked for a repeat xᵢ = xᵢ₊₁, which the message
     names; a traced axis with ``repeats="allow"`` cannot be checked when the
     plan is built, so it is refused.
 
@@ -184,7 +185,7 @@ def require_no_repeats(source: Any, reader: str, *, axes: Any = None) -> None:
             )
             raise GeometryError(msg)
         values = np.asarray(axis.values)
-        # xₖ = xₖ₊₁
+        # xᵢ = xᵢ₊₁
         is_repeat = values[1:] == values[:-1]
         repeated = np.flatnonzero(is_repeat)
         if repeated.size:
@@ -202,8 +203,8 @@ def _one_node_positions(
     """u on an axis of one node x₀: 0 at x₀, ∓½ at its edges, linear in between.
 
     Without edges, u = sign(x − x₀), so only x₀ lies in the domain [0, 0] of
-    ``extent="nodes"``. With edges [e₀, e₁] in either order, u = ±½ |x − x₀|/w
-    on the side of x, w being the distance from x₀ to that side's edge, and
+    ``extent="nodes"``. With edges [e₀, e₁] in either order, u = ±½ |x − x₀|/h
+    on the side of x, h being the distance from x₀ to that side's edge, and
     u = ±1 past a side of zero width. ±∞ and NaN stay as they are, so a
     non-finite target stays invalid under every policy.
     """
@@ -219,7 +220,7 @@ def _one_node_positions(
     lower = jnp.minimum(axis.edges[0], axis.edges[1])
     upper = jnp.maximum(axis.edges[0], axis.edges[1])
     below = offset < 0
-    # w, from x₀ to the edge on the side of x
+    # h, from x₀ to the edge on the side of x
     width = jnp.where(below, node - lower, upper - node)
     has_width = width > 0
     one = jnp.ones((), width.dtype)
@@ -229,10 +230,10 @@ def _one_node_positions(
     # sign |x − x₀| (0 or 1, ∞ and NaN kept) past a zero width
     distance_sign = jnp.sign(distance)
     past = jnp.where(finite, distance_sign, distance)
-    # ½ |x − x₀|/w
+    # ½ |x − x₀|/h
     scaled = 0.5 * distance / safe_width
     magnitude = jnp.where(has_width, scaled, past)
-    # u = ±½ |x − x₀|/w on the side of x
+    # u = ±½ |x − x₀|/h on the side of x
     return jnp.where(below, -magnitude, magnitude)
 
 
@@ -319,7 +320,7 @@ def index_positions(
         origin = nodes[0]
         # (x − x₀) mod P
         within_period = jnp.mod(positions - origin, axis.period)
-        # x′ = x₀ + ((x − x₀) mod P)
+        # x̃ = x₀ + ((x − x₀) mod P)
         wrapped = origin + within_period
         # the wrap cell x_{N−1} → x₀ + P
         extended = jnp.append(nodes, origin + axis.period)

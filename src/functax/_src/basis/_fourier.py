@@ -1,15 +1,16 @@
 """Laplacian eigenfunctions of the box [−L, L]^D under three boundary conditions.
 
-In one dimension, the eigenpairs of −d²/dx² on [−L, L], each set orthonormal
-on the interval and listed with non-decreasing eigenvalues:
+In one dimension, the eigenpairs (λ_j, φ_j) of −d²/dx² on [−L, L], with L the
+half-width, each set orthonormal on the interval and listed with
+non-decreasing eigenvalues:
 
 - Dirichlet: φ_j = sin(jπ(x + L)/(2L))/√L, λ_j = (jπ/(2L))², j = 1, 2, …
 - Neumann: φ₀ = 1/√(2L), φ_j = cos(jπ(x + L)/(2L))/√L, λ_j = (jπ/(2L))²,
   j = 0, 1, …
-- Periodic: 1/√(2L), then cos(kπx/L)/√L and sin(kπx/L)/√L for k = 1, 2, …,
-  λ = (kπ/L)², ordered constant, cos 1, sin 1, cos 2, sin 2, …
+- Periodic: 1/√(2L), then cos(jπx/L)/√L and sin(jπx/L)/√L for j = 1, 2, …,
+  both with λ_j = (jπ/L)², ordered constant, cos 1, sin 1, cos 2, sin 2, …
 
-On the D-dimensional box the basis is their tensor product, flattened
+On the D-dimensional box, x ∈ [−L, L]^D, the basis is their tensor product, flattened
 row-major over the multi-index. These are the eigenfunctions behind the
 variational Fourier features and the Hilbert-space GP approximation. Moved from
 geonnax ``_fourier`` at ``be5537d``.
@@ -71,10 +72,10 @@ def _frequencies_1d(
         orders = jnp.arange(num_basis, dtype=dtype)
         # ω_j = jπ/(2L), j = 0, 1, …
         return orders * half_step
-    # k = 0, 1, 1, 2, 2, …
+    # j = 0, 1, 1, 2, 2, …
     pair_index = (jnp.arange(num_basis) + 1) // 2
     orders = pair_index.astype(dtype)
-    # ω = kπ/L
+    # ω_j = jπ/L
     return orders * (jnp.pi / L)
 
 
@@ -118,7 +119,7 @@ def _basis_value_and_grad_1d(
     scaled_slope = einx.multiply("obs feature, feature", slope, frequency)
     # φ′ = ω {−sin, cos}(·)/√L
     grad = scaled_slope * inv_sqrt_l
-    # the constant column (Neumann j = 0, periodic k = 0) is 1/√(2L)
+    # the constant column (Neumann and periodic j = 0) is 1/√(2L)
     sqrt_two_l = jnp.sqrt(2.0 * L)
     # 1/√(2L)
     constant_value = 1.0 / sqrt_two_l
@@ -147,8 +148,8 @@ def fourier_basis_1d(
         boundary: ``"dirichlet"``, ``"neumann"`` or ``"periodic"``.
 
     Returns:
-        Column m is the m-th eigenfunction (φ_{m+1} for Dirichlet) at each
-        point.
+        Column m, for m = 0, …, M − 1, is the m-th eigenfunction (φ_{m+1} for
+        Dirichlet) at each point.
 
     Raises:
         ValidationError: If ``num_basis`` is below 1, L is not positive, or
@@ -244,12 +245,12 @@ def _to_tuple(value: Any, n_dims: int, name: str) -> tuple:
 def _tensor_product_sum(
     eigenvalues: list[Float[Array, " _"]], *, dtype: Any
 ) -> Float[Array, " feature"]:
-    """λ_(j₁, …, j_D) = ∑_d λ_{j_d}, flattened row-major (the last index fastest)."""
+    """λ_{j₁, …, j_D} = ∑_d λ_{j_d}, flattened row-major (the last index fastest)."""
     if not eigenvalues:
         return jnp.zeros(0, dtype=dtype)
     total = jnp.asarray(eigenvalues[0], dtype=dtype)
     for axis_values in eigenvalues[1:]:
-        # λ_(j₁, …, j_d) = λ_(j₁, …, j_{d−1}) + λ_{j_d}
+        # λ_{j₁, …, j_d} = λ_{j₁, …, j_{d−1}} + λ_{j_d}
         total = einx.add("left, right -> (left right)", total, axis_values)
     return total
 
@@ -263,18 +264,19 @@ def fourier_basis(
 ) -> tuple[Float[Array, "obs feature"], Float[Array, " feature"]]:
     """The tensor-product Laplacian eigenpairs on the box [−L, L]^D.
 
-    Φ_(j₁, …, j_D)(x) = ∏_d φ_{j_d}(x_d) and λ_(j₁, …, j_D) = ∑_d λ_{j_d}, flattened
-    row-major over the multi-index (the last dimension fastest), so there are
-    M = ∏_d M_d columns.
+    φ_{j₁, …, j_D}(x) = ∏_d φ_{j_d}(x_d) and λ_{j₁, …, j_D} = ∑_d λ_{j_d}, for
+    the axes d = 1, …, D of x = (x_1, …, x_D) and the 1-D eigenpairs of the
+    module docstring, flattened row-major over the multi-index (the last
+    dimension fastest), so there are M = ∏_d M_d columns.
 
     Algorithm:
         1. Evaluate the 1-D eigenfunctions and eigenvalues on each axis.
-        2. Multiply the per-axis bases together, row-major over the
-           multi-index, Φ = φ^(1) ⊗ ⋯ ⊗ φ^(D) at each point.
+        2. Multiply the per-axis bases φ^{(d)} together, row-major over the
+           multi-index, φ^{(1)} ⊗ … ⊗ φ^{(D)} at each point.
         3. Sum the per-axis eigenvalues in the same layout.
 
     Args:
-        x: Points in [−L, L]^D.
+        x: The N points x in [−L, L]^D.
         num_basis_per_dim: M_d, the number of 1-D eigenfunctions per axis; an
             int applies to every axis.
         L: The half-width per axis; a number applies to every axis.
@@ -283,8 +285,8 @@ def fourier_basis(
             Dirichlet in latitude, say).
 
     Returns:
-        ``(Phi, lam)``: the M basis functions at each point and their
-        eigenvalues.
+        ``(Phi, lam)``: Φ ∈ ℝ^{N×M}, the M basis functions at each point, and
+        their eigenvalues λ.
 
     Raises:
         ValidationError: If ``x`` is not 2-D, a per-axis argument has the
@@ -322,7 +324,7 @@ def fourier_basis(
         )
         for d in range(n_dims)
     ]
-    # Φ = ∏_d φ_{j_d}(x_d), flattened row-major
+    # φ_{j₁, …, j_D} = ∏_d φ_{j_d}(x_d), flattened row-major
     product = bases[0]
     for axis_basis in bases[1:]:
         product = einx.multiply(
@@ -339,10 +341,10 @@ def fourier_eigenvalues(
     dtype: Any = jnp.float32,
     boundary: str | tuple[str, ...] = "dirichlet",
 ) -> Float[Array, " feature"]:
-    """The eigenvalues of `fourier_basis` alone, λ_(j₁, …, j_D) = ∑_d λ_{j_d}.
+    """The eigenvalues of `fourier_basis` alone, λ_{j₁, …, j_D} = ∑_d λ_{j_d}.
 
-    For when only the spectrum is needed, such as building K_uu for inducing
-    features without evaluating k_ux.
+    For when only the spectrum is needed, such as building the kernel matrix
+    of inducing features without evaluating the features at the inputs.
 
     Args:
         num_basis_per_dim: M_d per axis; an int applies to every axis.

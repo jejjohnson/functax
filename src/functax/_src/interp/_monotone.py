@@ -1,6 +1,8 @@
 """Slopes of the shape-preserving Hermite schemes: PCHIP, Akima and Steffen.
 
-Each depends on y nonlinearly (a harmonic mean, a weighted average with
+On N increasing knots xₖ with samples yₖ, widths hₖ = xₖ₊₁ − xₖ and secants
+δₖ = (yₖ₊₁ − yₖ)/hₖ, each scheme gives the slope dₖ at every knot. Each
+depends on y nonlinearly (a harmonic mean, a weighted average with
 data-dependent weights, a limited minimum), so their plans have no fixed
 operator; ``linearize(y)`` gives the tangent-linear map at y. Every division
 guards its untaken branch, since ``jnp.where`` differentiates both branches
@@ -73,7 +75,7 @@ def pchip_slopes(
 ) -> Float[Array, " node"]:
     """Fritsch-Carlson slopes, as SciPy's ``PchipInterpolator``.
 
-    mₖ = (w₁ + w₂)/(w₁/δₖ₋₁ + w₂/δₖ) when δₖ₋₁ δₖ > 0 and 0 otherwise, with
+    dₖ = (w₁ + w₂)/(w₁/δₖ₋₁ + w₂/δₖ) when δₖ₋₁ δₖ > 0 and 0 otherwise, with
     w₁ = 2hₖ + hₖ₋₁ and w₂ = hₖ + 2hₖ₋₁; one-sided three-point slopes at the
     ends.
 
@@ -89,7 +91,7 @@ def pchip_slopes(
         values: y, the N samples.
 
     Returns:
-        m, the N knot slopes.
+        d, the N knot slopes.
 
     Examples:
         A monotone step gets slope 0 at its flat knots:
@@ -125,18 +127,18 @@ def pchip_slopes(
     right_secant = secants[1:]
     previous_width = widths[:-1]
     next_width = widths[1:]
-    # δₖ₋₁ δₖ ≤ 0: a local extremum or a flat cell, so mₖ = 0
+    # δₖ₋₁ δₖ ≤ 0: a local extremum or a flat cell, so dₖ = 0
     turns = jnp.sign(left_secant) != jnp.sign(right_secant)
     flat = turns | (left_secant == 0) | (right_secant == 0)
     # w₁ = 2hₖ + hₖ₋₁
     first_weight = 2.0 * next_width + previous_width
     # w₂ = hₖ + 2hₖ₋₁
     second_weight = next_width + 2.0 * previous_width
-    # 1/mₖ = (w₁/δₖ₋₁ + w₂/δₖ)/(w₁ + w₂), guarded where the slope is 0
+    # 1/dₖ = (w₁/δₖ₋₁ + w₂/δₖ)/(w₁ + w₂), guarded where the slope is 0
     left_term = first_weight / _safe(left_secant, ~flat)
     right_term = second_weight / _safe(right_secant, ~flat)
     inverse = (left_term + right_term) / (first_weight + second_weight)
-    # mₖ = 1 / (1/mₖ)
+    # dₖ = 1 / (1/dₖ)
     harmonic = 1.0 / _safe(inverse, ~flat)
     interior = jnp.where(flat, jnp.zeros((), values.dtype), harmonic)
 
@@ -149,19 +151,19 @@ def pchip_slopes(
 def _akima_jumps(
     nodes: Float[Array, " node"], values: Float[Array, " node"]
 ) -> tuple[Float[Array, " extended"], Float[Array, " node"], Float[Array, " node"]]:
-    """The extended secants and Akima's weights f₂ = |mₖ₋₁ − mₖ₋₂|, f₁ = |mₖ₊₁ − mₖ|.
+    """The extended secants and Akima's weights f₂ = |δₖ₋₁ − δₖ₋₂|, f₁ = |δₖ₊₁ − δₖ|.
 
     The secants are extended by two on each side, continuing the end
-    differences (m₋₁ = 2m₀ − m₁, m₋₂ = 2m₋₁ − m₀, and the same at the end).
+    differences (δ₋₁ = 2δ₀ − δ₁, δ₋₂ = 2δ₋₁ − δ₀, and the same at the end).
     """
     _, secants = _secants(nodes, values)
-    # m₋₁ = 2m₀ − m₁
+    # δ₋₁ = 2δ₀ − δ₁
     left = 2.0 * secants[0] - secants[1]
-    # m₋₂ = 2m₋₁ − m₀
+    # δ₋₂ = 2δ₋₁ − δ₀
     far_left = 2.0 * left - secants[0]
-    # m_{N−1} = 2m_{N−2} − m_{N−3}
+    # δ_{N−1} = 2δ_{N−2} − δ_{N−3}
     right = 2.0 * secants[-1] - secants[-2]
-    # m_N = 2m_{N−1} − m_{N−2}
+    # δ_N = 2δ_{N−1} − δ_{N−2}
     far_right = 2.0 * right - secants[-1]
     extended = einx.id(
         ", , cell, , -> (1 + 1 + cell + 1 + 1)",
@@ -171,7 +173,7 @@ def _akima_jumps(
         right,
         far_right,
     )
-    # |mⱼ₊₁ − mⱼ| over the extended secants
+    # |δⱼ₊₁ − δⱼ| over the extended secants
     differences = extended[1:] - extended[:-1]
     jumps = jnp.abs(differences)
     return extended, jumps[:-2], jumps[2:]
@@ -222,9 +224,9 @@ def akima_slopes(
 ) -> Float[Array, " node"]:
     """Akima's slopes, as SciPy's ``Akima1DInterpolator(method="akima")``.
 
-    The secants are extended by two on each side (m₋₁ = 2m₀ − m₁, …); with
-    f₁ = |mₖ₊₁ − mₖ| and f₂ = |mₖ₋₁ − mₖ₋₂|, the slope is
-    mₖ₋₁ + f₂/(f₁ + f₂) (mₖ − mₖ₋₁) where f₁ + f₂ exceeds 10⁻⁹ of its
+    The secants are extended by two on each side (δ₋₁ = 2δ₀ − δ₁, …); with
+    f₁ = |δₖ₊₁ − δₖ| and f₂ = |δₖ₋₁ − δₖ₋₂|, the slope is
+    dₖ = δₖ₋₁ + f₂/(f₁ + f₂) (δₖ − δₖ₋₁) where f₁ + f₂ exceeds 10⁻⁹ of its
     maximum, and the mean of the outer secants elsewhere.
 
     Algorithm:
@@ -241,7 +243,7 @@ def akima_slopes(
             passes the maximum over the piece.
 
     Returns:
-        m, the N knot slopes.
+        d, the N knot slopes.
 
     Examples:
         Akima reproduces a line:
@@ -273,13 +275,13 @@ def akima_slopes(
     largest = einx.max("[node]", total) if scale is None else scale
     # f₁ + f₂ > 10⁻⁹ max(f₁ + f₂)
     defined = total > 1e-9 * largest
-    # the fallback where the slope is not defined: ½ (mₖ₊₁ + mₖ₋₂)
+    # the fallback where the slope is not defined: ½ (δₖ₊₁ + δₖ₋₂)
     mean = 0.5 * (extended[3:] + extended[:-3])
     # f₂/(f₁ + f₂), guarded where the slope is not defined
     share = before / _safe(total, defined)
-    # mₖ − mₖ₋₁
+    # δₖ − δₖ₋₁
     step = extended[2:-1] - extended[1:-2]
-    # mₖ₋₁ + f₂/(f₁ + f₂) (mₖ − mₖ₋₁)
+    # dₖ = δₖ₋₁ + f₂/(f₁ + f₂) (δₖ − δₖ₋₁)
     blended = extended[1:-2] + share * step
     return jnp.where(defined, blended, mean)
 
@@ -309,7 +311,7 @@ def steffen_slopes(
     """Steffen's slopes: monotone between knots by construction.
 
     pₖ = (δₖ₋₁ hₖ + δₖ hₖ₋₁)/(hₖ₋₁ + hₖ) is the slope of the parabola
-    through three knots, and mₖ = (sgn δₖ₋₁ + sgn δₖ) min(|δₖ₋₁|, |δₖ|, ½|pₖ|).
+    through three knots, and dₖ = (sgn δₖ₋₁ + sgn δₖ) min(|δₖ₋₁|, |δₖ|, ½|pₖ|).
 
     Algorithm:
         1. Form the widths hₖ and secants δₖ.
@@ -322,7 +324,7 @@ def steffen_slopes(
         values: y, the N samples.
 
     Returns:
-        m, the N knot slopes.
+        d, the N knot slopes.
 
     Examples:
         Steffen keeps a line:
@@ -358,7 +360,7 @@ def steffen_slopes(
     # min(|δₖ₋₁|, |δₖ|, ½|pₖ|)
     smaller_secant = jnp.minimum(jnp.abs(left_secant), jnp.abs(right_secant))
     smallest = jnp.minimum(smaller_secant, 0.5 * jnp.abs(parabola))
-    # mₖ = (sgn δₖ₋₁ + sgn δₖ) min(…)
+    # dₖ = (sgn δₖ₋₁ + sgn δₖ) min(…)
     direction = jnp.sign(left_secant) + jnp.sign(right_secant)
     interior = direction * smallest
     first = _steffen_edge(widths[0], widths[1], secants[0], secants[1])

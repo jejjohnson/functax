@@ -42,9 +42,10 @@ def rff_forward(
 ) -> Float[Array, " 2*feature"]:
     """Random Fourier features at given frequencies, cosines then sines.
 
-    φ(x) = √(1/F) [cos(xᵀW/ℓ), sin(xᵀW/ℓ)], so φ(x)ᵀφ(x′) approximates the
-    stationary kernel whose spectral density W was drawn from. Concatenating
-    cosines and sines doubles the width to 2F.
+    φ(x) = √(1/F) [cos(xᵀW/ℓ), sin(xᵀW/ℓ)] for x ∈ ℝ^D and W ∈ ℝ^{D×F}, so
+    φ(x)ᵀφ(x′) ≈ k(x, x′), the stationary kernel whose spectral density the
+    columns of W were drawn from. Concatenating cosines and sines doubles the
+    width to 2F.
 
     Args:
         W: The frequencies, one column per feature.
@@ -68,15 +69,15 @@ def rff_forward(
     """
     # xᵀW
     inner = einx.dot("dim, dim feature -> feature", x, W)
-    # z = xᵀW / ℓ
+    # xᵀW/ℓ
     projection = inner / lengthscale
     # √(1/F)
     scale = jnp.sqrt(1.0 / n_features)
     cosine = jnp.cos(projection)
     sine = jnp.sin(projection)
-    # [cos z, sin z]
+    # [cos(xᵀW/ℓ), sin(xᵀW/ℓ)]
     features = einx.id("feature, feature -> (feature + feature)", cosine, sine)
-    # φ = √(1/F) [cos z, sin z]
+    # φ = √(1/F) [cos(xᵀW/ℓ), sin(xᵀW/ℓ)]
     return scale * features
 
 
@@ -89,8 +90,9 @@ def rff_cosine_forward(
 ) -> Float[Array, " feature"]:
     """Random Fourier features with random phases, one cosine per frequency.
 
-    φ(x) = √(2/F) cos(xᵀW/ℓ + b): the single-cosine form, whose width is the
-    number of frequencies F.
+    φ(x) = √(2/F) cos(xᵀW/ℓ + b) for x ∈ ℝ^D, W ∈ ℝ^{D×F} and the phases
+    b ∈ ℝ^F: the single-cosine form, whose width is the number of
+    frequencies F.
 
     Args:
         W: The frequencies, one column per feature.
@@ -116,12 +118,12 @@ def rff_cosine_forward(
     """
     # xᵀW
     inner = einx.dot("dim, dim feature -> feature", x, W)
-    # z = xᵀW / ℓ + b
+    # xᵀW/ℓ + b
     projection = inner / lengthscale + b
     # √(2/F)
     scale = jnp.sqrt(2.0 / n_features)
     cosine = jnp.cos(projection)
-    # φ = √(2/F) cos z
+    # φ = √(2/F) cos(xᵀW/ℓ + b)
     return scale * cosine
 
 
@@ -133,7 +135,7 @@ def fourier_features(
 ) -> Float[Array, "sample feature"]:
     """Cosines and sines of a coordinate at dyadic frequencies.
 
-    φ_d,cos(x) = cos(2π 2ᵈ x) and φ_d,sin(x) = sin(2π 2ᵈ x) for
+    φ_{d,cos}(x) = cos(2π 2ᵈ x) and φ_{d,sin}(x) = sin(2π 2ᵈ x) for
     d = 0, …, D − 1, laid out as [cos₀, …, cos_{D−1}, sin₀, …, sin_{D−1}]
     (the layout of Google's bayesnf).
 
@@ -174,11 +176,11 @@ def fourier_features(
     degrees = jnp.arange(max_degree, dtype=x.dtype)
     # ω_d = 2π 2ᵈ
     frequencies = 2.0 * jnp.pi * 2.0**degrees
-    # z = x ω_d
+    # x ω_d
     phase = einx.multiply("sample, degree -> sample degree", x, frequencies)
     cosine = jnp.cos(phase)
     sine = jnp.sin(phase)
-    # [cos z_d, sin z_d]
+    # [cos(x ω_d), sin(x ω_d)]
     features = einx.id(
         "sample degree, sample degree -> sample (degree + degree)", cosine, sine
     )
@@ -198,7 +200,7 @@ def seasonal_frequencies(
     """The frequencies of the seasonal features, as Python lists.
 
     For each period τ_p with H_p harmonics, the frequencies are
-    f_p,h = h / τ_p for h = 1, …, H_p, F = ∑_p H_p in all. The inputs and the
+    f_{p,h} = h/τ_p for h = 1, …, H_p, F = ∑_p H_p in all. The inputs and the
     result are Python values, so this runs while tracing and never needs a
     concrete array under ``jax.jit``.
 
@@ -244,7 +246,7 @@ def seasonal_features(
 ) -> Float[Array, "sample feature"]:
     """Cosines and sines of a time at the harmonics of given periods.
 
-    φ_p,h,cos(x) = cos(2π h x / τ_p) and φ_p,h,sin(x) = sin(2π h x / τ_p) for
+    φ_{p,h,cos}(x) = cos(2π h x/τ_p) and φ_{p,h,sin}(x) = sin(2π h x/τ_p) for
     h = 1, …, H_p, laid out as the F cosines followed by the F sines, with
     F = ∑_p H_p. The periods and harmonic counts are Python values, so the map
     traces under ``jax.jit`` and ``lax.scan``.
@@ -283,13 +285,13 @@ def seasonal_features(
     # the frequencies in the dtype of x: a float64 time (seconds since an
     # epoch) keeps a float64 phase rather than a float32-rounded 1/τ
     frequencies = jnp.asarray(frequency_list, dtype=x.dtype)
-    # ω = 2π f
+    # ω_{p,h} = 2π f_{p,h}
     angular = 2.0 * jnp.pi * frequencies
-    # z = 2π f x
+    # ω_{p,h} x
     phase = einx.multiply("sample, frequency -> sample frequency", x, angular)
     cosine = jnp.cos(phase)
     sine = jnp.sin(phase)
-    # [cos z, sin z]
+    # [cos(ω_{p,h} x), sin(ω_{p,h} x)]
     features = einx.id(
         "sample frequency, sample frequency -> sample (frequency + frequency)",
         cosine,
@@ -304,7 +306,7 @@ def seasonal_features(
         divisor = einx.id(
             "frequency, frequency -> (frequency + frequency)", weights, weights
         )
-        # φ_p,h / h
+        # φ_{p,h} / h
         features = einx.divide("sample feature, feature", features, divisor)
     return features
 
@@ -316,12 +318,12 @@ def gaussian_window_features(
 ) -> Float[Array, "sample feature"]:
     """Gaussian windows in time, the temporal analogue of an RBF column.
 
-    χ_a(t) = exp(−(t − τ_a)² / (2 T_a²)): a soft gate centred at τ_a with width
-    T_a, the localised counterpart of `seasonal_features`.
+    χ_a(t) = exp(−(t − t_a)² / (2 T_a²)): a soft gate centred at the time t_a
+    with width T_a, the localised counterpart of `seasonal_features`.
 
     Args:
         t: The time at each sample.
-        centers: The window centres τ_a.
+        centers: The window centres t_a.
         widths: The window widths T_a.
 
     Returns:
@@ -347,11 +349,11 @@ def gaussian_window_features(
         >>> bool(jnp.allclose(window, jnp.exp(-0.5)))
         True
     """
-    # t − τ_a
+    # t − t_a
     offset = einx.subtract("sample, feature -> sample feature", t, centers)
-    # z = (t − τ_a) / T_a
+    # (t − t_a)/T_a
     scaled = einx.divide("sample feature, feature", offset, widths)
-    # −z²/2
+    # −(t − t_a)²/(2T_a²)
     exponent = -0.5 * scaled**2
-    # χ = exp(−z²/2)
+    # χ_a = exp(−(t − t_a)²/(2T_a²))
     return jnp.exp(exponent)

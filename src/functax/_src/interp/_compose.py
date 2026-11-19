@@ -1,7 +1,10 @@
 """The product of two stencils, H = H_outer H_inner, as one stencil.
 
-Row k of H_outer reads rows iᵒₖₛ of H_inner with weights wᵒₖₛ, so row k of
-the product reads every tap of those rows,
+With H_outer ∈ ℝ^{M×P} and H_inner ∈ ℝ^{P×N}, row k of H_outer reads rows
+iᵒₖₛ of H_inner with weights wᵒₖₛ for its taps s = 1, …, S_outer, and row p of
+H_inner reads sources iⁱₚᵣ with weights wⁱₚᵣ for its taps r = 1, …, S_inner
+(superscripts o and i for outer and inner). Row k of the product reads every
+tap of those rows,
 
     Hₖⱼ = ∑ₛ wᵒₖₛ (H_inner)_{iᵒₖₛ, j},
 
@@ -126,7 +129,7 @@ def _merge_taps(stencil: Stencil) -> Stencil:
     for row_indices, row_weights in zip(indices, weights, strict=True):
         columns, tap_to_column = np.unique(row_indices, return_inverse=True)
         sums = np.zeros(columns.size, dtype=weights.dtype)
-        # wₖⱼ = ∑ₛ [iₖₛ = j] wₖₛ
+        # Hₖⱼ = ∑ₛ [iₖₛ = j] wₖₛ
         np.add.at(sums, tap_to_column, row_weights)
         merged_rows.append((columns, sums))
     # the fullest row sets the number of taps

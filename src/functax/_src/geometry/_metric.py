@@ -39,14 +39,14 @@ MAX_PAIRS = 2**22
 def _euclidean_distance(
     u: Float[Array, "source dim"], v: Float[Array, "target dim"]
 ) -> Float[Array, "source target"]:
-    """‖u − v‖ for every pair, guarded at u = v."""
+    """‖u − v‖₂ for every pair, guarded at u = v."""
     # u − v for every pair
     difference = einx.subtract("source dim, target dim -> source target dim", u, v)
     # (u − v)²
     squared_difference = difference**2
-    # ‖u − v‖² = ∑_d (u_d − v_d)²
+    # ‖u − v‖₂² = ∑_d (u_d − v_d)²
     squared = einx.sum("source target [dim]", squared_difference)
-    # ‖u − v‖, with a finite gradient at u = v
+    # ‖u − v‖₂, with a finite gradient at u = v
     return _safe_norm(squared)
 
 
@@ -91,9 +91,10 @@ def pairwise_distance(
 ) -> Float[Array, "source target"]:
     """The distance from every source to every target, in their shared metric.
 
-    ``"euclidean"`` measures ‖x − y‖ on ``xy`` as given, in any number of
-    dimensions. ``"chord"`` and ``"geodesic"`` read ``xy`` as (λ, φ) in
-    ``unit``, lift both sets to unit vectors and return `chord_distance` or
+    ``"euclidean"`` measures ‖x − x′‖₂ between a source x and a target x′ on
+    ``xy`` as given, in any number of dimensions. ``"chord"`` and
+    ``"geodesic"`` read ``xy`` as longitude and latitude (λ, φ) in ``unit``,
+    lift both sets to unit vectors and return `chord_distance` or
     `geodesic_distance` at ``radius``. The vertical coordinate ``z`` is not
     used. A pair with a padding point (``valid`` False) gets +∞, so padding is
     never anyone's neighbour.
@@ -101,7 +102,8 @@ def pairwise_distance(
     Args:
         sources: The M source points.
         targets: The N target points, with the same metric as ``sources``.
-        radius: a, for the sphere metrics; ignored for ``"euclidean"``.
+        radius: R, the sphere radius, for the sphere metrics; ignored for
+            ``"euclidean"``.
         unit: ``"radians"`` or ``"degrees"``, for the sphere metrics.
         max_pairs: The M · N above which the targets are processed in chunks
             with ``lax.map``, which bounds the memory of the intermediates.
@@ -185,7 +187,7 @@ def _pair_mask(sources: Points, targets: Points) -> Bool[Array, "source target"]
         if targets.valid is None
         else targets.valid
     )
-    # v_st = v_s ∧ v_t
+    # valid_mn = valid_m ∧ valid_n for source m and target n
     return einx.logical_and(
         "source, target -> source target", source_valid, target_valid
     )

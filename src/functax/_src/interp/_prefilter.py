@@ -2,8 +2,9 @@
 
 A B-spline of order k ≥ 2 does not pass through its samples, so the
 coefficients come from inverting the banded matrix B of B-spline values at the
-knots. B⁻¹ factors into a gain λ = ∏ₚ (1 − zₚ)(1 − 1/zₚ) and, for each pole
-zₚ, a causal and an anticausal first-order recursion,
+knots. On an axis of N samples y₀, …, y_{N−1}, B⁻¹ factors into the gain
+∏ₚ (1 − zₚ)(1 − 1/zₚ) and, for each pole z = zₚ, a causal and an anticausal
+first-order recursion over i,
 
     c⁺ᵢ = yᵢ + z c⁺ᵢ₋₁  and  c⁻ᵢ = z (c⁻ᵢ₊₁ − c⁺ᵢ),
 
@@ -129,15 +130,15 @@ def _anticausal_start_mirror(
 def _causal_start_wrap(
     samples: Float[Array, "*batch node"], pole: float
 ) -> Float[Array, "*batch"]:
-    """c⁺₀ = ∑ₖ₌₀^{N−1} zᵏ y_{(−k) mod N} / (1 − zᴺ) for a periodic signal."""
+    """c⁺₀ = ∑ⱼ₌₀^{N−1} zʲ y_{(−j) mod N} / (1 − zᴺ) for a periodic signal."""
     n_nodes = samples.shape[-1]
-    # zᵏ for k = 0, …, N − 1
+    # zʲ for j = 0, …, N − 1
     exponents = jnp.arange(n_nodes)
     powers = jnp.asarray(pole**exponents, dtype=samples.dtype)
-    # y₀, y_{N−1}, y_{N−2}, …, y₁: index (−k) mod N
+    # y₀, y_{N−1}, y_{N−2}, …, y₁: index (−j) mod N
     backwards_index = jnp.mod(-exponents, n_nodes)
     backwards = samples[..., backwards_index]
-    # ∑ₖ zᵏ y_{(−k) mod N}
+    # ∑ⱼ zʲ y_{(−j) mod N}
     total = einx.dot("... node, node -> ...", backwards, powers)
     # ÷ (1 − zᴺ)
     return total / (1.0 - pole**n_nodes)
@@ -146,16 +147,16 @@ def _causal_start_wrap(
 def _anticausal_start_wrap(
     causal: Float[Array, "*batch node"], pole: float
 ) -> Float[Array, "*batch"]:
-    """c⁻_{N−1} = −∑ₖ₌₀^{N−1} z^{k+1} c⁺_{(N−1+k) mod N} / (1 − zᴺ)."""
+    """c⁻_{N−1} = −∑ⱼ₌₀^{N−1} z^{j+1} c⁺_{(N−1+j) mod N} / (1 − zᴺ)."""
     n_nodes = causal.shape[-1]
-    # z^{k+1} for k = 0, …, N − 1
+    # z^{j+1} for j = 0, …, N − 1
     exponents = jnp.arange(1, n_nodes + 1)
     powers = jnp.asarray(pole**exponents, dtype=causal.dtype)
-    # c⁺_{N−1}, c⁺₀, c⁺₁, …, c⁺_{N−2}: index (N − 1 + k) mod N
+    # c⁺_{N−1}, c⁺₀, c⁺₁, …, c⁺_{N−2}: index (N − 1 + j) mod N
     shifted_index = jnp.arange(n_nodes) + n_nodes - 1
     forwards_index = jnp.mod(shifted_index, n_nodes)
     forwards = causal[..., forwards_index]
-    # ∑ₖ z^{k+1} c⁺_{(N−1+k) mod N}
+    # ∑ⱼ z^{j+1} c⁺_{(N−1+j) mod N}
     total = einx.dot("... node, node -> ...", forwards, powers)
     # −… ÷ (1 − zᴺ)
     return -total / (1.0 - pole**n_nodes)
@@ -203,9 +204,9 @@ def _filter_last_axis(
     poles = spline_poles(order)
     if samples.shape[-1] == 1 or not poles:
         return samples
-    # λ = ∏ₚ (1 − zₚ)(1 − 1/zₚ)
+    # the gain ∏ₚ (1 − zₚ)(1 − 1/zₚ)
     gain = math.prod((1.0 - z) * (1.0 - 1.0 / z) for z in poles)
-    # λ y
+    # ∏ₚ (1 − zₚ)(1 − 1/zₚ) y
     coefficients = samples * gain
     for pole in poles:
         if periodic:
@@ -225,9 +226,9 @@ class BandedPrefilter(Fit):
     """c = B⁻¹ y per axis: the B-spline prefilter, separable on a grid.
 
     Algorithm:
-        1. Unflatten the samples onto the grid (n₁, …, n_D).
+        1. Unflatten the samples onto the grid (N₁, …, N_D).
         2. For each axis with an order k ≥ 2, move it last and run
-           `B⁻¹` along it: the gain λ, then per pole a causal and an
+           `B⁻¹` along it: the gain, then per pole a causal and an
            anticausal recursion started from the mirror or wrap boundary.
         3. Flatten the coefficients back, row-major.
 
@@ -236,7 +237,7 @@ class BandedPrefilter(Fit):
     Args:
         orders: The B-spline order of each axis, or ``None`` for an axis read
             without a prefilter (nearest, linear, cubic).
-        shape: (n₁, …, n_D), the grid the flat source is laid out on.
+        shape: (N₁, …, N_D), the grid the flat source is laid out on.
         periodic: Per axis, whether the signal wraps (``"grid-wrap"``) rather
             than mirrors (``"mirror"``) at its ends.
 

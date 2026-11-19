@@ -1,7 +1,7 @@
 """Overcomplete multiscale Gabor frames: Gaussian envelopes times oscillations.
 
-A Gabor atom multiplies a Gaussian envelope of width L_a by a cosine of
-wavenumber k_a, radial or along an orientation. A dyadic bank of them over a
+A Gabor atom a multiplies a Gaussian envelope of width L_a by a cosine of
+wavenumber κ_a, radial or along an orientation. A dyadic bank of them over a
 box is a redundant frame, the overcomplete counterpart of the orthonormal
 wavelet basis. Only Φ and the per-atom geometry are returned: recovering
 coefficients from a field is a regulariser-dependent frame-dual problem that
@@ -44,20 +44,21 @@ def gabor_frame(
 ) -> Float[Array, "obs feature"]:
     """A bank of Gabor atoms, Gaussian envelopes times oscillations.
 
-    φ_a(x) = exp(−‖x − c_a‖²/(2L_a²)) cos(k_a r_a), with r_a = ‖x − c_a‖ for
-    radial atoms (``orientations`` is None) or r_a = (x − c_a) · θ_a for
-    directional ones (the orientations θ_a are normalised to unit length).
+    φ_a(x) = exp(−‖x − c_a‖²/(2L_a²)) cos(κ_a r_a), for the atoms a = 1, …, M,
+    with r_a = ‖x − c_a‖ for radial atoms (``orientations`` is None) or
+    r_a = (x − c_a) · v_a for directional ones (the orientations v_a are
+    normalised to unit length).
 
     Args:
-        x: The evaluation points.
+        x: The N evaluation points x ∈ ℝ^D.
         centers: c_a, the centre of each atom.
         scales: L_a, the envelope width of each atom.
-        wavenumbers: k_a, the oscillation wavenumber of each atom.
-        orientations: θ_a, the direction of each directional atom; None gives
+        wavenumbers: κ_a, the oscillation wavenumber of each atom.
+        orientations: v_a, the direction of each directional atom; None gives
             radial atoms.
 
     Returns:
-        Φ, each atom at each point.
+        Φ ∈ ℝ^{N×M}, each atom at each point.
 
     References:
         Mallat, S. (2008). A Wavelet Tour of Signal Processing, 3rd edition.
@@ -78,7 +79,7 @@ def gabor_frame(
         True
 
         With a very wide envelope, a directional atom does not change
-        perpendicular to θ_a:
+        perpendicular to v_a:
 
         >>> along_y = jnp.array([[0.0, 0.0], [0.0, 3.0]])
         >>> atom = gabor_frame(
@@ -104,23 +105,23 @@ def gabor_frame(
     if orientations is None:
         # r_a = ‖x − c_a‖, with a zero gradient at the centre
         distance = _safe_norm(squared)
-        # k_a r_a
+        # κ_a r_a
         phase = einx.multiply("obs feature, feature", distance, wavenumbers)
     else:
-        # ‖θ_a‖²
+        # ‖v_a‖²
         squared_norm = einx.sum("feature [dim]", orientations**2)
         norm = jnp.sqrt(squared_norm)
         softened = norm + _EPS
-        # θ_a/‖θ_a‖
+        # v_a/‖v_a‖
         unit = einx.divide("feature dim, feature", orientations, softened)
-        # r_a = (x − c_a) · θ_a
+        # r_a = (x − c_a) · v_a
         projection = einx.dot(
             "obs feature dim, feature dim -> obs feature", difference, unit
         )
-        # k_a r_a
+        # κ_a r_a
         phase = einx.multiply("obs feature, feature", projection, wavenumbers)
     oscillation = jnp.cos(phase)
-    # φ_a = exp(−‖x − c_a‖²/(2L_a²)) cos(k_a r_a)
+    # φ_a = exp(−‖x − c_a‖²/(2L_a²)) cos(κ_a r_a)
     return envelope * oscillation
 
 
@@ -139,15 +140,15 @@ def gabor_frame_grid(
 ]:
     """A dyadic radial Gabor frame over a box.
 
-    The scales are L_s = base_scale · 2^s for s = 0, …, n_scales − 1; at each
-    scale the centres lie on a regular grid of spacing L_s/oversample over
-    ``bounds``, with wavenumber k_s = 2π/L_s. The centre layout is built on the
-    host (few scales, data-independent), so only `gabor_frame` is on the hot
-    path.
+    The scales are L_j = L₀ 2ʲ for j = 0, …, n_scales − 1, with L₀ the
+    ``base_scale``; at each scale the centres lie on a regular grid of spacing
+    L_j/oversample over ``bounds``, with wavenumber κ_j = 2π/L_j. The centre
+    layout is built on the host (few scales, data-independent), so only
+    `gabor_frame` is on the hot path.
 
     Algorithm:
-        1. For each scale s, set L_s = base_scale · 2^s and the spacing
-           L_s/oversample.
+        1. For each scale j, set L_j = L₀ 2ʲ and the spacing
+           L_j/oversample.
         2. Lay the centres on a regular grid of that spacing from each lower
            bound, with as many steps as stay inside the box.
         3. Join the scales and evaluate the atoms with `gabor_frame`.
@@ -162,9 +163,9 @@ def gabor_frame_grid(
             tighter than one envelope width.
 
     Returns:
-        ``(Phi, centers, scales, wavenumbers)``: the atoms at each point and
-        the geometry of each atom, so a consumer can both synthesise
-        ``Phi @ w`` and weight the atoms by scale.
+        ``(Phi, centers, scales, wavenumbers)``: the atoms Φ at each point and
+        the geometry of each atom (c_a, L_a and κ_a), so a consumer can both
+        synthesise ``Phi @ w`` and weight the atoms by scale.
 
     Raises:
         ValidationError: If ``n_scales`` is below 1, ``base_scale`` or
@@ -210,7 +211,7 @@ def gabor_frame_grid(
 
     centers_blocks, scale_blocks, wavenumber_blocks = [], [], []
     for scale_index in range(n_scales):
-        # L_s = L₀ 2^s
+        # L_j = L₀ 2ʲ
         length = base_scale * 2.0**scale_index
         spacing = length / oversample
         axes = []
@@ -226,7 +227,7 @@ def gabor_frame_grid(
         grid = einx.id("dim ... -> (...) dim", stacked)
         centers_blocks.append(grid)
         scale_blocks.append(np.full(grid.shape[0], length))
-        # k_s = 2π/L_s
+        # κ_j = 2π/L_j
         wavenumber = 2.0 * np.pi / length
         wavenumber_blocks.append(np.full(grid.shape[0], wavenumber))
 

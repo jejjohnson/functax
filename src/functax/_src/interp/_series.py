@@ -69,7 +69,7 @@ __all__ = [
 class NonlinearPlan(Plan):
     """A plan whose fit depends on y: no fixed operator or adjoint, but `linearize`.
 
-    Calling it reads f̂(X*) = H 𝒮(y) as any plan does; `operator` and
+    Calling it reads f̂(X_*) = H 𝒮(y) as any plan does; `operator` and
     `adjoint` raise `NonlinearSchemeError`.
 
     Args:
@@ -93,7 +93,7 @@ class NonlinearPlan(Plan):
         (1,)
 
         Its tangent-linear stencil at y has the taps i − 1 … i + 2; PCHIP is
-        homogeneous of degree 1 in y, so J y = f̂(y) (Euler):
+        homogeneous of degree 1 in y, so J_f̂ y = f̂(y) with J_f̂ = ∂f̂/∂y (Euler):
 
         >>> tangent = plan.linearize(data)
         >>> tangent.weights.shape
@@ -146,11 +146,11 @@ class NonlinearPlan(Plan):
     def linearize(  # ty: ignore[invalid-method-override]
         self, data: Float[Array, " source"] | None = None
     ) -> Stencil:
-        """∂f̂(X*)/∂y at y, as a stencil with the taps each target depends on.
+        """∂f̂(X_*)/∂y at y, as a stencil with the taps each target depends on.
 
         Target k in cell i depends only on y at knots i − l … i + r (l = 1,
-        r = 2 for PCHIP and Steffen; l = 2, r = 3 for Akima), so the Jacobian
-        row has those entries and the stencil holds them.
+        r = 2 for PCHIP and Steffen; l = 2, r = 3 for Akima), so row k of the
+        Jacobian J_f̂ has those entries and the stencil holds them.
 
         Args:
             data: y, one vector of N samples.
@@ -173,7 +173,7 @@ class NonlinearPlan(Plan):
         if data.shape != (n_nodes,):
             msg = f"'data' must be one vector of shape ({n_nodes},), got {data.shape}"
             raise ValidationError(msg)
-        # J = ∂f̂/∂y; its non-zeros sit in each target's window
+        # J_f̂ = ∂f̂/∂y; its non-zeros sit in each target's window
         jacobian = jax.jacfwd(self.__call__)(data)
         left, right = self.window
         # i, the cell of each target (its first value tap)
@@ -185,7 +185,7 @@ class NonlinearPlan(Plan):
         # back to the source's own order when its axis decreases
         source_taps = (n_nodes - 1) - taps if fit.reversed else taps
         indices = jnp.clip(source_taps, 0, n_nodes - 1)
-        # wₖₛ = J[k, iₖₛ]
+        # wₖₛ = J_f̂[k, iₖₛ]
         weights = einx.get_at(
             "target [source], target tap -> target tap", jacobian, indices
         )
@@ -244,7 +244,7 @@ class SeriesInterpolant(eqx.Module):
 
     Made by ``scheme.fit(axis, y)``; the fit runs in JAX, so gradients reach
     both y and the knot positions. It equals ``scheme.plan(axis, targets)(y)``.
-    `derivative` gives the field f̂⁽ᵐ⁾, the derivative of the cubic Hermite
+    `derivative` gives the field ∂ᵐf̂/∂xᵐ, the derivative of the cubic Hermite
     read-out in closed form.
 
     Examples:
@@ -288,7 +288,7 @@ class SeriesInterpolant(eqx.Module):
         return plan.derivative(0, self.derivative_order)
 
     def derivative(self, axis: int = 0, order: int = 1) -> SeriesInterpolant:
-        """dᵐf̂/dxᵐ as a field, with m = ``order``, read like f̂.
+        """∂ᵐf̂/∂xᵐ as a field, with m = ``order``, read like f̂.
 
         Args:
             axis: The target coordinate, 0 (or −1), since the axis is 1-D.
@@ -313,9 +313,11 @@ class SeriesInterpolant(eqx.Module):
 class SeriesScheme(Scheme):
     """A scheme on one axis with a cubic Hermite read-out and its own slopes.
 
-    f̂ = h₀₀(t) yᵢ + h₁₀(t) hᵢ mᵢ + h₀₁(t) yᵢ₊₁ + h₁₁(t) hᵢ mᵢ₊₁ on cell i,
-    with the slopes m = 𝒮_m(y) that each subclass supplies: `_slopes` for
-    increasing knots and `_piecewise_slopes` for knots with repeats.
+    f̂ = φ₀₀(t) yᵢ + φ₁₀(t) hᵢ dᵢ + φ₀₁(t) yᵢ₊₁ + φ₁₁(t) hᵢ dᵢ₊₁ on cell i of
+    width hᵢ, at offset t, with the cubic Hermite basis φ₀₀, φ₁₀, φ₀₁, φ₁₁
+    (see `hermite_stencil`) and the slopes d = 𝒮_d(y) that each subclass
+    supplies: `_slopes` for increasing knots and `_piecewise_slopes` for knots
+    with repeats.
 
     Examples:
         A new scheme supplies only its slopes; here the centred secants:
@@ -344,11 +346,11 @@ class SeriesScheme(Scheme):
 
     @abc.abstractmethod
     def _slopes(self) -> Slopes:
-        """m = slopes(x, y) for increasing knots."""
+        """d = slopes(x, y) for increasing knots."""
 
     @abc.abstractmethod
     def _piecewise_slopes(self) -> Slopes:
-        """m = slopes(x, y) for non-decreasing knots, piece by piece between repeats."""
+        """d = slopes(x, y) for non-decreasing knots, piece by piece between repeats."""
 
     def _minimum_knots(self) -> int:
         return 2

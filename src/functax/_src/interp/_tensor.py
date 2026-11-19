@@ -1,10 +1,11 @@
 """Tensor-product stencils: one local basis per axis, H = H₁ ⊗ … ⊗ H_D.
 
-A target with index position u_d on axis d reads S_d taps there; across D
-axes it reads S = ∏_d S_d taps at flat, row-major indices
-∑_d j_d ∏_{d′ > d} n_{d′} (the order of ``einx.id("... y x -> ... (y x)")``),
-with weights ∏_d w_d. The policies decide what happens off the domain and
-past the ends.
+On a source of D axes, axis d = 1, …, D with N_d nodes (N = ∏_d N_d), a
+target with index position u_d on axis d reads S_d taps there, at nodes j_d
+with weights w_d; across the D axes it reads S = ∏_d S_d taps at flat,
+row-major indices ∑_d j_d ∏_{d′ > d} N_{d′} (the order of
+``einx.id("... y x -> ... (y x)")``), with weights ∏_d w_d. The policies
+decide what happens off the domain and past the ends.
 """
 
 from __future__ import annotations
@@ -59,7 +60,7 @@ __all__ = [
 
 
 def source_layout(source: Any) -> tuple[tuple[int, ...], tuple[bool, ...]]:
-    """The node counts (n₁, …, n_D) of a source, and which of its axes are periodic.
+    """The node counts (N₁, …, N_D) of a source, and which of its axes are periodic.
 
     Raises:
         GeometryError: If ``source`` is not an `Axis`, `RectilinearGrid`,
@@ -89,11 +90,11 @@ def _target_coordinates(source: Any, target: Any) -> Float[Array, "target dim"]:
         axis_values = (axis.values for axis in target.axes)
         nodes = jnp.meshgrid(*axis_values, indexing="ij")
         stacked = jnp.stack(nodes)
-        # X*ₖ = (x₁, …, x_D) at grid node k, row-major
+        # row k of X_* is (x₁, …, x_D) at grid node k, row-major
         return einx.id("dim ... -> (...) dim", stacked)
     if isinstance(target, AffineGrid) and isinstance(source, AffineGrid):
         x, y = pixel_centres(target)
-        # X*ₖ = (xₖ, yₖ) at pixel centre k, row-major
+        # row k of X_* is the map coordinates of pixel centre k, row-major
         return einx.id("row col, row col -> (row col) (1 + 1)", x, y)
     msg = (
         f"'target' must be Points, an Axis or a RectilinearGrid (or an AffineGrid "
@@ -250,7 +251,7 @@ def _axis_stencil(
         low_tap, high_tap = basis.support
         first = -low_tap
         last = max(n_nodes - 1 - high_tap, first)
-        # i ∈ [−r_min, N − 1 − r_max]
+        # i ∈ [−r_min, N_d − 1 − r_max]
         cell = jnp.clip(cell, first, last)
     # t = u − i
     offset = position - cell
@@ -318,7 +319,7 @@ def stencil_from_positions(
     for n_nodes, (axis_indices, axis_weights, (axis_ok, axis_inside)) in zip(
         shape[1:], per_axis[1:], strict=True
     ):
-        # flat index ((j₁ n₂ + j₂) n₃ + j₃) …, weight w₁ w₂ w₃ …
+        # flat index ((j₁ N₂ + j₂) N₃ + j₃) …, weight w₁ w₂ w₃ …
         scaled = indices * n_nodes
         indices = einx.add(
             "target before, target axis -> target (before axis)",
@@ -356,7 +357,7 @@ def tensor_stencil(
         2. Per axis, split u into a cell i and an offset t, apply the outside
            policy, and read the basis' relative taps and weights at t.
         3. Remap the taps past the ends by the boundary rule.
-        4. Combine the axes: row-major flat indices ∑_d j_d ∏_{d′ > d} n_{d′}
+        4. Combine the axes: row-major flat indices ∑_d j_d ∏_{d′ > d} N_{d′}
            and weights ∏_d w_d, then zero the invalid rows.
 
     Args:
