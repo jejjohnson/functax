@@ -84,6 +84,12 @@ Each entry is one file with the names it covers, a worked example and the rules.
 Open the one the task needs; do not read them all.
 
 <!-- shelf:begin -->
+| Role | Entry | Covers | Names |
+|---|---|---|---|
+| ⓪ structure | [Axes, grids and point sets](shelf/grids-and-points.md) | the axis, the three grids, scattered points with their metric, pairwise distances and Chebyshev nodes | 8 |
+| ① primitive | [Points and frames on the sphere](shelf/sphere-points-and-frames.md) | lon/lat to unit vectors and ECEF, local east/north/up frames, great-circle distances, sphere point sets with weights, the icosphere | 18 |
+| ① primitive | [Affine raster maths](shelf/affine-rasters.md) | pixel to coordinate and back, pixel centres, windows and slices of a raster, on NumPy alone | 10 |
+| ⓪ structure | [Errors and the two installs](shelf/errors-and-installs.md) | the exception hierarchy, the NumPy-only base install and the jax extra | 15 |
 <!-- shelf:end -->
 
 ## Before you finish

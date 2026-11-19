@@ -88,9 +88,32 @@ Each entry is one file with the names it covers, a worked example and the rules.
 Open the one the task needs; do not read them all.
 
 <!-- shelf:begin -->
+| Role | Entry | Covers | Names |
+|---|---|---|---|
+| ① primitive | [Bases on lines and boxes](shelf/bases-on-boxes.md) | Laplacian eigenfunctions, Fourier and seasonal features, Legendre functions, radial bases, Gabor frames, wavelets and vector atoms | 24 |
+| ① primitive | [Bases on the sphere](shelf/bases-on-the-sphere.md) | real and vector spherical harmonics, needlets, shell bases and Slepian functions of a cap or a region | 15 |
+| ① primitive | [Bases from data, graphs and meshes](shelf/data-driven-bases.md) | empirical orthogonal functions and the eigenpairs of a graph or a mesh Laplacian | 3 |
+| ⓪ structure | [Quadrature rules](shelf/quadrature.md) | rules as data on an interval, a sphere, a curve and the cells of a grid | 13 |
+| ① primitive | [Derivatives of fields](shelf/derivatives.md) | gradient, divergence, curl, Laplacian and Jacobian of a callable field, and the surface operators on the sphere | 8 |
+| ④ algorithm | [Projection and gap filling](shelf/projection-and-fits.md) | ridge least squares, Galerkin projection, the variational smoothing fit and Laplace gap filling | 4 |
+| setup | [Transforms](shelf/transforms.md) | Chebyshev, spherical-harmonic and spherical-wavelet transforms, and non-uniform Fourier transforms | 6 |
 <!-- shelf:end -->
 
 <!-- shelf:below:begin -->
+## The units below this skill
+
+A card is enough to call a unit.
+Load its skill only when the card's last line applies.
+
+### Geometry · ⓪ · skill `functax:function-approximation-with-functax`
+
+- **Provides.** CRS-free geometry: one axis, three kinds of grid, scattered points, and the sphere's coordinates, frames and point sets.
+- **Nouns.** `functax.geometry.Axis`, `functax.geometry.AffineGrid`, `functax.geometry.RectilinearGrid`, `functax.geometry.CurvilinearGrid`, `functax.geometry.Points`.
+- **Verbs.** `functax.geometry.lonlat_to_unit`, `functax.geometry.geodesic_distance`, `functax.geometry.pairwise_distance`; `functax.geometry.fibonacci_sphere` and `functax.geometry.gauss_legendre_grid` return points with quadrature weights; `functax.geometry.to_pixel`, `functax.geometry.from_pixel` and `functax.geometry.window` for a raster.
+- **Adverbs.** `period=` and `edges=` on an axis; `metric=` on points (`"euclidean"`, `"chord"`, `"geodesic"`); `unit=` (`"radians"` or `"degrees"`) wherever a longitude and latitude go in.
+- **Keep.** A grid is flattened row-major, so a field on it has shape `(..., N)`; an axis is strictly monotone; coordinates carry no CRS, so reproject before you build one.
+- **Never.** Import `functax.geometry` on a NumPy-only path: only `functax.geometry.affine` runs without the `functax[jax]` extra.
+- **One rung down.** Open `functax:function-approximation-with-functax` to choose between the grids, to work in a local tangent frame or to build a sphere point set.
 <!-- shelf:below:end -->
 
 ## Before you finish

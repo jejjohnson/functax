@@ -90,9 +90,30 @@ Each entry is one file with the names it covers, a worked example and the rules.
 Open the one the task needs; do not read them all.
 
 <!-- shelf:begin -->
+| Role | Entry | Covers | Names |
+|---|---|---|---|
+| ② strategy | [Schemes and policies](shelf/schemes.md) | which interpolation to use on a grid, an axis or scattered points, and what happens off the domain, at NaN and at the edges | 17 |
+| setup | [Plans, adjoints and interpolants](shelf/plans-and-adjoints.md) | a scheme frozen for one source and one target, its adjoint, derivative, window and composition, and fields read at targets chosen in the trace | 10 |
+| ② strategy | [Gridding and conservative remapping](shelf/gridding-and-remapping.md) | binning scattered samples into cells and area-weighted remapping between grids | 5 |
+| ② strategy | [Kernel interpolation and kriging](shelf/kernels-and-kriging.md) | radial basis functions with a polynomial tail, kriging with a posterior covariance, and the kernels they take | 12 |
+| ① primitive | [Stencils and extension points](shelf/stencils-and-extension-points.md) | the sparse read-out, the per-axis bases, fits, prefilters and locate functions a new scheme is built from | 26 |
 <!-- shelf:end -->
 
 <!-- shelf:below:begin -->
+## The units below this skill
+
+A card is enough to call a unit.
+Load its skill only when the card's last line applies.
+
+### Geometry · ⓪ · skill `functax:function-approximation-with-functax`
+
+- **Provides.** CRS-free geometry: one axis, three kinds of grid, scattered points, and the sphere's coordinates, frames and point sets.
+- **Nouns.** `functax.geometry.Axis`, `functax.geometry.AffineGrid`, `functax.geometry.RectilinearGrid`, `functax.geometry.CurvilinearGrid`, `functax.geometry.Points`.
+- **Verbs.** `functax.geometry.lonlat_to_unit`, `functax.geometry.geodesic_distance`, `functax.geometry.pairwise_distance`; `functax.geometry.fibonacci_sphere` and `functax.geometry.gauss_legendre_grid` return points with quadrature weights; `functax.geometry.to_pixel`, `functax.geometry.from_pixel` and `functax.geometry.window` for a raster.
+- **Adverbs.** `period=` and `edges=` on an axis; `metric=` on points (`"euclidean"`, `"chord"`, `"geodesic"`); `unit=` (`"radians"` or `"degrees"`) wherever a longitude and latitude go in.
+- **Keep.** A grid is flattened row-major, so a field on it has shape `(..., N)`; an axis is strictly monotone; coordinates carry no CRS, so reproject before you build one.
+- **Never.** Import `functax.geometry` on a NumPy-only path: only `functax.geometry.affine` runs without the `functax[jax]` extra.
+- **One rung down.** Open `functax:function-approximation-with-functax` to choose between the grids, to work in a local tangent frame or to build a sphere point set.
 <!-- shelf:below:end -->
 
 ## Before you finish
