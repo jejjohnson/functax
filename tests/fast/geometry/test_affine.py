@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import types
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from _harness import assert_matches_oracle
+from hypothesis import given, settings
 
 from functax import GeometryError
 from functax.geometry import (
@@ -95,6 +97,20 @@ class TestRoundTrip:
                 atol=1e-12 * 1e6,
             )
 
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_to_pixel_inverts_from_pixel(self, seed: int) -> None:
+        # (row, col) → (x, y) → (row, col) on a random rotated, sheared transform
+        rng = np.random.default_rng(seed)
+        transform = _random_transforms(1, seed=seed)[0]
+        rowcol = rng.uniform(-1e3, 1e3, size=(40, 2))
+        assert_matches_oracle(
+            to_pixel(transform, from_pixel(transform, rowcol)),
+            rowcol,
+            rtol=0.0,
+            atol=1e-6,
+        )
+
     def test_from_pixel_puts_centres_at_integers(self) -> None:
         corner = from_pixel(NORTH_UP, np.array([[-0.5, -0.5]]))
         np.testing.assert_array_equal(corner, [[600000.0, 3550000.0]])
@@ -154,6 +170,26 @@ class TestSliceTransform:
             from_pixel(transform, np.array([[3.0, 8.0], [5.0, 9.0]])),
             rtol=1e-12,
         )
+
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_a_slice_of_a_slice_composes_offsets_and_steps(self, seed: int) -> None:
+        # slicing [i₀::sᵢ] then [i₁::tᵢ] is slicing [i₀ + sᵢ i₁ :: sᵢ tᵢ]
+        rng = np.random.default_rng(seed)
+        transform = _random_transforms(1, seed=seed)[0]
+        row0, col0, row1, col1 = rng.integers(-50, 50, size=4).tolist()
+        row_step, col_step, row_step1, col_step1 = rng.integers(1, 5, size=4).tolist()
+        first = slice_transform(transform, row0, col0, row_step, col_step)
+        twice = slice_transform(first, row1, col1, row_step1, col_step1)
+        once = slice_transform(
+            transform,
+            row0 + row_step * row1,
+            col0 + col_step * col1,
+            row_step * row_step1,
+            col_step * col_step1,
+        )
+        # c and f reach 1e6, so compare at 1e-12 of that scale
+        assert_matches_oracle(twice, once, rtol=1e-12, atol=1e-12 * 1e6)
 
     def test_unit_steps_at_the_origin_are_the_identity(self) -> None:
         np.testing.assert_array_equal(slice_transform(NORTH_UP, 0, 0), NORTH_UP)
@@ -219,6 +255,25 @@ class TestWindow:
         grid = AffineGrid(NORTH_UP, (600, 600))
         rows, cols = window(grid, (599960.0, 3549980.0, 600020.0, 3550040.0))
         assert (rows, cols) == (slice(-2, 1), slice(-2, 1))
+
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_the_bounds_of_a_pixel_block_give_back_the_block(self, seed: int) -> None:
+        # a north-up grid: the corners of rows [r₀, r₁) and columns [c₀, c₁)
+        rng = np.random.default_rng(seed)
+        width, height = rng.uniform(0.1, 100.0, size=2)
+        left, top = rng.uniform(-1e6, 1e6, size=2)
+        transform = (width, 0.0, left, 0.0, -height, top)
+        grid = types.SimpleNamespace(transform=transform, shape=(600, 600))
+        row0, col0 = rng.integers(-20, 500, size=2).tolist()
+        row1, col1 = row0 + int(rng.integers(1, 80)), col0 + int(rng.integers(1, 80))
+        bounds = (
+            left + width * col0,
+            top - height * row1,
+            left + width * col1,
+            top - height * row0,
+        )
+        assert window(grid, bounds) == (slice(row0, row1), slice(col0, col1))
 
     @pytest.mark.parametrize(
         "bounds", [(0.0, 0.0, 1.0), (2.0, 0.0, 1.0, 1.0), (0.0, 2.0, 1.0, 1.0)]

@@ -7,6 +7,10 @@ interpolant, and gradients in the samples and the target positions.
 
 from __future__ import annotations
 
+import functools
+
+import equinox as eqx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -19,6 +23,7 @@ from _harness import (
     assert_traces,
     assert_transpose_matches,
 )
+from hypothesis import given, settings
 
 from functax.geometry import Axis, Points, chebyshev_nodes
 from functax.interp import (
@@ -346,3 +351,80 @@ def test_missing_fill_replaces_non_finite_samples() -> None:
     )
     y = jnp.zeros(8).at[3].set(jnp.nan)
     assert bool(jnp.all(plan(y) == 0.0))
+
+
+@pytest.mark.parametrize(
+    ("n_source", "factor"), [(15, 3), (16, 3)], ids=["odd", "even"]
+)
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1), shift=st.integers(0, 14))
+def test_fourier_resampling_commutes_with_a_circular_shift(
+    n_source: int, factor: int, seed: int, shift: int
+) -> None:
+    # a shift by s samples of N is a shift by s·M/N samples of M = factor · N
+    read = FourierReadout(n_source, factor * n_source)
+    y = jnp.asarray(np.random.default_rng(seed).normal(size=n_source))
+    shifted = _fourier_apply(read, jnp.roll(y, shift))
+    expected = jnp.roll(_fourier_apply(read, y), factor * shift)
+    assert_matches_oracle(shifted, expected, rtol=1e-12, atol=1e-13)
+
+
+@eqx.filter_jit
+def _fourier_apply(read: FourierReadout, y: jax.Array) -> jax.Array:
+    """``read.apply(y)``, compiled once per read-out shape."""
+    return read.apply(y)
+
+
+@functools.cache
+def _compiled_chebyshev(kind: str):  # type: ignore[no-untyped-def]
+    """(plan read-out, interpolant read-out) with D_c = N on [−1, 3], compiled once."""
+    axis = _chebyshev_axis(10, kind)
+    scheme = Chebyshev(n_coefficients=axis.values.shape[0], kind=kind)
+
+    def read(samples: jax.Array, targets: jax.Array) -> tuple[jax.Array, jax.Array]:
+        points = targets[:, None]
+        return scheme.plan(axis, Points(points))(samples), scheme.fit(axis, samples)(
+            points
+        )
+
+    return axis, jax.jit(read)
+
+
+@pytest.mark.parametrize("kind", KINDS)
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1))
+def test_chebyshev_reproduces_every_polynomial_below_its_degree(
+    kind: str, seed: int
+) -> None:
+    # f = ∑ₖ aₖ Tₖ(ξ) with k < D_c = N comes back exactly, plan and interpolant
+    axis, read = _compiled_chebyshev(kind)
+    rng = np.random.default_rng(seed)
+    coefficients = rng.standard_normal(axis.values.shape[0])
+    reference = (np.asarray(axis.values) - 1.0) / 2.0
+    samples = CHEBVAL(reference, coefficients)
+    x = rng.uniform(-1.0, 3.0, 9)
+    expected = CHEBVAL((x - 1.0) / 2.0, coefficients)
+    from_plan, from_fit = read(jnp.asarray(samples), jnp.asarray(x))
+    # |f| ≤ ∑ₖ |aₖ| since |Tₖ| ≤ 1, the scale of the round-off
+    scale = float(np.sum(np.abs(coefficients)))
+    assert_matches_oracle(from_plan, expected, rtol=0.0, atol=1e-12 * scale)
+    assert_matches_oracle(from_fit, expected, rtol=0.0, atol=1e-12 * scale)
+
+
+def test_clenshaw_gradient_in_the_points_and_the_coefficients() -> None:
+    # differentiates both x (through ξ) and the coefficients c
+    x = jnp.asarray(np.random.default_rng(5).uniform(-3.0, 5.0, 7))
+    coefficients = jnp.asarray(np.random.default_rng(6).standard_normal(6))
+
+    def series(inputs: tuple[jax.Array, jax.Array]) -> jax.Array:
+        points, weights = inputs
+        return clenshaw(points, weights, interval=(-3.0, 5.0))
+
+    assert_grad_matches_fd(series, (x, coefficients))
+
+
+def test_clenshaw_jit_and_vmap_agree_with_a_loop() -> None:
+    rng = np.random.default_rng(7)
+    x = jnp.asarray(rng.uniform(-1.0, 1.0, (3, 2, 5)))
+    coefficients = jnp.asarray(rng.standard_normal((3, 6)))
+    assert_traces(lambda points, weights: clenshaw(points, weights), x, coefficients)

@@ -4,11 +4,13 @@
 
 from __future__ import annotations
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from _harness import assert_grad_matches_fd, assert_matches_oracle
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax.basis.fourier import fourier_basis
 from functax.basis.polynomial import legendre_polynomials
@@ -103,3 +105,61 @@ def test_least_squares_keeps_float32() -> None:
     y = design @ coefficients
     result = least_squares(design.astype(jnp.float32), y.astype(jnp.float32))
     assert result.dtype == jnp.float32
+
+
+_LEAST_SQUARES = jax.jit(
+    lambda design, y, ridge: least_squares(design, y, ridge=ridge), static_argnums=2
+)
+_GALERKIN = jax.jit(lambda design, y, weights: galerkin(design, y, weights=weights))
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1), ridge=st.sampled_from([0.0, 0.5]))
+def test_least_squares_residual_satisfies_the_normal_equations(
+    seed: int, ridge: float
+) -> None:
+    # Φᵀ(y − Φc) = βc: the residual is orthogonal to the span, up to the ridge
+    rng = np.random.default_rng(seed)
+    design = jnp.asarray(rng.normal(size=(40, 9)))
+    y = jnp.asarray(rng.normal(size=40))
+    coefficients = _LEAST_SQUARES(design, y, ridge)
+    lhs = design.T @ (y - design @ coefficients)
+    scale = float(jnp.linalg.norm(design) * jnp.linalg.norm(y))
+    assert_matches_oracle(lhs, ridge * coefficients, rtol=0, atol=1e-13 * scale)
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1))
+def test_galerkin_is_a_weighted_projection(seed: int) -> None:
+    # ΦᵀW(y − Φc) = 0, and projecting Φc again gives back c
+    rng = np.random.default_rng(seed)
+    design = jnp.asarray(rng.normal(size=(40, 9)))
+    y = jnp.asarray(rng.normal(size=40))
+    weights = jnp.asarray(rng.uniform(0.1, 2.0, 40))
+    coefficients = _GALERKIN(design, y, weights)
+    lhs = design.T @ (weights * (y - design @ coefficients))
+    scale = float(jnp.linalg.norm(design) * jnp.linalg.norm(weights * y))
+    assert_matches_oracle(lhs, jnp.zeros(9), rtol=0, atol=1e-13 * scale)
+    again = _GALERKIN(design, design @ coefficients, weights)
+    assert_matches_oracle(again, coefficients, rtol=1e-10, atol=1e-12)
+
+
+@pytest.mark.parametrize("ridge", [0.0, 0.5])
+def test_least_squares_jit_and_vmap_agree_with_a_loop(ridge: float) -> None:
+    rng = np.random.default_rng(4)
+    designs = jnp.asarray(rng.normal(size=(3, 20, 5)))
+    ys = jnp.asarray(rng.normal(size=(3, 20)))
+    assert_traces(
+        lambda design, y: least_squares(design, y, ridge=ridge),
+        designs,
+        ys,
+        rtol=1e-10,
+    )
+
+
+def test_galerkin_jit_and_vmap_agree_with_a_loop() -> None:
+    rng = np.random.default_rng(5)
+    ys = jnp.asarray(rng.normal(size=(3, 20)))
+    weights = jnp.asarray(rng.uniform(0.1, 2.0, (3, 20)))
+    design = jnp.asarray(rng.normal(size=(20, 5)))
+    assert_traces(lambda y, w: galerkin(design, y, weights=w), ys, weights, rtol=1e-10)

@@ -5,6 +5,7 @@ finite differences, and jit/vmap agreement.
 
 from __future__ import annotations
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import lineax as lx
@@ -15,6 +16,7 @@ from _harness import (
     assert_matches_oracle,
     assert_traces,
 )
+from hypothesis import given, settings
 
 from functax.geometry import Axis, Points
 from functax.interp import Linear, Plan
@@ -148,3 +150,32 @@ def test_identity_observation_without_smoothing_returns_y() -> None:
     roughness = lx.MatrixLinearOperator(_first_differences(9))
     fit = Variational(identity, roughness, smoothing_weight=0.0, solver=TIGHT)
     assert_matches_oracle(fit(y), y, rtol=1e-12)
+
+
+@jax.jit
+def _misfit_and_roughness(y: jax.Array, weight: jax.Array) -> jax.Array:
+    """‖Hx − y‖² and ‖Dx‖² of the fit x with smoothing weight λ."""
+    observation, roughness, _ = _parts()
+    fit = Variational(observation, roughness, smoothing_weight=weight, solver=TIGHT)
+    analysis = fit(y)
+    misfit = jnp.sum((observation.mv(analysis) - y) ** 2)
+    return jnp.stack([misfit, jnp.sum(roughness.mv(analysis) ** 2)])
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    seed=st.integers(0, 2**31 - 1),
+    weights=st.lists(st.floats(1e-3, 10.0), min_size=2, max_size=2, unique=True),
+)
+def test_more_smoothing_trades_misfit_for_roughness(
+    seed: int, weights: list[float]
+) -> None:
+    # for λ₁ < λ₂: ‖Dx_λ₂‖ ≤ ‖Dx_λ₁‖ and ‖Hx_λ₂ − y‖ ≥ ‖Hx_λ₁ − y‖ (Tikhonov)
+    small, large = sorted(weights)
+    y = jnp.asarray(np.random.default_rng(seed).normal(size=6))
+    misfit_small, rough_small = np.asarray(_misfit_and_roughness(y, small))
+    misfit_large, rough_large = np.asarray(_misfit_and_roughness(y, large))
+    # CG to 1e-13 relative bounds each quantity to about 1e-12 of its scale
+    slack = 1e-10 * float(jnp.sum(y**2))
+    assert rough_large <= rough_small + slack
+    assert misfit_large >= misfit_small - slack

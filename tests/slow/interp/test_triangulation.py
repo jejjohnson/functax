@@ -1,15 +1,24 @@
 """Tests for `Delaunay`: SciPy's LinearNDInterpolator in 2-D and 3-D, affine
-reproduction, the dot-product test, and a given icosphere mesh on a tangent plane. The
-slow tier: each compiles new shapes eagerly.
+reproduction, convex weights on random clouds, the dot-product test, gradient and
+trace checks, and a given icosphere mesh on a tangent plane. The slow tier: each
+compiles new shapes eagerly.
 """
 
 from __future__ import annotations
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from _harness import assert_adjoint, assert_matches_oracle, assert_transpose_matches
+from _harness import (
+    assert_adjoint,
+    assert_grad_matches_fd,
+    assert_matches_oracle,
+    assert_traces,
+    assert_transpose_matches,
+)
+from hypothesis import given, settings
 from scipy.interpolate import LinearNDInterpolator
 
 from functax.geometry import (
@@ -131,3 +140,44 @@ def test_a_given_mesh_equals_its_fresh_triangulation() -> None:
         mesh.read.to_dense(), fresh.read.to_dense(), rtol=1e-14, atol=1e-15
     )
     assert mesh.valid.tolist() == fresh.valid.tolist()
+
+
+class TestProperties:
+    @settings(max_examples=12, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_weights_are_convex_and_reproduce_affine_fields(self, seed: int) -> None:
+        # inside the hull bₖ ≥ 0 and ∑ₖ bₖ = 1, so f̂ = a + bᵀx_* for f = a + bᵀx
+        rng = np.random.default_rng(seed)
+        sources = rng.uniform(0.0, 1.0, (30, 2))
+        targets = rng.uniform(-0.1, 1.1, (40, 2))
+        offset, slope = rng.normal(), rng.normal(size=2)
+        plan = Delaunay().plan(Points(sources), Points(targets))
+        weights = np.asarray(plan.read.weights)
+        inside = np.asarray(plan.valid)
+        # a target on an edge can round to bₖ ≈ −1e-16
+        assert bool(np.all(weights[inside] >= -1e-14))
+        assert_matches_oracle(
+            weights.sum(axis=1), np.ones(40), rtol=1e-13, where=inside
+        )
+        values = plan(jnp.asarray(offset + sources @ slope))
+        expected = offset + targets @ slope
+        assert_matches_oracle(values, expected, rtol=1e-12, atol=1e-13, where=inside)
+        assert bool(np.all(np.isnan(np.asarray(values)[~inside])))
+
+
+class TestTransforms:
+    # the plan is built on the host and rejects traced coordinates, so only the
+    # data y is traced and differentiated
+    rng = np.random.default_rng(39)
+    sources = rng.uniform(0.0, 1.0, (25, 2))
+    targets = rng.uniform(0.05, 0.95, (12, 2))
+    fields = rng.normal(size=(3, 25))
+
+    def test_jit_and_vmap_agree_with_a_loop(self) -> None:
+        plan = Delaunay().plan(Points(self.sources), Points(self.targets))
+        assert_traces(lambda values: plan(values), jnp.asarray(self.fields))
+
+    def test_gradient_in_the_data_matches_finite_differences(self) -> None:
+        # ∂f̂ / ∂y, the barycentric weights scattered to their vertices
+        plan = Delaunay().plan(Points(self.sources), Points(self.targets))
+        assert_grad_matches_fd(plan, jnp.asarray(self.fields[0]))

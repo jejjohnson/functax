@@ -5,6 +5,7 @@ each a second or more (mostly einx compiling new shapes).
 
 from __future__ import annotations
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -16,6 +17,7 @@ from _harness import (
     assert_traces,
     assert_transpose_matches,
 )
+from hypothesis import given, settings
 
 from functax.interp import Stencil
 
@@ -73,6 +75,32 @@ class TestAdjoint:
             stencil.apply_adjoint(residual),
             rtol=1e-12,
             atol=1e-15,
+        )
+
+
+class TestProperties:
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1), scale=st.floats(-3.0, 3.0))
+    def test_apply_is_linear(self, seed: int, scale: float) -> None:
+        # H(a x₁ + x₂) = a H x₁ + H x₂, repeated indices included
+        stencil = _random_stencil(seed)
+        key = jax.random.fold_in(jax.random.key(seed), 1)
+        first, second = jax.random.normal(key, (2, N_SOURCE))
+        combined = stencil.apply(scale * first + second)
+        expected = scale * stencil.apply(first) + stencil.apply(second)
+        assert_matches_oracle(combined, expected, rtol=1e-12, atol=1e-13)
+
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_adjoint_identity_on_random_stencils(self, seed: int) -> None:
+        # ⟨Hx, r⟩ = ⟨x, Hᵀr⟩ for any indices and weights
+        stencil = _random_stencil(seed)
+        assert_adjoint(
+            stencil.apply,
+            stencil.apply_adjoint,
+            N_SOURCE,
+            N_TARGET,
+            key=jax.random.fold_in(jax.random.key(seed), 1),
         )
 
 

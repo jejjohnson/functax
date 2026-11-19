@@ -5,12 +5,19 @@ finite differences, and jit/vmap agreement.
 
 from __future__ import annotations
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
 import pytest
-from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from _harness import (
+    assert_adjoint,
+    assert_grad_matches_fd,
+    assert_matches_oracle,
+    assert_traces,
+)
+from hypothesis import given, settings
 
 from functax._src.project._fill import mirror_laplacian, periodic_laplacian
 from functax.project import fill_gaps
@@ -183,3 +190,75 @@ def test_periodic_fill_traces_and_satisfies_its_hole_equation(method: str) -> No
     assert_matches_oracle(
         laplacian[holes], jnp.zeros(int(holes.sum())), rtol=0, atol=1e-10
     )
+
+
+_LAPLACE_FILL = jax.jit(
+    lambda image, mask: fill_gaps(image, mask=mask, method="laplace", solver=TIGHT)
+)
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1))
+def test_the_laplace_fill_obeys_the_maximum_principle(seed: int) -> None:
+    # a discrete harmonic fill stays within the range of the observed pixels
+    rng = np.random.default_rng(seed)
+    image = rng.normal(size=(6, 7))
+    mask = rng.uniform(size=(6, 7)) > 0.5
+    mask[0, 0] = True
+    filled = np.asarray(_LAPLACE_FILL(jnp.asarray(image), jnp.asarray(mask)))
+    observed = image[mask]
+    # CG stops at 1e-14 relative, so allow that much past the range
+    slack = 1e-10 * float(np.max(np.abs(observed)))
+    assert bool(np.all(filled >= observed.min() - slack))
+    assert bool(np.all(filled <= observed.max() + slack))
+
+
+_PERIODIC = {
+    periodic: jax.jit(
+        lambda image, periodic=periodic: periodic_laplacian(image, periodic=periodic)
+    )
+    for periodic in [(False, False), (True, False), (False, True), (True, True)]
+}
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    seed=st.integers(0, 2**31 - 1),
+    periodic=st.sampled_from(list(_PERIODIC)),
+    shift=st.integers(-6, 6),
+)
+def test_the_laplacians_are_self_adjoint_and_commute_with_a_periodic_roll(
+    seed: int, periodic: tuple[bool, bool], shift: int
+) -> None:
+    # ⟨∇²x, y⟩ = ⟨x, ∇²y⟩, ∇²1 = 0, and rolling a periodic axis commutes with ∇²
+    laplacian = _PERIODIC[periodic]
+    shape = (5, 6)
+
+    def apply(flat: jax.Array) -> jax.Array:
+        return laplacian(flat.reshape(shape)).ravel()
+
+    assert_adjoint(apply, apply, 30, 30, key=jax.random.key(seed))
+    assert_matches_oracle(laplacian(jnp.ones(shape)), np.zeros(shape), rtol=0, atol=0)
+    image = jnp.asarray(np.random.default_rng(seed).normal(size=shape))
+    for axis, wraps in enumerate(periodic):
+        if wraps:
+            assert_matches_oracle(
+                laplacian(jnp.roll(image, shift, axis=axis)),
+                jnp.roll(laplacian(image), shift, axis=axis),
+                rtol=0,
+                atol=1e-14,
+            )
+    if periodic == (False, False):
+        assert_matches_oracle(laplacian(image), mirror_laplacian(image), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("periodic", [None, (True, False)])
+def test_the_laplacians_gradients_match_finite_differences(periodic) -> None:  # type: ignore[no-untyped-def]
+    # differentiated in the image; both are linear, so the Jacobian is ∇² itself
+    image, _ = _image_and_mask(3)
+    if periodic is None:
+        assert_grad_matches_fd(mirror_laplacian, image)
+    else:
+        assert_grad_matches_fd(
+            lambda x: periodic_laplacian(x, periodic=periodic), image
+        )

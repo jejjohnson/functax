@@ -33,6 +33,42 @@ def _random_units(count: int, seed: int) -> jax.Array:
     return gaussian / norms
 
 
+def _random_rotation(seed: int) -> np.ndarray:
+    """A random proper rotation, from the QR factors of a Gaussian matrix."""
+    q, r = np.linalg.qr(np.random.default_rng(seed).normal(size=(3, 3)))
+    q = q * np.sign(np.diag(r))
+    return q if np.linalg.det(q) > 0 else -q
+
+
+def _cyclic_quad(seed: int) -> np.ndarray:
+    """Four vertices, counter-clockwise, on a small circle about a random centre."""
+    rng = np.random.default_rng(seed)
+    centre = rng.normal(size=3)
+    centre /= np.linalg.norm(centre)
+    east = np.cross([0.0, 0.0, 1.0], centre)
+    east /= np.linalg.norm(east)
+    north = np.cross(centre, east)
+    radius = rng.uniform(0.05, 1.0)
+    angles = np.sort(rng.uniform(0.0, 2.0 * np.pi, 4))
+    ring = np.cos(angles)[:, None] * east + np.sin(angles)[:, None] * north
+    return np.cos(radius) * centre + np.sin(radius) * ring
+
+
+_LIFT_ROUND_TRIP = jax.jit(lambda u: lonlat_to_unit(unit_to_lonlat(u)))
+
+
+_AREAS = jax.jit(lambda vertices: spherical_polygon_area(vertices, radius=1.5))
+
+
+_GEODESIC_MATRIX = jax.jit(
+    lambda lonlat: pairwise_distance(
+        Points(lonlat, metric="geodesic"),
+        Points(lonlat, metric="geodesic"),
+        unit="degrees",
+    )
+)
+
+
 class TestLift:
     def test_gradient_finite_at_the_poles(self) -> None:
         poles = jnp.array([[0.3, jnp.pi / 2], [-1.0, -jnp.pi / 2]])
@@ -62,6 +98,23 @@ class TestLift:
         )
         back = unit_to_lonlat(lonlat_to_unit(jnp.asarray(lonlat), unit=unit), unit=unit)
         assert_matches_oracle(back, lonlat, rtol=1e-12, atol=1e-12 * scale)
+
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_unit_vectors_survive_the_round_trip(self, seed: int) -> None:
+        # u → (λ, φ) → u over the whole sphere, the poles' neighbourhoods too
+        units = _random_units(500, seed)
+        assert_matches_oracle(_LIFT_ROUND_TRIP(units), units, rtol=0, atol=1e-14)
+
+    def test_unit_to_lonlat_gradient_matches_finite_differences(self) -> None:
+        # differentiated in xyz, off unit length and away from the poles and
+        # the λ = ±π seam, where atan2 is smooth
+        xyz = jnp.array([[0.6, 0.2, 0.5], [-0.3, 0.9, -0.4], [1.2, -0.7, 0.1]])
+        assert_grad_matches_fd(lambda v: unit_to_lonlat(v, unit="degrees"), xyz)
+
+    def test_unit_to_lonlat_traces(self) -> None:
+        units = jnp.stack([_random_units(5, seed=s) for s in range(4)])
+        assert_traces(lambda u: unit_to_lonlat(u, unit="degrees"), units)
 
 
 class TestDistances:
@@ -196,6 +249,19 @@ class TestPairwiseDistance:
         )
         assert_matches_oracle(distances, expected, rtol=1e-15)
 
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_geodesic_distances_obey_the_triangle_inequality(self, seed: int) -> None:
+        # d(i, k) ≤ d(i, j) + d(j, k) for every triple, and d is symmetric
+        rng = np.random.default_rng(seed)
+        lonlat = np.stack(
+            [rng.uniform(-180, 180, 20), rng.uniform(-90, 90, 20)], axis=-1
+        )
+        distances = np.asarray(_GEODESIC_MATRIX(jnp.asarray(lonlat)))
+        through = distances[:, :, None] + distances[None, :, :]
+        assert bool(np.all(distances[:, None, :] <= through + 1e-12))
+        assert_matches_oracle(distances, distances.T, rtol=1e-14, atol=1e-15)
+
 
 class TestSphericalPolygonArea:
     @pytest.mark.parametrize("level", [0, 1, 2, 3])
@@ -237,3 +303,28 @@ class TestSphericalPolygonArea:
         exact = h * np.sin(h)
         # the great-circle top edge differs from the latitude circle by O(h⁴)
         assert_matches_oracle(spherical_polygon_area(square), exact, rtol=1e-7)
+
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_rotation_and_the_other_diagonal_keep_the_area(self, seed: int) -> None:
+        # A(Qu) = A(u), and the split along u₁u₃ (not the fan's u₀u₂) adds up
+        quad = _cyclic_quad(seed)
+        rotated = quad @ _random_rotation(seed).T
+        # triangles padded to four vertices by repeating the last one
+        first = quad[[1, 2, 3, 3]]
+        second = quad[[3, 0, 1, 1]]
+        areas = _AREAS(jnp.asarray(np.stack([quad, rotated, first, second])))
+        assert bool(areas[0] > 0)
+        assert_matches_oracle(areas[1], areas[0], rtol=1e-12)
+        assert_matches_oracle(areas[2] + areas[3], areas[0], rtol=1e-12)
+
+    def test_gradient_in_the_vertices_matches_finite_differences(self) -> None:
+        # differentiated in the vertices, a quad of side about 0.5 rad
+        quad = jnp.asarray(_cyclic_quad(3))
+        assert_grad_matches_fd(
+            lambda vertices: spherical_polygon_area(vertices, radius=2.0), quad
+        )
+
+    def test_traces(self) -> None:
+        quads = jnp.asarray(np.stack([_cyclic_quad(seed) for seed in range(4)]))
+        assert_traces(lambda v: spherical_polygon_area(v, radius=2.0), quads)

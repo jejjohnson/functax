@@ -6,15 +6,18 @@ checks and the stopped window gradients.
 
 from __future__ import annotations
 
+import functools
 import inspect
 
 import equinox as eqx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 import pytest
 from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax.transform import SphericalHarmonicTransform, SphericalWaveletTransform
 
@@ -135,3 +138,38 @@ def test_windows_are_frozen():
     # gradients reach the field
     field_grad = jax.grad(lambda y: loss(swt, y))(field)
     assert float(jnp.abs(field_grad).max()) > 0.0
+
+
+@functools.cache
+def _small_swt() -> SphericalWaveletTransform:
+    return SphericalWaveletTransform.init(SphericalHarmonicTransform.init(9, 17, 8))
+
+
+@jax.jit
+def _bands_of_synthesis(
+    swt: SphericalWaveletTransform, coeffs: jax.Array, steps: jax.Array
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """The band coefficients of a band-limited field, and the bands of it rolled."""
+    field = swt.sht.inverse(coeffs)
+    bands = swt.forward(field)
+    rolled_bands = swt.forward(jnp.roll(field, steps, axis=-1))
+    band_coeffs = jax.vmap(swt.sht.forward)(bands)
+    return bands, rolled_bands, band_coeffs
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1), steps=st.integers(-16, 16))
+def test_bands_conserve_energy_and_rotate_with_the_field(seed: int, steps: int) -> None:
+    # tight frame: ∑ⱼ ‖SHT(bⱼ)‖² = ∑ⱼ ∑ hⱼ(ℓ)² c_ℓm² = ‖c‖², as ∑ⱼ hⱼ² = 1; the
+    # windows depend on ℓ only, so rolling the field in longitude rolls each band
+    swt = _small_swt()
+    coeffs = jr.normal(jr.key(seed), (2, (swt.sht.l_max + 1) ** 2))
+    bands, rolled_bands, band_coeffs = _bands_of_synthesis(
+        swt, coeffs, jnp.asarray(steps)
+    )
+    assert_matches_oracle(
+        jnp.sum(band_coeffs**2, axis=(0, 2)), jnp.sum(coeffs**2, axis=1), rtol=1e-12
+    )
+    assert_matches_oracle(
+        rolled_bands, jnp.roll(bands, steps, axis=-1), rtol=0.0, atol=1e-12
+    )

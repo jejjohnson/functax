@@ -11,10 +11,12 @@ from collections.abc import Callable
 from typing import Any
 
 import equinox as eqx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hypothesis import given, settings
 
 from functax import ValidationError
 from functax._src.interp import _cache
@@ -124,6 +126,24 @@ class TestPlanKey:
     def test_changes_with_the_target(self, case: str) -> None:
         before, after = CHANGED[case]
         assert plan_key(SCHEME, GRID, before) != plan_key(SCHEME, GRID, after)
+
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1), index=st.integers(0, 11))
+    def test_equal_inputs_agree_and_one_ulp_disagrees(
+        self, seed: int, index: int
+    ) -> None:
+        # key(s, X, X_*) is a function of the bytes: a rebuilt twin gives the same
+        # key, and one coordinate moved by one ULP gives another
+        rng = np.random.default_rng(seed)
+        nodes = np.cumsum(rng.uniform(0.1, 1.0, size=5))
+        xy = rng.uniform(0.0, 5.0, size=(6, 2))
+        key = plan_key(SCHEME, Axis(jnp.asarray(nodes)), Points(jnp.asarray(xy)))
+        twin = plan_key(
+            SCHEME, Axis(jnp.asarray(nodes.copy())), Points(jnp.asarray(xy.copy()))
+        )
+        moved = plan_key(SCHEME, Axis(jnp.asarray(nodes)), Points(_up(xy, index)))
+        assert twin == key
+        assert moved != key
 
     def test_changes_when_source_and_target_swap(self) -> None:
         assert plan_key(SCHEME, AXIS, GRID) != plan_key(SCHEME, GRID, AXIS)

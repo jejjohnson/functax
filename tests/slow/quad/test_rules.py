@@ -54,8 +54,55 @@ def test_jit_and_vmap_agree_with_a_loop() -> None:
     assert_traces(lambda x: simpson(x).weights, batch)
 
 
+_TRAPEZOID_AND_SIMPSON = jax.jit(
+    lambda nodes: (trapezoid(nodes).weights, simpson(nodes).weights)
+)
+
+
 class TestExactness:
     """Gate G4-exact: each rule integrates the polynomials its degree promises."""
+
+    @settings(max_examples=20, deadline=None)
+    @given(
+        n=st.integers(min_value=2, max_value=24),
+        lower=st.floats(-5.0, 5.0),
+        width=st.floats(0.1, 5.0),
+    )
+    def test_gauss_and_clenshaw_curtis_are_exact_on_any_interval(
+        self, n: int, lower: float, width: float
+    ) -> None:
+        # ∫ₐᵇ tᵏ dx = h (1 − (−1)ᵏ⁺¹)/(k + 1) with t = (x − c)/h, for every k up
+        # to 2n − 1 (Gauss) and n − 1, or n when n is odd (Clenshaw–Curtis)
+        centre, half = lower + width / 2, width / 2
+        top_cc = n if n % 2 == 1 else n - 1
+        for rule, top in (
+            (gauss_legendre(n, interval=(lower, lower + width)), 2 * n - 1),
+            (clenshaw_curtis(n, interval=(lower, lower + width)), top_cc),
+        ):
+            scaled = (np.asarray(rule.nodes) - centre) / half
+            powers = np.arange(top + 1)
+            estimates = np.asarray(rule.weights) @ scaled[:, None] ** powers
+            exact = half * (1 - (-1.0) ** (powers + 1)) / (powers + 1)
+            assert_matches_oracle(estimates, exact, rtol=0, atol=1e-13 * width)
+
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_trapezoid_and_simpson_are_exact_on_uneven_nodes(self, seed: int) -> None:
+        # trapezoid for lines, Simpson for quadratics, on 9 random sorted nodes
+        nodes = _random_nodes(9, seed)
+        coefficients = np.random.default_rng(seed).normal(size=3)
+        line = coefficients[0] + coefficients[1] * nodes
+        quadratic = line + coefficients[2] * nodes**2
+        a, b = nodes[0], nodes[-1]
+        exact_line = coefficients[0] * (b - a) + coefficients[1] * (b**2 - a**2) / 2
+        exact_quadratic = exact_line + coefficients[2] * (b**3 - a**3) / 3
+        trapezoid_weights, simpson_weights = _TRAPEZOID_AND_SIMPSON(jnp.asarray(nodes))
+        assert_matches_oracle(
+            trapezoid_weights @ line, exact_line, rtol=1e-12, atol=1e-13
+        )
+        assert_matches_oracle(
+            simpson_weights @ quadratic, exact_quadratic, rtol=1e-12, atol=1e-13
+        )
 
     def test_simpson_is_exact_for_quadratics_on_uneven_nodes(self) -> None:
         nodes = jnp.asarray(_random_nodes(9, seed=4))

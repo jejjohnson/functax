@@ -5,21 +5,27 @@ concentrations, eigenproblems and frames, each a second or more.
 
 from __future__ import annotations
 
+import functools
 import inspect
 import math
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax import ValidationError
 from functax.basis.slepian import (
     slepian_cap_basis,
+    slepian_concentration_matrix,
     slepian_polar_gap_basis,
     slepian_region_basis,
     spherical_polygon_mask,
 )
+from functax.basis.sphere import harmonic_degrees
 from functax.geometry import fibonacci_sphere
 from functax.quad import gauss_legendre
 
@@ -214,3 +220,168 @@ def test_integer_polygon_vertices_are_accepted() -> None:
     points = jnp.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]])
     mask = inspect.unwrap(spherical_polygon_mask)(points, square, unit="degrees")
     assert mask.tolist() == [True, False]
+
+
+# degree 3 throughout: each Slepian build is an eigenproblem per order, seconds
+# eagerly, so the properties below reuse a few cached bases and jitted kernels
+_L_MAX = 3
+
+
+def _random_units(count: int, seed: int) -> np.ndarray:
+    gaussian = np.random.default_rng(seed).normal(size=(count, 3))
+    return gaussian / np.linalg.norm(gaussian, axis=1, keepdims=True)
+
+
+def _random_rotation(seed: int) -> np.ndarray:
+    """A random proper rotation of ℝ³, from the QR factors of a Gaussian matrix."""
+    q, r = np.linalg.qr(np.random.default_rng(seed).normal(size=(3, 3)))
+    q = q * np.sign(np.diag(r))
+    return q if np.linalg.det(q) > 0 else -q
+
+
+def _rotation_from_pole(lon: float, lat: float) -> np.ndarray:
+    """A proper rotation R with R e_z the unit vector at (lon, lat), in radians."""
+    centre = np.array(
+        [math.cos(lat) * math.cos(lon), math.cos(lat) * math.sin(lon), math.sin(lat)]
+    )
+    east = np.array([-math.sin(lon), math.cos(lon), 0.0])
+    north = np.cross(centre, east)
+    return np.stack([east, north, centre], axis=1)
+
+
+# (−1)^ℓ per harmonic: the parity of Y_ℓm under z → −z within each order m
+_REFLECTION = jnp.asarray((-1.0) ** np.asarray(harmonic_degrees(_L_MAX)))
+
+
+_CONCENTRATION = jax.jit(lambda radius: slepian_concentration_matrix(_L_MAX, radius))
+
+
+@settings(max_examples=20, deadline=None)
+@given(radius=st.floats(0.05, math.pi - 0.05))
+def test_a_cap_and_its_complement_partition_the_identity(radius: float) -> None:
+    # the cap θ < Θ and the reflected cap θ < π − Θ cover the sphere, so
+    # D(Θ) + S D(π − Θ) S = I with S = diag((−1)^ℓ), the cap rule being exact
+    cap = _CONCENTRATION(radius)
+    complement = _REFLECTION[:, None] * _CONCENTRATION(math.pi - radius) * _REFLECTION
+    assert_matches_oracle(
+        cap + complement, jnp.eye((_L_MAX + 1) ** 2), rtol=0.0, atol=1e-13
+    )
+
+
+def test_concentration_gradient_matches_finite_differences() -> None:
+    # differentiated in the cap radius Θ, inside (0, π)
+    assert_grad_matches_fd(
+        lambda radius: slepian_concentration_matrix(1, radius), jnp.asarray(0.7)
+    )
+
+
+@functools.cache
+def _cap_basis() -> object:
+    """Every mode of the degree-3 cap of radius 0.6 at the north pole."""
+    # jitted: one compile instead of an eager compile per operation
+    build = jax.jit(lambda radius: slepian_cap_basis(_L_MAX, radius, n_modes=16))
+    return build(0.6)
+
+
+@jax.jit
+def _weighted_kernel(basis: object, x: jax.Array, y: jax.Array) -> jax.Array:
+    """K(x, y) = ∑_k λ_k g_k(x) g_k(y) over every mode."""
+    return (basis.evaluate(x) * basis.eigenvalues) @ basis.evaluate(y).T
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    seed=st.integers(0, 2**31 - 1),
+    lon=st.floats(-math.pi, math.pi),
+    lat=st.floats(-1.5, 1.5),
+)
+def test_a_moved_cap_kernel_is_the_rotated_kernel(
+    seed: int, lon: float, lat: float
+) -> None:
+    # K(x, y) = ∑_k λ_k g_k(x) g_k(y) = ∫_cap of the band-limited kernels, which
+    # depends on the cap alone (not the modes' frame), so the cap moved to c
+    # has K_c(Rx, Ry) = K(x, y) for any rotation R taking the pole to c
+    basis = _cap_basis()
+    moved = basis.rotate_to(jnp.array([lon, lat]))
+    rotation = jnp.asarray(_rotation_from_pole(lon, lat))
+    x = jnp.asarray(_random_units(5, seed))
+    y = jnp.asarray(_random_units(5, seed + 1))
+    assert_matches_oracle(
+        _weighted_kernel(moved, x @ rotation.T, y @ rotation.T),
+        _weighted_kernel(basis, x, y),
+        rtol=0.0,
+        atol=1e-13,
+    )
+
+
+@functools.cache
+def _region_nodes() -> tuple[jax.Array, jax.Array]:
+    """40 random nodes with random positive weights: a generic discrete region."""
+    rng = np.random.default_rng(31)
+    return jnp.asarray(_random_units(40, seed=30)), jnp.asarray(
+        rng.uniform(0.01, 0.1, 40)
+    )
+
+
+# compiled once per module, so each hypothesis example reuses the kernel
+_region_concentrations = jax.jit(
+    lambda nodes, weights: (
+        slepian_region_basis(
+            _L_MAX, nodes, weights, n_modes=(_L_MAX + 1) ** 2
+        ).eigenvalues
+    )
+)
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1))
+def test_region_concentrations_are_rotation_invariant(seed: int) -> None:
+    # D = Yᵀ W Y and Y(Rx) = Y(x) Qᵀ with Q orthogonal on each degree, so
+    # rotating the nodes keeps the spectrum of D
+    nodes, weights = _region_nodes()
+    rotation = jnp.asarray(_random_rotation(seed))
+    assert_matches_oracle(
+        _region_concentrations(nodes @ rotation.T, weights),
+        _region_concentrations(nodes, weights),
+        rtol=0.0,
+        atol=1e-13,
+    )
+
+
+def test_mode_gradients_match_finite_differences() -> None:
+    # evaluate differentiated in the points, for a moved cap (a region's modes
+    # are the same harmonics times fixed coefficients, without the rotation)
+    points = jnp.asarray(_random_units(3, seed=32))
+    moved = _cap_basis().rotate_to(jnp.array([0.4, 0.3]))
+    assert_grad_matches_fd(moved.evaluate, points, rtol=1e-8)
+
+
+def test_modes_trace() -> None:
+    points = jnp.asarray(_random_units(12, seed=33).reshape(3, 4, 3))
+    moved = _cap_basis().rotate_to(jnp.array([0.4, 0.3]))
+    nodes, weights = _region_nodes()
+    region = jax.jit(lambda n, w: slepian_region_basis(_L_MAX, n, w, n_modes=4))(
+        nodes, weights
+    )
+    assert_traces(lambda x: (moved.evaluate(x), region.evaluate(x)), points)
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1))
+def test_polygon_mask_on_rotated_octants(seed: int) -> None:
+    # the octant x, y, z > 0 is the spherical triangle e_x → e_y → e_z
+    # (counter-clockwise from outside, its edges great circles); rotated by R,
+    # a point p is inside exactly when every coordinate of Rᵀp is positive
+    rotation = _random_rotation(seed)
+    corners = np.eye(3) @ rotation.T
+    polygon = np.stack(
+        [np.arctan2(corners[:, 1], corners[:, 0]), np.arcsin(corners[:, 2])], axis=-1
+    )
+    points = _random_units(200, seed + 1)
+    local = points @ rotation
+    expected = (local > 0).all(axis=1)
+    clear = np.abs(local).min(axis=1) > 1e-9
+    mask = spherical_polygon_mask(
+        jnp.asarray(points), jnp.asarray(polygon), unit="radians"
+    )
+    assert_matches_oracle(np.asarray(mask)[clear], expected[clear], rtol=0.0)

@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import math
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax.basis.fourier import (
     fourier_basis,
@@ -99,4 +102,50 @@ def test_mixed_boundaries_in_fourier_basis():
         lam,
         fourier_eigenvalues((4, 3), L, 2, boundary=("periodic", "dirichlet")),
         atol=1e-6,
+    )
+
+
+# the parity of each column about x = 0: Dirichlet sin(jπ(x + L)/(2L)) and
+# Neumann cos(jπ(x + L)/(2L)) alternate even, odd, …; periodic is the constant,
+# then cos (even) and sin (odd) in turn
+_PARITY = {
+    "dirichlet": (-1.0) ** np.arange(6),
+    "neumann": (-1.0) ** np.arange(6),
+    "periodic": np.array([1.0, 1.0, -1.0, 1.0, -1.0, 1.0]),
+}
+
+
+_BASES_1D = {
+    boundary: jax.jit(
+        lambda x, boundary=boundary: fourier_basis_1d(x, 6, L, boundary=boundary)
+    )
+    for boundary in BOUNDARIES
+}
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1), boundary=st.sampled_from(BOUNDARIES))
+def test_columns_are_even_or_odd_about_the_centre(seed: int, boundary: str) -> None:
+    # φ_j(−x) = ±φ_j(x), the sign alternating with the column
+    x = jax.random.uniform(jax.random.key(seed), (9,), minval=-L, maxval=L)
+    basis = _BASES_1D[boundary]
+    assert_matches_oracle(basis(-x), basis(x) * _PARITY[boundary], rtol=0.0, atol=1e-12)
+
+
+def test_gradient_matches_finite_differences() -> None:
+    # differentiated in the points x, one axis per boundary, so the
+    # hand-written slopes of every boundary are checked in one compile
+    xyz = jnp.array([[0.2, -0.7, 1.1], [-1.0, 0.9, -0.3], [0.6, 0.1, 0.4]])
+    assert_grad_matches_fd(
+        lambda p: fourier_basis(p, (3, 3, 2), L, boundary=tuple(BOUNDARIES))[0],
+        xyz,
+        rtol=1e-8,
+    )
+
+
+def test_basis_traces() -> None:
+    # the periodic and Neumann axes take the hand-written value-and-slope path
+    xy = jax.random.uniform(jax.random.key(2), (3, 4, 2), minval=-L, maxval=L)
+    assert_traces(
+        lambda p: fourier_basis(p, (3, 2), L, boundary=("periodic", "neumann")), xy
     )

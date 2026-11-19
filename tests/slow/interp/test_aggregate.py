@@ -1,10 +1,14 @@
 """Tests for `Binning`: SciPy's binned_statistic_dd for the mean, sum and count,
-cloud-in-cell conservation, the gradient in the positions, and the dot-product test.
-The slow tier: each compiles new shapes eagerly.
+cloud-in-cell conservation, totals and constants kept on random samples, the gradient
+in the positions, and the dot-product test. The slow tier: each compiles new shapes
+eagerly.
 """
 
 from __future__ import annotations
 
+import functools
+
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -16,6 +20,7 @@ from _harness import (
     assert_traces,
     assert_transpose_matches,
 )
+from hypothesis import given, settings
 from scipy.stats import binned_statistic_dd
 
 from functax.geometry import Axis, Points, RectilinearGrid
@@ -132,6 +137,46 @@ def test_jit_and_vmap_agree_with_a_loop() -> None:
         )
     )
     assert_traces(deposit, batched)
+
+
+@functools.partial(jax.jit, static_argnames="weights")
+def _bin(
+    xy: jax.Array, values: jax.Array, level: jax.Array, weights: str
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """The sums of ``values`` and the means of the constant ``level`` on GRID."""
+    sums = Binning("sum", weights=weights).plan(Points(xy), GRID)
+    means = Binning("mean", weights=weights).plan(Points(xy), GRID)
+    flat = jnp.full(xy.shape[0], level)
+    return sums(values), means(flat), means.valid
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    seed=st.integers(0, 2**31 - 1),
+    weights=st.sampled_from(["nearest", "linear"]),
+    level=st.floats(-1e3, 1e3).filter(lambda c: c == 0.0 or abs(c) > 1e-100),
+)
+def test_sums_keep_the_total_and_means_keep_a_constant(
+    seed: int, weights: str, level: float
+) -> None:
+    # ∑ⱼ (Hᵀ y)ⱼ = ∑ᵢ yᵢ over the samples the grid holds, since each row of H
+    # sums to one there (and is zero off the grid), and the mean of a constant
+    # c is c in every non-empty cell
+    rng = np.random.default_rng(seed)
+    xy = np.column_stack([rng.uniform(-2.0, 12.0, 60), rng.uniform(-3.0, 3.0, 60)])
+    values = rng.normal(size=60)
+    sums, means, valid = _bin(
+        jnp.asarray(xy), jnp.asarray(values), jnp.asarray(level), weights
+    )
+    # nearest holds the samples in the cells' edges, linear those in the nodes' hull
+    held = np.ones(60, dtype=bool)
+    for column, nodes in enumerate(NODES):
+        bounds = _cell_edges(nodes) if weights == "nearest" else nodes
+        held &= (xy[:, column] >= bounds[0]) & (xy[:, column] <= bounds[-1])
+    assert_matches_oracle(jnp.sum(sums), values[held].sum(), rtol=1e-12, atol=1e-13)
+    assert_matches_oracle(
+        means, np.full(35, level), rtol=1e-14, where=np.asarray(valid)
+    )
 
 
 def test_empty_cells_give_nan_means_and_zero_sums() -> None:

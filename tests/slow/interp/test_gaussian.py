@@ -6,6 +6,7 @@ checks, each a second or more (mostly einx compiling new shapes).
 from __future__ import annotations
 
 import einx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import lineax as lx
@@ -17,6 +18,7 @@ from _harness import (
     assert_matches_oracle,
     assert_traces,
 )
+from hypothesis import given, settings
 
 from functax.geometry import Axis, Points
 from functax.interp import (
@@ -163,6 +165,51 @@ class TestBridge:
         # σ² Δᵢ / 4 for Δ = 1, 2, 1
         expected = [RATE * width / 4 for width in (1.0, 2.0, 1.0)]
         assert_matches_oracle(variance[4:], jnp.array(expected), rtol=1e-15)
+
+
+@jax.jit
+def _posterior(
+    knots: jax.Array, targets: jax.Array, data: jax.Array
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """m, Σ_{*∣y} and σ_*² of the Brownian bridge on ``knots`` at ``targets``."""
+    plan = Linear(prior_variance_rate=RATE).plan(Axis(knots), _points(targets))
+    return plan.mean(data), plan.covariance(), plan.variance()
+
+
+class TestProperties:
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_posterior_is_a_bridge_whichever_way_the_axis_runs(self, seed: int) -> None:
+        # Σ_{*∣y} = Σ_{*∣y}ᵀ ⪰ 0 with diag σ_*², 0 ≤ σ_*² ≤ σ² Δᵢ / 4, the mean
+        # reads an affine field exactly, and reversing the axis (and its data)
+        # changes none of it
+        knots = _knots(8, seed)
+        rng = np.random.default_rng(seed)
+        targets = rng.uniform(knots[0], knots[-1], 12)
+        offset, slope = rng.normal(size=2)
+        data = offset + slope * knots
+        mean, covariance, variance = _posterior(
+            jnp.asarray(knots), jnp.asarray(targets), jnp.asarray(data)
+        )
+        assert_matches_oracle(mean, offset + slope * targets, rtol=1e-12, atol=1e-12)
+        assert_matches_oracle(covariance, covariance.T, rtol=0.0)
+        assert_matches_oracle(jnp.diagonal(covariance), variance, rtol=1e-15)
+        cell = np.clip(np.searchsorted(knots, targets) - 1, 0, 6)
+        bound = RATE * (knots[cell + 1] - knots[cell]) / 4.0
+        assert bool(np.all(np.asarray(variance) >= 0.0))
+        assert bool(np.all(np.asarray(variance) <= bound * (1.0 + 1e-14)))
+        eigenvalues = np.linalg.eigvalsh(np.asarray(covariance))
+        # eigenvalues of a PSD matrix in float64 sit above −ε ‖Σ*‖ M
+        assert float(np.min(eigenvalues)) >= -1e-13 * float(np.max(eigenvalues))
+        reversed_posterior = _posterior(
+            jnp.asarray(knots[::-1].copy()),
+            jnp.asarray(targets),
+            jnp.asarray(data[::-1].copy()),
+        )
+        for actual, expected in zip(
+            reversed_posterior, (mean, covariance, variance), strict=True
+        ):
+            assert_matches_oracle(actual, expected, rtol=1e-12, atol=1e-12)
 
 
 class TestPlan:

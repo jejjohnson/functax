@@ -6,10 +6,15 @@ vmap and grad check, each a second or more (mostly building the tables).
 
 from __future__ import annotations
 
+import functools
+
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
+from _harness import assert_matches_oracle
+from hypothesis import given, settings
 
 from functax.basis.sphere import real_spherical_harmonics
 from functax.transform import SphericalHarmonicTransform
@@ -69,3 +74,36 @@ def test_gradients_flow_to_the_field_not_the_tables():
     assert bool(jnp.any(grad_field != 0))
     grad_tables = jax.grad(lambda s: jnp.sum(s.forward(field) ** 2))(sht)
     assert bool(jnp.all(grad_tables.analy == 0))
+
+
+@functools.cache
+def _small_sht() -> SphericalHarmonicTransform:
+    return SphericalHarmonicTransform.init(7, 13, 6)
+
+
+@jax.jit
+def _degree_power_of_synthesis(
+    sht: SphericalHarmonicTransform, coeffs: jax.Array, steps: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    """The power per degree of a band-limited field and of it rolled in longitude."""
+    field = sht.inverse(coeffs)
+    rolled = jnp.roll(field, steps, axis=-1)
+    onehot = jnp.asarray(sht.degrees)[:, None] == jnp.arange(sht.l_max + 1)
+    return (
+        sht.forward(field) ** 2 @ onehot,
+        sht.forward(rolled) ** 2 @ onehot,
+    )
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1), steps=st.integers(-12, 12))
+def test_power_per_degree_is_invariant_under_longitude_rotation(
+    seed: int, steps: int
+) -> None:
+    # rolling the grid by k longitudes rotates the field about the pole by
+    # 2πk/n_lon, which mixes the orders ±m within each degree and keeps
+    # ∑_m c_ℓm² per degree
+    sht = _small_sht()
+    coeffs = jr.normal(jr.key(seed), (2, (sht.l_max + 1) ** 2))
+    power, rolled_power = _degree_power_of_synthesis(sht, coeffs, jnp.asarray(steps))
+    assert_matches_oracle(rolled_power, power, rtol=1e-12, atol=1e-13)

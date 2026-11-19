@@ -9,9 +9,12 @@ from __future__ import annotations
 import inspect
 import math
 
+import hypothesis.strategies as st
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from _harness import assert_matches_oracle
+from hypothesis import given, settings
 
 from functax import GeometryError, ValidationError
 from functax.basis.eigen import (
@@ -146,6 +149,14 @@ class TestEOFBasis:
             eof_basis(jnp.ones((4, 3)), n_modes=5)  # > min(T, N)
 
 
+def _random_adjacency(seed: int, n: int = 8) -> np.ndarray:
+    """A symmetric weighted adjacency, each edge present with probability ½."""
+    rng = np.random.default_rng(seed)
+    weights = rng.uniform(0.1, 2.0, (n, n)) * (rng.uniform(size=(n, n)) < 0.5)
+    weights = np.triu(weights, 1)
+    return weights + weights.T
+
+
 class TestGraphLaplacian:
     def test_path_combinatorial_spectrum(self):
         # D − A of the n-node path: 2 − 2 cos(kπ/n), k = 0, …, n − 1
@@ -189,6 +200,37 @@ class TestGraphLaplacian:
         values, vectors = graph_laplacian_eigpairs(_cycle(8), 3)
         assert values.shape == (3,) and vectors.shape == (8, 3)
         assert bool(np.all(np.diff(np.asarray(values)) >= 0))
+
+    # an isolated vertex is valid input: the module computes d^{−½} for every
+    # vertex before it zeroes the isolated ones, so NumPy warns on 0^{−½}
+    @pytest.mark.filterwarnings("ignore:divide by zero encountered in power")
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1), normalized=st.booleans())
+    def test_spectrum_is_invariant_under_relabelling(
+        self, seed: int, normalized: bool
+    ) -> None:
+        # λ(PAPᵀ) = λ(A), and the eigenpairs solve L v = λ v for L assembled here
+        adjacency = _random_adjacency(seed)
+        order = np.random.default_rng(seed + 1).permutation(8)
+        eigvals, eigvecs = map(
+            np.asarray, graph_laplacian_eigpairs(adjacency, 8, normalized=normalized)
+        )
+        relabelled, _ = graph_laplacian_eigpairs(
+            adjacency[np.ix_(order, order)], 8, normalized=normalized
+        )
+        assert_matches_oracle(relabelled, eigvals, rtol=0.0, atol=1e-12)
+        degree = adjacency.sum(axis=1)
+        if normalized:
+            # L = I − D^{−½} A D^{−½}, with d^{−½} = 0 for an isolated vertex
+            inverse_sqrt = np.zeros(8)
+            inverse_sqrt[degree > 0] = degree[degree > 0] ** -0.5
+            laplacian = np.eye(8) - inverse_sqrt[:, None] * adjacency * inverse_sqrt
+        else:
+            # L = D − A
+            laplacian = np.diag(degree) - adjacency
+        assert_matches_oracle(
+            laplacian @ eigvecs, eigvecs * eigvals, rtol=0.0, atol=1e-12
+        )
 
     @pytest.mark.parametrize(
         ("adjacency", "num_basis", "match"),

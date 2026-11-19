@@ -5,7 +5,10 @@ dot-product tests across policies, gradient and trace checks, each a second or m
 
 from __future__ import annotations
 
+import functools
+
 import einx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -18,6 +21,7 @@ from _harness import (
     assert_traces,
     assert_transpose_matches,
 )
+from hypothesis import given, settings
 
 from functax.geometry import Axis, Points
 from functax.interp import (
@@ -312,6 +316,63 @@ class TestFitInTheTrace:
             assert_matches_oracle(
                 field.plan(Points(targets))(jnp.asarray(values)), expected, rtol=0.0
             )
+
+
+SERIES_SCHEMES = [CubicSpline(), Pchip(), Akima(), Steffen()]
+
+
+SERIES_IDS = ["not-a-knot", "pchip", "akima", "steffen"]
+
+
+@functools.cache
+def _compiled_fit_and_read(scheme):  # type: ignore[no-untyped-def]
+    """``(knots, data, targets) ↦ scheme.fit(Axis(knots), data)(targets)``, once."""
+
+    def read(knots: jax.Array, data: jax.Array, targets: jax.Array) -> jax.Array:
+        return scheme.fit(Axis(knots), data)(targets[:, None])
+
+    return jax.jit(read)
+
+
+class TestProperties:
+    @pytest.mark.parametrize("scheme", SERIES_SCHEMES, ids=SERIES_IDS)
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1), descending=st.booleans())
+    def test_interpolates_the_data_at_the_knots(
+        self, scheme, seed: int, descending: bool
+    ) -> None:  # type: ignore[no-untyped-def]
+        # f̂(xᵢ) = yᵢ on random uneven knots, either direction
+        knots, values = _axis_and_data(seed)
+        if descending:
+            knots, values = knots[::-1], values[::-1]
+        read = _compiled_fit_and_read(scheme)(
+            jnp.asarray(knots), jnp.asarray(values), jnp.asarray(knots)
+        )
+        assert_matches_oracle(read, values, rtol=1e-12, atol=1e-12)
+
+    @pytest.mark.parametrize("scheme", [Pchip(), Steffen()], ids=["pchip", "steffen"])
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_monotone_data_give_a_monotone_curve(self, scheme, seed: int) -> None:  # type: ignore[no-untyped-def]
+        # yᵢ₊₁ ≥ yᵢ ⇒ f̂ non-decreasing between every pair of knots, plateaus too
+        knots, _ = _axis_and_data(seed)
+        rng = np.random.default_rng(seed + 1)
+        steps = rng.exponential(size=10) * (rng.random(10) < 0.7)
+        data = np.concatenate([[0.0], np.cumsum(steps)])
+        targets = np.linspace(knots[0], knots[-1], 200)
+        read = _compiled_fit_and_read(scheme)(
+            jnp.asarray(knots), jnp.asarray(data), jnp.asarray(targets)
+        )
+        assert float(jnp.min(jnp.diff(read))) >= -1e-12 * max(float(data[-1]), 1.0)
+
+    @pytest.mark.parametrize("scheme", SERIES_SCHEMES, ids=SERIES_IDS)
+    def test_the_read_out_under_jit_and_vmap(self, scheme) -> None:  # type: ignore[no-untyped-def]
+        # the plain read-out f̂ = H(y) y of a fixed plan, over a batch of data
+        knots, _ = _axis_and_data(seed=19)
+        targets = Points(jnp.asarray(np.linspace(knots[0], knots[-1], 13))[:, None])
+        plan = scheme.plan(Axis(jnp.asarray(knots)), targets)
+        batch = jax.random.normal(jax.random.key(20), (3, knots.size))
+        assert_traces(lambda y: plan(y), batch)
 
 
 class TestPolicies:

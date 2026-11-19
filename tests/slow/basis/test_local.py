@@ -5,11 +5,16 @@ reconstruction, each a second or more.
 
 from __future__ import annotations
 
+import math
+
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 import pytest
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax.basis.local import (
     gabor_frame,
@@ -17,6 +22,7 @@ from functax.basis.local import (
     rbf_basis,
     spherical_rbf_basis,
     wavelet_basis_1d,
+    wavelet_basis_2d,
     wendland_c2,
     wendland_c4,
 )
@@ -224,3 +230,225 @@ def test_gabor_directional_reduces_to_radial_when_aligned():
     radial = gabor_frame(x, c, L, k)
     directional = gabor_frame(x, c, L, k, orientations=jnp.array([[1.0, 0.0]]))
     assert float(directional[0, 0]) == pytest.approx(float(radial[0, 0]), abs=1e-6)
+
+
+def _random_rotation(seed: int) -> np.ndarray:
+    """A random proper rotation of ℝ³, from the QR factors of a Gaussian matrix."""
+    q, r = np.linalg.qr(np.random.default_rng(seed).normal(size=(3, 3)))
+    q = q * np.sign(np.diag(r))
+    return q if np.linalg.det(q) > 0 else -q
+
+
+def _unit(points: jax.Array) -> jax.Array:
+    return points / jnp.linalg.norm(points, axis=-1, keepdims=True)
+
+
+# compiled once per module, so each hypothesis example reuses the kernels
+_RBF = {
+    kernel: jax.jit(lambda x, c, w, kernel=kernel: rbf_basis(x, c, w, kernel=kernel))
+    for kernel in ("gaussian", "wendland_c2", "wendland_c4")
+}
+
+
+_GABOR = jax.jit(gabor_frame)
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    seed=st.integers(0, 2**31 - 1),
+    kernel=st.sampled_from(["gaussian", "wendland_c2", "wendland_c4"]),
+)
+def test_rbf_basis_is_invariant_under_rigid_motions(seed: int, kernel: str) -> None:
+    # φ_a(Qx + t) with centres Qc_a + t is φ_a(x): only ‖x − c_a‖ enters
+    keys = jr.split(jr.key(seed), 4)
+    x = jr.normal(keys[0], (6, 3))
+    centres = jr.normal(keys[1], (4, 3))
+    widths = jr.uniform(keys[2], (4,), minval=0.5, maxval=3.0)
+    shift = jr.normal(keys[3], (3,))
+    rotation = jnp.asarray(_random_rotation(seed))
+    moved = _RBF[kernel](x @ rotation.T + shift, centres @ rotation.T + shift, widths)
+    assert_matches_oracle(moved, _RBF[kernel](x, centres, widths), rtol=0.0, atol=1e-12)
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1))
+def test_gabor_frame_is_equivariant_under_rigid_motions(seed: int) -> None:
+    # moving the points, the centres and the orientations by the same rigid
+    # motion leaves every atom unchanged, radial or directional
+    keys = jr.split(jr.key(seed), 6)
+    x = jr.normal(keys[0], (6, 3))
+    centres = jr.normal(keys[1], (4, 3))
+    scales = jr.uniform(keys[2], (4,), minval=0.5, maxval=2.0)
+    wavenumbers = jr.uniform(keys[3], (4,), minval=0.5, maxval=4.0)
+    orientations = jr.normal(keys[4], (4, 3))
+    shift = jr.normal(keys[5], (3,))
+    rotation = jnp.asarray(_random_rotation(seed))
+    moved_x = x @ rotation.T + shift
+    moved_centres = centres @ rotation.T + shift
+    for direction in (None, orientations):
+        moved = _GABOR(
+            moved_x,
+            moved_centres,
+            scales,
+            wavenumbers,
+            orientations=None if direction is None else direction @ rotation.T,
+        )
+        expected = _GABOR(x, centres, scales, wavenumbers, orientations=direction)
+        assert_matches_oracle(moved, expected, rtol=0.0, atol=1e-12)
+
+
+_POINTS = jnp.array([[0.3, -0.2, 0.5], [-0.4, 0.6, 0.1], [0.9, 0.2, -0.3]])
+
+
+_CENTRES = jnp.array([[0.1, 0.1, 0.2], [-0.5, 0.3, 0.4]])
+
+
+@pytest.mark.parametrize("kernel", ["gaussian", "wendland_c2", "wendland_c4"])
+def test_rbf_gradient_matches_finite_differences(kernel: str) -> None:
+    # differentiated in the points, the centres and the widths together; every
+    # scaled distance is between 0.1 and 0.9, off the centre and the support edge
+    widths = jnp.array([1.4, 1.9])
+    assert_grad_matches_fd(
+        lambda args: rbf_basis(*args, kernel=kernel),
+        (_POINTS, _CENTRES, widths),
+        rtol=1e-8,
+    )
+
+
+def test_spherical_rbf_gradient_matches_finite_differences() -> None:
+    # differentiated in the points, the centres and the widths, at points off
+    # every centre (the arccos is singular there)
+    points = _unit(_POINTS)
+    centres = _unit(_CENTRES)
+    # the Wendland profiles' own gradients are checked on the Euclidean basis
+    assert_grad_matches_fd(
+        lambda args: spherical_rbf_basis(*args),
+        (points, centres, jnp.array([1.5, 2.5])),
+        rtol=1e-7,
+    )
+
+
+def test_gabor_gradient_matches_finite_differences() -> None:
+    # differentiated in the points, centres, scales, wavenumbers and (for the
+    # directional atoms) orientations, at points off every centre
+    scales = jnp.array([0.8, 1.3])
+    wavenumbers = jnp.array([2.0, 3.5])
+    orientations = jnp.array([[1.0, 0.5, -0.2], [0.3, -1.0, 0.4]])
+    assert_grad_matches_fd(
+        lambda args: gabor_frame(*args), (_POINTS, _CENTRES, scales, wavenumbers)
+    )
+    assert_grad_matches_fd(
+        lambda args: gabor_frame(*args[:4], orientations=args[4]),
+        (_POINTS, _CENTRES, scales, wavenumbers, orientations),
+    )
+
+
+@pytest.mark.parametrize("kernel", [wendland_c2, wendland_c4])
+def test_wendland_gradient_matches_finite_differences(kernel) -> None:
+    # inside the support, off r = 0 and r = 1
+    assert_grad_matches_fd(kernel, jnp.array([0.05, 0.3, 0.6, 0.95]), rtol=1e-8)
+
+
+def test_local_bases_trace() -> None:
+    # batches of point sets against fixed atoms
+    points = jr.normal(jr.key(7), (3, 5, 3))
+    widths = jnp.array([1.4, 1.9])
+    orientations = jnp.array([[1.0, 0.5, -0.2], [0.3, -1.0, 0.4]])
+
+    def bases(x: jax.Array) -> tuple[jax.Array, ...]:
+        return (
+            rbf_basis(x, _CENTRES, widths),
+            rbf_basis(x, _CENTRES, widths, kernel="wendland_c2"),
+            spherical_rbf_basis(
+                _unit(x), _unit(_CENTRES), widths, kernel="wendland_c4"
+            ),
+            gabor_frame(x, _CENTRES, widths, widths, orientations=orientations),
+        )
+
+    assert_traces(bases, points)
+
+
+def test_gabor_frame_grid_matches_its_lattice() -> None:
+    # bounds [0, 1] × [0, 2] with L₀ = ½ and two scales: spacing ½ gives 3 × 5
+    # centres, spacing 1 gives 2 × 3, x outermost (meshgrid "ij")
+    bounds = jnp.array([[0.0, 1.0], [0.0, 2.0]])
+    x = jnp.array([[0.3, 0.4], [0.9, 1.7], [0.0, 0.0]])
+    atoms, centres, scales, wavenumbers = gabor_frame_grid(
+        x, bounds, n_scales=2, base_scale=0.5
+    )
+    lattice = [
+        np.stack(
+            np.meshgrid(
+                np.arange(0.0, 1.01, step), np.arange(0.0, 2.01, step), indexing="ij"
+            ),
+            -1,
+        ).reshape(-1, 2)
+        for step in (0.5, 1.0)
+    ]
+    expected_centres = np.concatenate(lattice)
+    expected_scales = np.repeat([0.5, 1.0], [15, 6])
+    assert_matches_oracle(centres, expected_centres, rtol=1e-12)
+    assert_matches_oracle(scales, expected_scales, rtol=1e-12)
+    assert_matches_oracle(wavenumbers, 2.0 * np.pi / expected_scales, rtol=1e-12)
+    # φ_a(x) = exp(−r²/(2L_a²)) cos(2π r/L_a), r = ‖x − c_a‖
+    r = np.linalg.norm(np.asarray(x)[:, None, :] - expected_centres[None], axis=-1)
+    expected = np.exp(-(r**2) / (2.0 * expected_scales**2)) * np.cos(
+        2.0 * np.pi * r / expected_scales
+    )
+    assert_matches_oracle(atoms, expected, rtol=1e-12, atol=1e-15)
+
+
+_S = 1.0 / math.sqrt(2.0)
+
+
+def test_haar_basis_matches_the_haar_matrix() -> None:
+    # Φ = Wᵀ, the rows of W the scaling function, the coarse wavelet and the
+    # two fine wavelets; one level keeps the two fine approximations instead
+    full = np.array(
+        [
+            [0.5, 0.5, 0.5, 0.5],
+            [0.5, 0.5, -0.5, -0.5],
+            [_S, -_S, 0.0, 0.0],
+            [0.0, 0.0, _S, -_S],
+        ]
+    )
+    one_level = np.array(
+        [
+            [_S, _S, 0.0, 0.0],
+            [0.0, 0.0, _S, _S],
+            [_S, -_S, 0.0, 0.0],
+            [0.0, 0.0, _S, -_S],
+        ]
+    )
+    assert_matches_oracle(wavelet_basis_1d(4), full.T, rtol=1e-12, atol=1e-15)
+    assert_matches_oracle(
+        wavelet_basis_1d(4, levels=1), one_level.T, rtol=1e-12, atol=1e-15
+    )
+    # the 2-D basis is the Kronecker product, rows iy · nx + ix
+    haar_2 = np.array([[_S, _S], [_S, -_S]]).T
+    assert_matches_oracle(
+        wavelet_basis_2d(2, 4), np.kron(haar_2, full.T), rtol=1e-12, atol=1e-15
+    )
+
+
+def test_db2_level_matches_the_closed_form_filter() -> None:
+    # h = (1 − √3, 3 − √3, 3 + √3, 1 + √3)/(4√2), g_k = (−1)ᵏ h_{3−k}; one
+    # periodic level reads row n of W from x_{(2n + k) mod 8}
+    root3 = math.sqrt(3.0)
+    h = np.array([1.0 - root3, 3.0 - root3, 3.0 + root3, 1.0 + root3]) / (
+        4.0 * math.sqrt(2.0)
+    )
+    g = (-1.0) ** np.arange(4) * h[::-1]
+    analysis = np.zeros((8, 8))
+    for n in range(4):
+        for k in range(4):
+            analysis[n, (2 * n + k) % 8] += h[k]
+            analysis[4 + n, (2 * n + k) % 8] += g[k]
+    # the taps are PyWavelets' printed decimals, which differ from the closed
+    # form by up to 3.4e-13 (measured), so the tolerance is absolute at 1e-12
+    assert_matches_oracle(
+        wavelet_basis_1d(8, wavelet="db2", levels=1),
+        analysis.T,
+        rtol=0.0,
+        atol=1e-12,
+    )

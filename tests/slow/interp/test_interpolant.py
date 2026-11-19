@@ -5,11 +5,15 @@ checks, each a second or more (mostly einx compiling new shapes).
 
 from __future__ import annotations
 
+import functools
+
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from _harness import assert_matches_oracle, assert_traces
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax.geometry import AffineGrid, Axis, Points, RectilinearGrid
 from functax.interp import (
@@ -109,6 +113,55 @@ class TestTraces:
         field = BSpline(3).fit(GRID, FIELD)
         batches = jnp.stack([_targets(7, seed=s) for s in range(3)])
         assert_traces(lambda xy: field(xy), batches)
+
+    def test_gradient_in_the_positions_and_the_data(self) -> None:
+        # differentiates the moving targets, then the samples through the fit
+        # (the prefilter); offsets mid-cell, clear of the knots
+        rng = np.random.default_rng(11)
+        rows = jnp.linspace(0.0, 5.0, 8)[rng.integers(1, 6, 6)] + rng.uniform(
+            0.1, 0.6, 6
+        )
+        cols = jnp.linspace(-1.0, 2.0, 9)[rng.integers(1, 7, 6)] + rng.uniform(
+            0.05, 0.3, 6
+        )
+        xy = jnp.stack([rows, cols], axis=-1)
+        scheme = BSpline(3)
+        field = scheme.fit(GRID, FIELD)
+        assert_grad_matches_fd(lambda positions: field(positions), xy)
+        assert_grad_matches_fd(lambda data: scheme.fit(GRID, data)(xy), FIELD)
+
+
+@functools.cache
+def _compiled_fit_and_read(scheme):  # type: ignore[no-untyped-def]
+    """``(data, targets) ↦ scheme.fit(GRID, data)(targets)``, compiled once."""
+    return jax.jit(lambda data, targets: scheme.fit(GRID, data)(targets))
+
+
+class TestProperties:
+    @pytest.mark.parametrize(
+        "scheme",
+        [Nearest(), Linear(), Cubic(), BSpline(3), Tensor((Nearest(), BSpline(3)))],
+        ids=["nearest", "linear", "cubic", "bspline3", "tensor"],
+    )
+    @settings(max_examples=20, deadline=None)
+    @given(
+        seed=st.integers(0, 2**31 - 1),
+        scale=st.floats(-3.0, 3.0),
+        level=st.floats(-10.0, 10.0),
+    )
+    def test_linear_in_the_data_and_reproduces_constants(
+        self, scheme, seed: int, scale: float, level: float
+    ) -> None:  # type: ignore[no-untyped-def]
+        # f̂[a y₁ + y₂ + c](x) = a f̂[y₁](x) + f̂[y₂](x) + c at moving targets inside
+        rng = np.random.default_rng(seed)
+        first, second = rng.normal(size=(2, 72))
+        data = jnp.asarray(np.stack([scale * first + second + level, first, second]))
+        targets = jnp.asarray(
+            np.column_stack([rng.uniform(0.0, 5.0, 16), rng.uniform(-1.0, 2.0, 16)])
+        )
+        values = _compiled_fit_and_read(scheme)(data, targets)
+        expected = scale * values[1] + values[2] + level
+        assert_matches_oracle(values[0], expected, rtol=1e-12, atol=1e-12)
 
 
 class TestDerivativesAndPolicies:

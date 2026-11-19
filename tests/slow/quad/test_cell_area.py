@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import math
 
+import hypothesis.strategies as st
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from _harness import assert_matches_oracle
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax.geometry import AffineGrid, Axis, RectilinearGrid
 from functax.quad import cell_area
@@ -27,6 +30,74 @@ def _global_rectilinear(unit: str, step: float) -> RectilinearGrid:
     longitude = Axis(jnp.arange(-full / 2 + step / 2, full / 2, step), period=full)
     latitude = Axis(jnp.arange(-half + step / 2, half, step))
     return RectilinearGrid((longitude, latitude))
+
+
+def _random_edges(seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """Uneven λ edges spanning under 2π and φ edges inside (−π/2, π/2), radians."""
+    rng = np.random.default_rng(seed)
+    lon_edges = rng.uniform(-np.pi, np.pi) + np.cumsum(rng.uniform(0.05, 0.7, 9))
+    lat_edges = np.sort(rng.uniform(-1.5, 1.5, 7))
+    return lon_edges, lat_edges
+
+
+def _lonlat_areas(
+    lon_edges: jax.Array, lat_edges: jax.Array, radius: float = 2.5
+) -> jax.Array:
+    """The cell areas of a (λ, φ) grid with traced edges, in radians.
+
+    The radius stays a Python number: ``sphere_radius`` is typed ``float | int``.
+    """
+    # the nodes stay concrete; traced edges skip the Axis value checks
+    axes = tuple(
+        Axis(jnp.arange(edges.shape[0] - 1, dtype=edges.dtype), edges=edges)
+        for edges in (lon_edges, lat_edges)
+    )
+    rule = cell_area(RectilinearGrid(axes), sphere_radius=radius, unit="radians")
+    return rule.weights
+
+
+def _plane_areas(lon_edges: jax.Array, lat_edges: jax.Array) -> jax.Array:
+    """The same cells in the plane: |Δλ| |Δφ|."""
+    axes = tuple(
+        Axis(jnp.arange(edges.shape[0] - 1, dtype=edges.dtype), edges=edges)
+        for edges in (lon_edges, lat_edges)
+    )
+    return cell_area(RectilinearGrid(axes)).weights
+
+
+_AREAS = jax.jit(
+    lambda lon, lat, radius: (_lonlat_areas(lon, lat, radius), _plane_areas(lon, lat)),
+    static_argnums=2,
+)
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1), radius=st.sampled_from([1.0, EARTH_LIKE_RADIUS]))
+def test_uneven_cells_add_up_to_the_domain(seed: int, radius: float) -> None:
+    # ∑|C| = R² (λ_end − λ_start)(sin φ_end − sin φ_start) on the sphere and
+    # (λ_end − λ_start)(φ_end − φ_start) in the plane, whatever the inner edges
+    lon_edges, lat_edges = _random_edges(seed)
+    sphere, plane = _AREAS(jnp.asarray(lon_edges), jnp.asarray(lat_edges), radius)
+    lon_span = lon_edges[-1] - lon_edges[0]
+    sine_span = np.sin(lat_edges[-1]) - np.sin(lat_edges[0])
+    assert sphere.shape == plane.shape == (8, 6)
+    assert_matches_oracle(sphere.sum(), radius**2 * lon_span * sine_span, rtol=1e-13)
+    assert_matches_oracle(
+        plane.sum(), lon_span * (lat_edges[-1] - lat_edges[0]), rtol=1e-13
+    )
+
+
+def test_gradient_in_the_edges_matches_finite_differences() -> None:
+    # differentiated in the λ and φ edges, with no edge at a pole
+    lon_edges, lat_edges = (jnp.asarray(edges[:4]) for edges in _random_edges(1))
+    assert_grad_matches_fd(lambda edges: _lonlat_areas(*edges), (lon_edges, lat_edges))
+
+
+def test_jit_and_vmap_agree_with_a_loop() -> None:
+    pairs = [_random_edges(seed) for seed in range(3)]
+    lon_edges = jnp.asarray(np.stack([lon for lon, _ in pairs]))
+    lat_edges = jnp.asarray(np.stack([lat for _, lat in pairs]))
+    assert_traces(_lonlat_areas, lon_edges, lat_edges)
 
 
 @pytest.mark.parametrize("radius", [EARTH_LIKE_RADIUS])

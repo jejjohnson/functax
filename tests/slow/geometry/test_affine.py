@@ -61,6 +61,22 @@ class TestTraces:
 
         assert_traces(chip, transforms, offsets)
 
+    def test_from_pixel_grad_in_the_pixels_and_the_transform(self) -> None:
+        # differentiated in rowcol, then in the six coefficients of T
+        transform = jnp.asarray([2.0, 0.5, 10.0, -0.3, -1.5, 20.0])
+        rowcol = jnp.asarray([[1.5, -2.0], [7.0, 3.25]])
+        assert_grad_matches_fd(lambda p: from_pixel(transform, p), rowcol)
+        assert_grad_matches_fd(lambda t: from_pixel(t, rowcol), transform)
+
+    def test_slice_transform_grad_in_the_transform_and_the_offsets(self) -> None:
+        # differentiated in T, then in the offsets (i₀, j₀) and steps (sᵢ, sⱼ)
+        transform = jnp.asarray([2.0, 0.5, 10.0, -0.3, -1.5, 20.0])
+        offsets = jnp.asarray([4.0, -3.0, 2.0, 3.0])
+        assert_grad_matches_fd(
+            lambda t: slice_transform(t, *offsets.tolist()), transform
+        )
+        assert_grad_matches_fd(lambda o: slice_transform(transform, *o), offsets)
+
     def test_grad_matches_the_inverse_matrix(self) -> None:
         transform = jnp.asarray(NORTH_UP)
         # row = (−d·Δx + a·Δy) / det A and col = (e·Δx − b·Δy) / det A; for

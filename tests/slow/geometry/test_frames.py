@@ -4,11 +4,18 @@ checks.
 
 from __future__ import annotations
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from _harness import (
+    assert_adjoint,
+    assert_grad_matches_fd,
+    assert_matches_oracle,
+    assert_traces,
+)
+from hypothesis import given, settings
 
 from functax.geometry import (
     cartesian_to_tangent,
@@ -19,6 +26,7 @@ from functax.geometry import (
     lonlat_to_unit,
     rotation_to_pole,
     tangent_to_cartesian,
+    unit_to_lonlat,
 )
 
 
@@ -75,6 +83,160 @@ def test_jit_and_vmap_match_a_loop(name: str) -> None:
 def test_rotation_to_pole_traces() -> None:
     centres = jax.random.uniform(jax.random.key(1), (4, 2), minval=-1.0, maxval=1.0)
     assert_traces(lambda centre: rotation_to_pole(centre, unit="radians"), centres)
+
+
+def test_rotation_to_pole_gradient_matches_finite_differences() -> None:
+    # differentiated in the centre (λ, φ), away from the poles
+    centre = jnp.array([0.7, -0.4])
+    assert_grad_matches_fd(lambda c: rotation_to_pole(c, unit="radians"), centre)
+
+
+_ROTATION = jax.jit(lambda centre: rotation_to_pole(centre, unit="radians"))
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1))
+def test_rotation_to_pole_is_a_rotation_taking_the_centre_up(seed: int) -> None:
+    # QᵀQ = I, det Q = 1, Q n(centre) = e_z and Q e_north(centre) = e_y
+    rng = np.random.default_rng(seed)
+    centre = np.array([rng.uniform(-np.pi, np.pi), np.arcsin(rng.uniform(-1, 1))])
+    rotation = np.asarray(_ROTATION(jnp.asarray(centre)))
+    frame = np.asarray(enu_basis(jnp.asarray(centre[None]), unit="radians"))[0]
+    assert_matches_oracle(rotation.T @ rotation, np.eye(3), rtol=0, atol=1e-15)
+    assert_matches_oracle(np.linalg.det(rotation), 1.0, rtol=1e-14)
+    assert_matches_oracle(rotation @ frame[2], [0.0, 0.0, 1.0], rtol=0, atol=1e-15)
+    assert_matches_oracle(rotation @ frame[1], [0.0, 1.0, 0.0], rtol=0, atol=1e-15)
+
+
+_ECEF_ROUND_TRIP = jax.jit(
+    lambda lonlat, height, semi_major, flattening: lonlat_to_ecef(
+        *ecef_to_lonlat(
+            lonlat_to_ecef(
+                lonlat,
+                height,
+                semi_major=semi_major,
+                flattening=flattening,
+                unit="radians",
+            ),
+            semi_major=semi_major,
+            flattening=flattening,
+            unit="radians",
+        ),
+        semi_major=semi_major,
+        flattening=flattening,
+        unit="radians",
+    )
+)
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    seed=st.integers(0, 2**31 - 1),
+    semi_major=st.floats(1.0, 1e7),
+    flattening=st.floats(0.0, 0.05),
+)
+def test_ecef_round_trips_on_any_ellipsoid(
+    seed: int, semi_major: float, flattening: float
+) -> None:
+    # xyz → (λ, φ, h) → xyz, compared in ECEF since λ is undefined at the poles
+    rng = np.random.default_rng(seed)
+    lonlat = np.deg2rad(np.asarray(_points(50, seed % 1000)))
+    height = rng.uniform(-0.01, 0.01, 50) * semi_major
+    xyz = lonlat_to_ecef(
+        jnp.asarray(lonlat),
+        jnp.asarray(height),
+        semi_major=semi_major,
+        flattening=flattening,
+        unit="radians",
+    )
+    again = _ECEF_ROUND_TRIP(
+        jnp.asarray(lonlat),
+        jnp.asarray(height),
+        jnp.asarray(semi_major),
+        jnp.asarray(flattening),
+    )
+    # a few ulps of the semi-major axis, as in TestEcef's round trip
+    assert_matches_oracle(again, xyz, rtol=0, atol=1e-14 * semi_major)
+
+
+_TANGENT_TO_CARTESIAN = jax.jit(
+    lambda lonlat, uv: tangent_to_cartesian(lonlat, uv, unit="radians")
+)
+_CARTESIAN_TO_TANGENT = jax.jit(
+    lambda lonlat, vec: cartesian_to_tangent(lonlat, vec, unit="radians")
+)
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1))
+def test_cartesian_to_tangent_is_the_adjoint_of_tangent_to_cartesian(
+    seed: int,
+) -> None:
+    # ⟨T uv, v⟩ = ⟨uv, Tᵀ v⟩ with T the (3, 2) east/north columns at each point
+    lonlat = np.deg2rad(np.asarray(_points(30, seed % 1000)))
+    lonlat = jnp.asarray(lonlat)
+    assert_adjoint(
+        lambda uv: _TANGENT_TO_CARTESIAN(lonlat, uv.reshape(30, 2)).ravel(),
+        lambda vec: _CARTESIAN_TO_TANGENT(lonlat, vec.reshape(30, 3)).ravel(),
+        60,
+        90,
+        key=jax.random.key(seed),
+    )
+
+
+_ENU = jax.jit(lambda lonlat: enu_basis(lonlat, unit="radians"))
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1), shift=st.floats(-np.pi, np.pi))
+def test_enu_basis_turns_with_the_longitude(seed: int, shift: float) -> None:
+    # the frame at (λ + α, φ) is the frame at (λ, φ) turned by R_z(α)
+    lonlat = np.deg2rad(np.asarray(_points(30, seed % 1000)))
+    turned = lonlat + np.array([shift, 0.0])
+    cos, sin = np.cos(shift), np.sin(shift)
+    rotation = np.array([[cos, -sin, 0.0], [sin, cos, 0.0], [0.0, 0.0, 1.0]])
+    expected = np.asarray(_ENU(jnp.asarray(lonlat))) @ rotation.T
+    assert_matches_oracle(_ENU(jnp.asarray(turned)), expected, rtol=0, atol=4e-15)
+
+
+_PLANES = jax.jit(
+    lambda lonlat, origin: (
+        local_tangent_plane(lonlat, origin, radius=2.0, unit="radians"),
+        local_tangent_plane(
+            lonlat, origin, radius=2.0, projection="gnomonic", unit="radians"
+        ),
+    )
+)
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1))
+def test_tangent_planes_keep_distances_and_straighten_great_circles(
+    seed: int,
+) -> None:
+    # azimuthal equidistant: ‖p‖ = R ψ; gnomonic: a great circle maps to a line
+    rng = np.random.default_rng(seed)
+    origin = np.array([rng.uniform(-np.pi, np.pi), np.arcsin(rng.uniform(-1, 1))])
+    centre = np.asarray(lonlat_to_unit(jnp.asarray(origin)))
+    # a great-circle arc through a point within 0.4 rad of the origin
+    start = centre + 0.4 * rng.uniform(-1, 1, 3)
+    start /= np.linalg.norm(start)
+    heading = rng.normal(size=3)
+    heading -= (heading @ start) * start
+    heading /= np.linalg.norm(heading)
+    steps = np.linspace(-0.5, 0.5, 7)[:, None]
+    arc = np.cos(steps) * start + np.sin(steps) * heading
+    lonlat = unit_to_lonlat(jnp.asarray(arc))
+    equidistant, gnomonic = _PLANES(lonlat, jnp.asarray(origin))
+    angle = np.arctan2(np.linalg.norm(np.cross(arc, centre), axis=1), arc @ centre)
+    assert_matches_oracle(
+        np.linalg.norm(equidistant, axis=1), 2.0 * angle, rtol=1e-12, atol=1e-15
+    )
+    # (p_k − p_0) × (p_last − p_0) = 0 for every k
+    chords = np.asarray(gnomonic) - np.asarray(gnomonic)[0]
+    cross = chords[:, 0] * chords[-1, 1] - chords[:, 1] * chords[-1, 0]
+    scale = float(np.max(np.linalg.norm(chords, axis=1)) ** 2)
+    assert_matches_oracle(cross, np.zeros(7), rtol=0, atol=1e-13 * scale)
 
 
 class TestEcef:

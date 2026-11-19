@@ -5,7 +5,10 @@ or more (mostly einx compiling new shapes).
 
 from __future__ import annotations
 
+import functools
+
 import einx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -17,6 +20,8 @@ from _harness import (
     assert_traces,
     assert_transpose_matches,
 )
+from hypothesis import given, settings
+from scipy.interpolate import BSpline as ScipyBSpline
 from scipy.ndimage import map_coordinates, spline_filter1d
 
 from functax.geometry import Axis, Points, RectilinearGrid
@@ -30,6 +35,7 @@ from functax.interp import (
     Nearest,
     Policies,
     Tensor,
+    bspline,
 )
 
 
@@ -103,6 +109,81 @@ class TestBSplineOracle:
         # the mirror ends perturb the fit by about |z|²⁵ ≈ 5e-15 of the field here
         assert_matches_oracle(
             plan(jnp.asarray(field)), expected, rtol=1e-10, atol=1e-10
+        )
+
+
+def _centred_basis(order: int) -> ScipyBSpline:
+    """SciPy's B-spline basis element on the k + 2 unit knots centred on zero."""
+    knots = np.arange(order + 2) - (order + 1) / 2
+    return ScipyBSpline.basis_element(knots, extrapolate=False)
+
+
+class TestBSplineFunction:
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1), order=st.integers(0, 5))
+    def test_integer_shifts_sum_to_one(self, seed: int, order: int) -> None:
+        # partition of unity: ∑ⱼ βᵏ(x − j) = 1, over the shifts j near x
+        x = np.random.default_rng(seed).uniform(-3.0, 3.0, size=(16, 1))
+        shifts = np.round(x) + np.arange(-4.0, 5.0)
+        total = jnp.sum(bspline(jnp.asarray(x - shifts), order), axis=-1)
+        assert_matches_oracle(total, np.ones(16), rtol=1e-12, atol=1e-12)
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "bspline cancels its truncated powers right of the support instead "
+            "of returning 0: bspline(1000.0, 5) = 1/120 and bspline(4.37, 5) = "
+            "-1.3e-13, where the docstring says it vanishes from |x| = (k + 1)/2"
+        ),
+    )
+    def test_vanishes_off_its_support(self) -> None:
+        # βᵏ(x) = 0 for |x| ≥ (k + 1)/2; the left side is exact, the right not
+        x = jnp.array([-1000.0, -4.37, 4.37, 1000.0])
+        np.testing.assert_array_equal(bspline(x, 5), np.zeros(4))
+
+
+def _mirrored_collocation(order: int, n: int, *, periodic: bool) -> np.ndarray:
+    """B with y = B c: βᵏ at the integers, folded by the mirror or wrap rule."""
+    half = (order + 1) // 2
+    weights = np.nan_to_num(
+        _centred_basis(order)(np.arange(-half, half + 1.0)), nan=0.0
+    )
+    matrix = np.zeros((n, n))
+    for i in range(n):
+        for offset, weight in zip(range(-half, half + 1), weights, strict=True):
+            j = i + offset
+            if periodic:
+                j %= n
+            else:
+                # mirror about the end samples, period 2(N − 1)
+                j %= 2 * (n - 1)
+                j = 2 * (n - 1) - j if j > n - 1 else j
+            matrix[i, j] += weight
+    return matrix
+
+
+@functools.cache
+def _compiled_prefilter(order: int, periodic: bool):  # type: ignore[no-untyped-def]
+    """c = B⁻¹ y on 9 samples, compiled once per order and boundary."""
+    return jax.jit(BandedPrefilter((order,), (9,), (periodic,)).apply)
+
+
+class TestPrefilterRoundTrip:
+    @settings(max_examples=20, deadline=None)
+    @given(
+        seed=st.integers(0, 2**31 - 1),
+        order=st.integers(2, 5),
+        periodic=st.booleans(),
+    )
+    def test_the_spline_through_the_coefficients_returns_the_samples(
+        self, seed: int, order: int, periodic: bool
+    ) -> None:
+        # y = B c for c = B⁻¹ y, with B the B-spline sampled at the knots
+        samples = np.random.default_rng(seed).normal(size=(3, 9))
+        coefficients = _compiled_prefilter(order, periodic)(jnp.asarray(samples))
+        collocation = _mirrored_collocation(order, 9, periodic=periodic)
+        assert_matches_oracle(
+            np.asarray(coefficients) @ collocation.T, samples, rtol=1e-11, atol=1e-12
         )
 
 

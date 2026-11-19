@@ -7,10 +7,13 @@ new shapes.
 
 from __future__ import annotations
 
+import hypothesis.strategies as st
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax.quad import polyline
 
@@ -49,6 +52,38 @@ def test_rule_traces_under_jit_and_vmap(rule: str) -> None:
         return transect.nodes, transect.weights, transect.normals
 
     assert_traces(fields, batch)
+
+
+@jax.jit
+def _transect(vertices: jax.Array) -> tuple[jax.Array, ...]:
+    """The nodes, weights and normals of a 3-point Gauss–Legendre transect."""
+    transect = polyline(vertices, 3, rule="gauss_legendre")
+    return transect.nodes, transect.weights, transect.normals
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1), angle=st.floats(-np.pi, np.pi))
+def test_a_rigid_motion_moves_the_nodes_and_turns_the_normals(
+    seed: int, angle: float
+) -> None:
+    # vertices v ↦ Q v + t: nodes x ↦ Q x + t, normals n ↦ Q n, weights kept
+    rng = np.random.default_rng(seed)
+    vertices = rng.normal(size=(5, 2))
+    shift = rng.normal(size=2)
+    rotation = np.array(
+        [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
+    )
+    nodes, weights, normals = _transect(jnp.asarray(vertices))
+    moved_nodes, moved_weights, moved_normals = _transect(
+        jnp.asarray(vertices @ rotation.T + shift)
+    )
+    assert_matches_oracle(
+        moved_nodes, np.asarray(nodes) @ rotation.T + shift, rtol=0, atol=1e-14
+    )
+    assert_matches_oracle(moved_weights, weights, rtol=1e-13)
+    assert_matches_oracle(
+        moved_normals, np.asarray(normals) @ rotation.T, rtol=0, atol=1e-14
+    )
 
 
 @pytest.mark.parametrize("rule", ["midpoint", "gauss_legendre"])

@@ -8,10 +8,14 @@ from __future__ import annotations
 import math
 
 import einx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import scipy.special as sp
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax.basis.polynomial import legendre_polynomials
 from functax.basis.sphere import harmonic_degrees, real_spherical_harmonics
@@ -192,3 +196,48 @@ def test_trace_size_independent_of_degree():
         return len(jax.make_jaxpr(lambda u: real_spherical_harmonics(u, l_max))(x).eqns)
 
     assert n_eqns(10) == n_eqns(60)
+
+
+_L_MAX = 10
+
+
+# compiled once per module, so each hypothesis example reuses the kernel
+_HARMONICS = jax.jit(lambda u: real_spherical_harmonics(u, _L_MAX))
+
+
+# sums the columns of each degree ℓ
+_DEGREE_ONEHOT = np.asarray(harmonic_degrees(_L_MAX))[:, None] == np.arange(_L_MAX + 1)
+
+
+def _random_units(count: int, seed: int) -> np.ndarray:
+    gaussian = np.random.default_rng(seed).normal(size=(count, 3))
+    return gaussian / np.linalg.norm(gaussian, axis=1, keepdims=True)
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1))
+def test_addition_theorem_at_random_pairs(seed: int) -> None:
+    # ∑_m Y_ℓm(u) Y_ℓm(v) = (2ℓ + 1)/(4π) P_ℓ(u · v), with SciPy's P_ℓ
+    u = _random_units(8, seed)
+    v = _random_units(8, seed + 1)
+    lhs = (np.asarray(_HARMONICS(jnp.asarray(u)) * _HARMONICS(jnp.asarray(v)))) @ (
+        _DEGREE_ONEHOT
+    )
+    cosine = np.clip(np.sum(u * v, axis=1), -1.0, 1.0)
+    ells = np.arange(_L_MAX + 1)
+    rhs = (2 * ells + 1) / (4 * np.pi) * sp.eval_legendre(ells, cosine[:, None])
+    assert_matches_oracle(lhs, rhs, rtol=0.0, atol=1e-12)
+
+
+def test_gradient_matches_finite_differences() -> None:
+    # differentiated in the points, which enter as a polynomial in (x, y, z),
+    # so the finite difference may leave the sphere; one point near a pole
+    points = jnp.asarray(
+        np.concatenate([_random_units(3, seed=9), [[0.01, -0.02, 0.9997]]])
+    )
+    assert_grad_matches_fd(lambda u: real_spherical_harmonics(u, 6), points, rtol=1e-8)
+
+
+def test_harmonics_trace() -> None:
+    points = jnp.asarray(_random_units(12, seed=10).reshape(3, 4, 3))
+    assert_traces(lambda u: real_spherical_harmonics(u, 6), points)
