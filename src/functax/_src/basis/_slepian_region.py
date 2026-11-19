@@ -20,7 +20,6 @@ import math
 import einx
 import equinox as eqx
 import jax.numpy as jnp
-import numpy as np
 from jaxtyping import Array, Bool, Float
 
 from functax._src.basis._legendre import (
@@ -64,6 +63,8 @@ class SlepianBasis(eqx.Module):
         >>> basis = slepian_polar_gap_basis(4, 0.3, n_modes=5)
         >>> basis.evaluate(jnp.array([[1.0, 0.0, 0.0]])).shape
         (1, 5)
+        >>> bool((basis.eigenvalues[:-1] >= basis.eigenvalues[1:]).all())
+        True
     """
 
     l_max: int = eqx.field(static=True)
@@ -90,6 +91,9 @@ class SlepianBasis(eqx.Module):
             >>> basis = slepian_polar_gap_basis(4, 0.3, n_modes=5)
             >>> basis.evaluate(jnp.array([[0.0, 1.0, 0.0]])).shape
             (1, 5)
+            >>> # orthonormal coefficients, so orthonormal functions on the sphere
+            >>> bool(jnp.allclose(basis.coeffs.T @ basis.coeffs, jnp.eye(5)))
+            True
         """
         harmonics = real_spherical_harmonics(unit_xyz, self.l_max)
         # g_k = ∑_i C_ik Y_i
@@ -104,16 +108,26 @@ def _finish(
     n_modes: int | None,
     eig_threshold: float | None,
 ) -> SlepianBasis:
+    """Diagonalise D, sort by decreasing concentration and select the modes."""
     if n_modes is not None and n_modes < 1:
         msg = f"'n_modes' must be at least 1, got {n_modes!r}"
         raise ValidationError(msg)
-    symmetric = 0.5 * (matrix + einx.id("row col -> col row", matrix))
+    transposed = einx.id("row col -> col row", matrix)
+    # D ← (D + Dᵀ)/2, symmetric against round-off
+    symmetric = 0.5 * (matrix + transposed)
+    # D g = λ g
     values, vectors = jnp.linalg.eigh(symmetric)
-    order = jnp.argsort(values)[::-1]
-    values, vectors = jnp.clip(values[order], 0.0, 1.0), vectors[:, order]
+    # descending λ
+    ascending = jnp.argsort(values)
+    order = ascending[::-1]
+    sorted_values = values[order]
+    # λ ∈ [0, 1], clipped against round-off
+    values = jnp.clip(sorted_values, 0.0, 1.0)
+    vectors = vectors[:, order]
     if n_modes is None and eig_threshold is None:
         # the Shannon number, tr D
-        n_modes = max(1, round(float(jnp.trace(matrix))))
+        trace = float(jnp.trace(matrix))
+        n_modes = max(1, round(trace))
     values, vectors = _select_modes(values, vectors, n_modes, eig_threshold)
     return SlepianBasis(l_max=l_max, coeffs=vectors, eigenvalues=values)
 
@@ -133,6 +147,12 @@ def slepian_region_basis(
     the region gives the exact Slepians, while a masked global grid (such as
     `gauss_legendre_grid` filtered by `spherical_polygon_mask`) has an error set
     by the grid spacing at the region's boundary.
+
+    Algorithm:
+        1. Evaluate the real harmonics at the region's quadrature nodes.
+        2. Form D = Yᵀ diag(w) Y by quadrature.
+        3. Diagonalise D, sort by decreasing concentration, and keep the
+           selected modes.
 
     Args:
         l_max: The highest spherical-harmonic degree.
@@ -159,6 +179,13 @@ def slepian_region_basis(
         >>> north = points[:, 2] > 0.5
         >>> slepian_region_basis(5, points[north], weights[north]).num_modes
         9
+
+        The whole sphere concentrates every harmonic fully:
+
+        >>> import jax.numpy as jnp
+        >>> whole = slepian_region_basis(3, points, weights, n_modes=16)
+        >>> bool(jnp.allclose(whole.eigenvalues, 1.0))
+        True
     """
     degree = _check_degree(l_max, "l_max")
     points = jnp.asarray(region_points_xyz)
@@ -169,6 +196,7 @@ def slepian_region_basis(
         msg = f"'region_weights' must have shape {expected}, got {weights.shape}"
         raise ValidationError(msg)
     harmonics = real_spherical_harmonics(points, degree)
+    # w_q Y_i(x_q)
     weighted = einx.multiply("node harmonic, node", harmonics, weights)
     # D_ij = ∑_q w_q Y_i(x_q) Y_j(x_q)
     matrix = einx.dot("node row, node col -> row col", weighted, harmonics)
@@ -190,6 +218,13 @@ def slepian_polar_gap_basis(
     poles. The region is zonal, so D is block-diagonal in m with blocks
     D^m_ll′ = ∫_{−cos Θ}^{cos Θ} P̄_l^m P̄_l′^m dz, computed exactly by
     Gauss–Legendre.
+
+    Algorithm:
+        1. Lay a Gauss–Legendre rule on z over [−cos Θ, cos Θ].
+        2. For each |m|, integrate the products of the P̄_l^m by quadrature,
+           and place the block at both orders ±m.
+        3. Diagonalise D, sort by decreasing concentration, and keep the
+           selected modes.
 
     Args:
         l_max: The highest spherical-harmonic degree.
@@ -213,6 +248,10 @@ def slepian_polar_gap_basis(
         >>> # the Shannon number 49 cos(0.2) ≈ 48
         >>> slepian_polar_gap_basis(6, 0.2).num_modes
         48
+        >>> # a threshold keeps the well-concentrated ones only
+        >>> basis = slepian_polar_gap_basis(6, 0.2, eig_threshold=0.5)
+        >>> bool((basis.eigenvalues > 0.5).all())
+        True
     """
     degree = _check_degree(l_max, "l_max")
     if not 0.0 < gap_colatitude < 0.5 * math.pi:
@@ -220,7 +259,9 @@ def slepian_polar_gap_basis(
         raise ValidationError(msg)
     n_quad = num_quadrature or (degree + 2)
     nodes, weights = gauss_legendre(n_quad)
+    # cos Θ, the half-width of the band in z
     half = math.cos(gap_colatitude)
+    # the nodes and weights scaled onto [−cos Θ, cos Θ]
     z = jnp.asarray(half * nodes)
     w = jnp.asarray(half * weights)
     p_bar = associated_legendre(z, degree)
@@ -230,11 +271,14 @@ def slepian_polar_gap_basis(
     for m_abs in range(degree + 1):
         columns = [i for i, (_, order) in enumerate(pairs) if order == m_abs]
         block_p = p_bar[:, jnp.asarray(columns)]
+        # w_q P̄_l^m(z_q)
         weighted = einx.multiply("node row, node", block_p, w)
+        # D^m_ll′ = ∑_q w_q P̄_l^m(z_q) P̄_l′^m(z_q)
         block = einx.dot("node row, node col -> row col", weighted, block_p)
         for m in {m_abs, -m_abs}:
             index = jnp.asarray([_sh_index(ell, m) for ell in range(m_abs, degree + 1)])
-            matrix = matrix.at[jnp.ix_(index, index)].set(block)
+            rows_and_cols = jnp.ix_(index, index)
+            matrix = matrix.at[rows_and_cols].set(block)
     return _finish(degree, matrix, n_modes, eig_threshold)
 
 
@@ -276,6 +320,11 @@ def spherical_polygon_mask(
         >>> points = jnp.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]])
         >>> spherical_polygon_mask(points, square, unit="degrees").tolist()
         [True, False]
+        >>> # the same square in radians; a quarter turn east is outside
+        >>> others = jnp.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        >>> radians = jnp.deg2rad(square)
+        >>> spherical_polygon_mask(others, radians, unit="radians").tolist()
+        [True, False]
     """
     polygon = jnp.asarray(polygon_lonlat)
     if polygon.ndim != 2 or polygon.shape[-1] != 2 or polygon.shape[0] < 3:
@@ -285,14 +334,26 @@ def spherical_polygon_mask(
         polygon = polygon.astype(jnp.float32)
     # the vertices a and their successors b, as unit vectors
     a = lonlat_to_unit(polygon, unit=unit)
-    b = a[np.roll(np.arange(a.shape[0]), -1)]
+    b = einx.roll("[edge] dim", a, shift=-1)
     p = jnp.asarray(points_xyz)
-    numerator = einx.dot("obs dim, edge dim -> obs edge", p, jnp.cross(a, b))
+    # --- the signed angle each edge subtends at p ---
+    normal = jnp.cross(a, b)
+    # (a × b) · p
+    numerator = einx.dot("obs dim, edge dim -> obs edge", p, normal)
+    # a · b
+    a_dot_b = einx.dot("edge dim, edge dim -> edge", a, b)
+    # a · p
+    a_dot_p = einx.dot("obs dim, edge dim -> obs edge", p, a)
+    # b · p
+    b_dot_p = einx.dot("obs dim, edge dim -> obs edge", p, b)
+    # (a · p)(b · p)
+    projection_product = a_dot_p * b_dot_p
+    # a · b − (a · p)(b · p)
     denominator = einx.subtract(
-        "edge, obs edge -> obs edge",
-        einx.dot("edge dim, edge dim -> edge", a, b),
-        einx.dot("obs dim, edge dim -> obs edge", p, a)
-        * einx.dot("obs dim, edge dim -> obs edge", p, b),
+        "edge, obs edge -> obs edge", a_dot_b, projection_product
     )
-    winding = einx.sum("obs [edge]", jnp.arctan2(numerator, denominator))
+    # --- the winding number ---
+    angles = jnp.arctan2(numerator, denominator)
+    # ∑ over the edges: 2π inside, 0 outside
+    winding = einx.sum("obs [edge]", angles)
     return winding > math.pi

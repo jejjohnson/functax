@@ -38,8 +38,12 @@ def _chebyshev(s: Float[Array, " obs"], n_radial: int) -> Float[Array, "obs radi
     if n_radial > 1:
         columns.append(s)
     for _ in range(2, n_radial):
-        columns.append(2.0 * s * columns[-1] - columns[-2])
-    return jnp.column_stack(columns)
+        # 2s T_k
+        doubled = 2.0 * s * columns[-1]
+        # T_{k+1} = 2s T_k − T_{k−1}
+        columns.append(doubled - columns[-2])
+    stacked = jnp.stack(columns)
+    return einx.id("radial obs -> obs radial", stacked)
 
 
 def shell_basis(
@@ -63,6 +67,12 @@ def shell_basis(
 
     The exact Laplacian eigenfunctions of the shell (spherical Bessel
     functions in radius) are out of scope.
+
+    Algorithm:
+        1. Split each point into its radius r = ‖x‖ and direction x/‖x‖.
+        2. Evaluate Y_lm on the directions and R_n on the mapped radii s.
+        3. Take the product of every harmonic with every radial polynomial,
+           the radial index fastest.
 
     Args:
         xyz: Points with radius in [r₀, r₁].
@@ -88,6 +98,25 @@ def shell_basis(
         >>> values, indices = shell_basis(xyz, 2, 3, r_inner=1.0, r_outer=2.0)
         >>> values.shape, indices[:4].tolist()
         ((2, 27), [[0, 0], [0, 1], [0, 2], [1, 0]])
+
+        With one Chebyshev polynomial the basis is the harmonics alone:
+
+        >>> from functax.basis.sphere import real_spherical_harmonics
+        >>> values, _ = shell_basis(
+        ...     xyz, 2, 1, r_inner=1.0, r_outer=2.0, radial="chebyshev"
+        ... )
+        >>> unit = jnp.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]])
+        >>> bool(jnp.allclose(values, real_spherical_harmonics(unit, 2)))
+        True
+
+        The shell must have r₀ < r₁:
+
+        >>> shell_basis(
+        ...     xyz, 2, 3, r_inner=2.0, r_outer=1.0
+        ... )  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        ValidationError: need 0 ≤ 'r_inner' < 'r_outer', got 2.0 and 1.0
     """
     degree = _check_degree(l_max, "l_max")
     count = _check_degree(n_radial, "n_radial", minimum=1)
@@ -99,23 +128,45 @@ def shell_basis(
         raise ValidationError(msg)
     xyz = jnp.asarray(xyz)
     _check_unit_points(xyz, "xyz")
-    # r = ‖x‖, and the unit direction x/‖x‖ (left as 0 at the origin)
-    radius = jnp.sqrt(einx.sum("obs [dim]", xyz**2))
-    unit = einx.divide("obs dim, obs", xyz, jnp.where(radius > 0, radius, 1.0))
+    # --- radius and direction ---
+    # ‖x‖²
+    squared_radius = einx.sum("obs [dim]", xyz**2)
+    # r = ‖x‖
+    radius = jnp.sqrt(squared_radius)
+    # the unit direction is left as 0 at the origin
+    safe_radius = jnp.where(radius > 0, radius, 1.0)
+    # x/‖x‖
+    unit = einx.divide("obs dim, obs", xyz, safe_radius)
     harmonics = real_spherical_harmonics(unit, degree)
+
+    # --- radial polynomials ---
     # s = 2(r − r₀)/(r₁ − r₀) − 1
     s = 2.0 * (radius - r_inner) / (r_outer - r_inner) - 1.0
     if radial == "legendre":
-        n = np.arange(count)
-        scale = np.sqrt(2.0 / (r_outer - r_inner)) * np.sqrt((2.0 * n + 1.0) / 2.0)
-        radial_values = legendre_polynomials(s, count - 1) * jnp.asarray(
-            scale, dtype=s.dtype
+        orders = np.arange(count)
+        # √(2/(r₁ − r₀))
+        interval_scale = np.sqrt(2.0 / (r_outer - r_inner))
+        # √((2n + 1)/2)
+        order_scale = np.sqrt((2.0 * orders + 1.0) / 2.0)
+        scale = interval_scale * order_scale
+        polynomials = legendre_polynomials(s, count - 1)
+        # R_n = √(2/(r₁ − r₀)) √((2n + 1)/2) P_n(s)
+        radial_values = einx.multiply(
+            "obs radial, radial", polynomials, jnp.asarray(scale, dtype=s.dtype)
         )
     else:
         radial_values = _chebyshev(s, count)
+
+    # --- products ---
+    # φ_lmn = Y_lm R_n, the radial index fastest
     values = einx.multiply(
         "obs harmonic, obs radial -> obs (harmonic radial)", harmonics, radial_values
     )
-    degrees = np.repeat(np.asarray(harmonic_degrees(degree)), count)
-    radial_index = np.tile(np.arange(count), (degree + 1) ** 2)
-    return values, jnp.asarray(np.stack([degrees, radial_index], axis=-1))
+    harmonic_degree = np.asarray(harmonic_degrees(degree))
+    n_harmonics = (degree + 1) ** 2
+    degrees = einx.id("harmonic -> (harmonic radial)", harmonic_degree, radial=count)
+    radial_index = einx.id(
+        "radial -> (harmonic radial)", np.arange(count), harmonic=n_harmonics
+    )
+    indices = einx.id("feature, feature -> feature (1 + 1)", degrees, radial_index)
+    return values, jnp.asarray(indices)

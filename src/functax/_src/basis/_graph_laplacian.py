@@ -40,6 +40,14 @@ def graph_laplacian_eigpairs(
     sparse solver (kernellib's ``laplacian_eigpairs`` takes sparse graphs and
     solves grid graphs by an exact Kronecker product, Lanczos or ARPACK).
 
+    Algorithm:
+        1. Check the adjacency, symmetrise it, A ← (A + Aᵀ)/2, and zero its
+           diagonal.
+        2. Assemble L = D − A, or I − D^{−½} A D^{−½}, and symmetrise it again
+           against round-off.
+        3. Diagonalise L densely on the host in float64 and keep the M
+           smallest pairs, clipping round-off negatives to 0.
+
     Args:
         adjacency: A, symmetric and non-negative, V × V.
         num_basis: M, the number of low-frequency eigenpairs, from 1 to V.
@@ -65,6 +73,14 @@ def graph_laplacian_eigpairs(
         >>> values, _ = graph_laplacian_eigpairs(path, 3, normalized=False)
         >>> bool(jnp.allclose(values, jnp.array([0.0, 1.0, 3.0]), atol=1e-12))
         True
+
+        Two disconnected edges have a zero eigenvalue per component:
+
+        >>> edge = jnp.array([[0.0, 1.0], [1.0, 0.0]])
+        >>> pair = jnp.zeros((4, 4)).at[:2, :2].set(edge).at[2:, 2:].set(edge)
+        >>> values, _ = graph_laplacian_eigpairs(pair, 2)
+        >>> bool(jnp.allclose(values, 0.0, atol=1e-12))
+        True
     """
     weights = np.array(adjacency, dtype=np.float64)
     if weights.ndim != 2 or weights.shape[0] != weights.shape[1]:
@@ -81,24 +97,35 @@ def graph_laplacian_eigpairs(
     if np.any(weights < 0):
         msg = "'adjacency' must have non-negative entries"
         raise ValidationError(msg)
-    weights = 0.5 * (weights + einx.id("row col -> col row", weights))
+    # --- symmetrise: A ← (A + Aᵀ)/2, no self-loops ---
+    transposed = einx.id("row col -> col row", weights)
+    weights = 0.5 * (weights + transposed)
     np.fill_diagonal(weights, 0.0)
 
-    degree = weights.sum(axis=1)
+    # --- assemble L ---
+    # dᵢ = ∑ⱼ Aᵢⱼ
+    degree = einx.sum("row [col]", weights)
     if normalized:
-        inverse_sqrt_degree = np.where(degree > 0, degree ** (-0.5), 0.0)
-        # I − D^{−½} A D^{−½}, the two-sided diagonal scaling written out
+        # d^{−½}, and 0 for an isolated vertex
+        inverse_sqrt = degree ** (-0.5)
+        inverse_sqrt_degree = np.where(degree > 0, inverse_sqrt, 0.0)
+        # D^{−½} A D^{−½}, the two-sided diagonal scaling written out
         scaled = einx.multiply(
             "row, row col, col -> row col",
             inverse_sqrt_degree,
             weights,
             inverse_sqrt_degree,
         )
+        # L = I − D^{−½} A D^{−½}
         laplacian = np.eye(n_vertices) - scaled
     else:
+        # L = D − A
         laplacian = np.diag(degree) - weights
-    laplacian = 0.5 * (laplacian + einx.id("row col -> col row", laplacian))
+    transposed = einx.id("row col -> col row", laplacian)
+    # L ← (L + Lᵀ)/2
+    laplacian = 0.5 * (laplacian + transposed)
 
+    # --- solve L v = λ v ---
     eigvals, eigvecs = np.linalg.eigh(laplacian)
     # clip the tiny negatives that round-off can leave
     eigvals = np.maximum(eigvals[:count], 0.0)
