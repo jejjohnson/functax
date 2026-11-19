@@ -63,8 +63,8 @@ assert draws.shape == (3, 2)
 
 - The solve happens once, when the plan is built. Applying the plan to a new field reuses it, so build one plan per pair of geometries.
 - Leave `degree=None`: the tail then has the degree the kernel needs for the system to be solvable (1 for the thin-plate spline).
-- For more than a few thousand sources, pass `neighbors=Q` to `RBF`, or use a `Wendland` kernel whose `support` covers a few neighbours.
+- When a dense solve over all the sources is too large, pass `neighbors=Q` to `RBF`: each target then solves a system of its Q nearest sources.
 - `Kriging` needs a positive definite covariance, so use `Wendland` or your own kernel, not `Polyharmonic`.
 - `nugget=` is the noise variance of the samples: with it the mean no longer passes through them and the variance there is no longer zero.
-- A kernel from kernellib or any callable `k(targets, sources)` is a `Kernel`. Kernels with hyperparameters to learn belong to kernellib; functax only reads them.
+- Any callable `k(targets, sources)` that returns an `(M, N)` array or a lineax operator is a `Kernel`, so a kernel from another library can be passed in.
 - `Points(metric=...)` sets how neighbours are found; a `RadialKernel` itself measures Euclidean distance in the coordinates as given.
