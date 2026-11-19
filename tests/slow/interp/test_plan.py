@@ -5,8 +5,6 @@ second or more (mostly einx compiling new shapes).
 
 from __future__ import annotations
 
-import itertools
-
 import einx
 import jax
 import jax.numpy as jnp
@@ -42,12 +40,13 @@ def _interior(nodes: list[np.ndarray], count: int, seed: int) -> np.ndarray:
 
 
 def _policy_grid() -> list[Policies]:
-    """Every outside × boundary × extent combination except raise."""
-    combinations = itertools.product(
-        ("nan", "clamp", "extrapolate"),
-        ("mirror", "wrap", "edge", "constant"),
-        ("nodes", "cells"),
-    )
+    """Each outside (but raise), boundary and extent option in at least one policy."""
+    combinations = [
+        ("nan", "mirror", "nodes"),
+        ("clamp", "wrap", "cells"),
+        ("extrapolate", "edge", "nodes"),
+        ("nan", "constant", "cells"),
+    ]
     return [Policies(outside=o, boundary=b, extent=e) for o, b, e in combinations]
 
 

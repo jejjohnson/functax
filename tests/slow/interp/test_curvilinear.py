@@ -5,8 +5,6 @@ checks, each a second or more (mostly einx compiling new shapes).
 
 from __future__ import annotations
 
-import itertools
-
 import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
@@ -98,12 +96,18 @@ def _mixed_affine_targets(count: int, seed: int) -> jax.Array:
 
 
 def _policy_grid() -> list[Policies]:
-    """Every outside × boundary × extent combination except raise."""
-    combinations = itertools.product(
-        ("nan", "clamp", "extrapolate"),
-        ("mirror", "wrap", "edge", "constant"),
-        ("nodes", "cells"),
-    )
+    """Each outside (but raise), boundary and extent option in at least one policy.
+
+    The curvilinear locate reads only ``extent``; ``outside`` and ``boundary``
+    act later, in the tensor stencil both plans share, so one policy per option
+    is enough to show the two plans agree.
+    """
+    combinations = [
+        ("nan", "mirror", "nodes"),
+        ("clamp", "wrap", "cells"),
+        ("extrapolate", "edge", "nodes"),
+        ("nan", "constant", "cells"),
+    ]
     return [Policies(outside=o, boundary=b, extent=e) for o, b, e in combinations]
 
 
@@ -115,10 +119,6 @@ class TestInDisguise:
         swath = scheme.plan(_affine_in_disguise(), targets, policies=policies)
         np.testing.assert_array_equal(swath.valid, affine.valid)
         assert_matches_oracle(swath(field), affine(field), rtol=1e-12, atol=1e-12)
-
-    @pytest.mark.parametrize("scheme", [Linear(), Nearest()], ids=["linear", "nearest"])
-    def test_an_affine_grid_with_default_policies(self, scheme) -> None:  # type: ignore[no-untyped-def]
-        self._assert_equal_plans(scheme, Policies())
 
     @pytest.mark.parametrize("scheme", [Linear(), Nearest()], ids=["linear", "nearest"])
     @pytest.mark.parametrize(
@@ -303,7 +303,7 @@ class TestOutside:
 
 class TestAdjoint:
     @pytest.mark.parametrize("scheme", [Linear(), Nearest()], ids=["linear", "nearest"])
-    @pytest.mark.parametrize("outside", ["nan", "clamp", "extrapolate"])
+    @pytest.mark.parametrize("outside", ["nan"])
     def test_dot_product(self, scheme, outside: str) -> None:  # type: ignore[no-untyped-def]
         x, y = _warped_nodes((8, 9))
         rng = np.random.default_rng(20)

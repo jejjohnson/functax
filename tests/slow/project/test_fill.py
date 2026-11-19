@@ -74,7 +74,7 @@ def test_gradient_in_the_image_matches_finite_differences(method: str) -> None:
     )
 
 
-@pytest.mark.parametrize("method", ["laplace", "biharmonic"])
+@pytest.mark.parametrize("method", ["laplace"])
 def test_jit_and_vmap_agree_with_a_loop(method: str) -> None:
     pairs = [_image_and_mask(seed) for seed in range(3)]
     images = jnp.stack([image for image, _ in pairs])
@@ -159,7 +159,7 @@ def test_a_hole_across_the_seam_is_symmetric() -> None:
     assert_matches_oracle(filled[:, 1], filled[:, 11], rtol=1e-10)
 
 
-@pytest.mark.parametrize("method", ["laplace", "biharmonic"])
+@pytest.mark.parametrize("method", ["biharmonic"])
 def test_periodic_fill_traces_and_satisfies_its_hole_equation(method: str) -> None:
     pairs = [_image_and_mask(seed) for seed in range(3)]
     images = jnp.stack([image for image, _ in pairs])

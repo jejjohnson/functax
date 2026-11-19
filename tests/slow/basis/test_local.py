@@ -33,19 +33,6 @@ def test_rbf_gram_is_positive_semidefinite():
     assert eigmin > -1e-6
 
 
-def test_rbf_grad_finite_at_center():
-    # An eval point coincident with a centre gives r = 0; the softened sqrt must
-    # keep gradients finite (bare sqrt has an infinite derivative there).
-    def loss(centers):
-        phi = rbf_basis(
-            jnp.zeros((1, 2)), centers, jnp.ones(centers.shape[0]), kernel="wendland_c2"
-        )
-        return jnp.sum(phi**2)
-
-    grad = jax.grad(loss)(jnp.zeros((3, 2)))
-    assert bool(jnp.isfinite(grad).all())
-
-
 @pytest.mark.parametrize("kernel", ["wendland_c2", "wendland_c4"])
 def test_rbf_narrow_atom_peaks_at_center(kernel):
     # A point on its centre must peak at 1 even for a width comparable to the

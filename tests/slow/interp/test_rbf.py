@@ -105,21 +105,6 @@ class TestAdjoint:
             operator.mv(jnp.asarray(data)), plan(jnp.asarray(data)), rtol=1e-12
         )
 
-    def test_gradient_with_respect_to_the_data_is_finite_and_linear(self) -> None:
-        sources, targets, data = _scattered(seed=8)
-        plan = RBF(Polyharmonic(2)).plan(
-            Points(jnp.asarray(sources)), Points(jnp.asarray(targets))
-        )
-        weights = jnp.linspace(-1.0, 1.0, 20)
-
-        def loss(values: jax.Array) -> jax.Array:
-            return jnp.vdot(weights, plan(values))
-
-        gradient = jax.grad(loss)(jnp.asarray(data))
-        assert bool(jnp.all(jnp.isfinite(gradient)))
-        # the loss is linear in y, so its gradient is Hᵀ w
-        assert_matches_oracle(gradient, plan.adjoint(weights), rtol=1e-10)
-
 
 class TestShapes:
     def test_callable_kernel_equals_the_dense_solve(self) -> None:

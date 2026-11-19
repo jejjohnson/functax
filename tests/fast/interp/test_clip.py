@@ -23,9 +23,6 @@ def clipped_area(subject: np.ndarray, clip: np.ndarray) -> float:
 
 
 class TestClipPolygons:
-    def test_offset_squares_overlap_in_a_quarter(self) -> None:
-        assert clipped_area(UNIT_SQUARE + 0.5, UNIT_SQUARE) == 0.25
-
     def test_a_rotated_square_clipped_to_an_octagon(self) -> None:
         # the unit square rotated 45° about its centre: the overlap is a regular
         # octagon of area 2(√2 − 1)

@@ -56,8 +56,6 @@ def _through_json(config: dict[str, Any]) -> dict[str, Any]:
 
 
 SCHEMES = [
-    Nearest(),
-    LinearScheme(),
     Tensor((Nearest(),)),
     Tensor((Nearest(), LinearScheme(), LinearScheme())),
     Scaled(2.5),

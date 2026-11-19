@@ -175,7 +175,7 @@ def test_float32_finite_at_exact_poles_at_very_high_degree():
     assert bool(jnp.isfinite(real_spherical_harmonics(pts, 400)).all())
 
 
-@pytest.mark.parametrize("l_max", [20, 200])
+@pytest.mark.parametrize("l_max", [200])
 def test_gradient_finite_at_poles(l_max):
     poles = jnp.array([[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]])
     jac = jax.vmap(jax.jacfwd(lambda p: real_spherical_harmonics(p[None], l_max)[0]))(

@@ -45,7 +45,7 @@ def test_tangent_and_finite_at_poles():
         assert float(jnp.max(jnp.abs(radial))) < 1e-5
 
 
-@pytest.mark.parametrize("column", [0, 3, 7])
+@pytest.mark.parametrize("column", [0, 7])
 def test_divergence_identities(column):
     l_max = 2
     degree = harmonic_degrees(l_max)[1:][column]

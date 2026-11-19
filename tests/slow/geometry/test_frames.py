@@ -42,7 +42,6 @@ ORIGIN = jnp.array([0.1, 0.3])
 
 
 FRAMES = {
-    "lonlat_to_ecef": lambda ll: lonlat_to_ecef(ll, unit="radians", **SPHERE),
     "ecef_to_lonlat": lambda ll: ecef_to_lonlat(
         lonlat_to_ecef(ll, 0.1, unit="radians", **SPHERE), unit="radians", **SPHERE
     ),

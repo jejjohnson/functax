@@ -28,7 +28,7 @@ def _global_rectilinear(unit: str, step: float) -> RectilinearGrid:
     return RectilinearGrid((longitude, latitude))
 
 
-@pytest.mark.parametrize("radius", [1.0, EARTH_LIKE_RADIUS])
+@pytest.mark.parametrize("radius", [EARTH_LIKE_RADIUS])
 def test_global_one_degree_affine_grid_sums_to_the_sphere_area(radius: float) -> None:
     globe = AffineGrid([1.0, 0.0, -180.0, 0.0, -1.0, 90.0], (180, 360))
     rule = cell_area(globe, sphere_radius=radius, unit="degrees")

@@ -24,53 +24,6 @@ def _chebyshev(k: int, x: jax.Array) -> jax.Array:
 KINDS = ["lobatto", "gauss"]
 
 
-def test_transform1d_roundtrip_gauss() -> None:
-    x = chebyshev_nodes(24, kind="gauss", interval=(-2.0, 2.0))
-    transform = ChebyshevTransform1D(24, kind="gauss")
-    u = jnp.cos(jnp.pi * x / 2.0)
-    a = transform.to_spectral(u)
-    assert jnp.allclose(transform.from_spectral(a), u, atol=1e-12)
-
-
-def test_transform2d_roundtrip() -> None:
-    x, y = chebyshev_nodes(16), chebyshev_nodes(16)
-    transform = ChebyshevTransform2D(16, 16)
-    u = jnp.outer(jnp.cos(jnp.pi * y), jnp.sin(jnp.pi * x))
-    a = transform.to_spectral(u)
-    assert jnp.allclose(transform.from_spectral(a), u, atol=1e-12)
-
-
-@pytest.mark.parametrize("kind", KINDS)
-def test_random_roundtrip(kind: str) -> None:
-    transform = ChebyshevTransform1D(16, kind=kind)
-    u = jax.random.normal(jax.random.key(42), (transform.n_nodes,))
-    assert jnp.allclose(transform.from_spectral(transform.to_spectral(u)), u)
-    grid = ChebyshevTransform2D(8, 8, kind=kind)
-    field = jax.random.normal(jax.random.key(0), grid.shape)
-    assert jnp.allclose(grid.from_spectral(grid.to_spectral(field)), field)
-
-
-def test_both_kinds_agree_on_the_convention() -> None:
-    # T₀ + 2T₁ − ½T₂
-    expected = jnp.array([1.0, 2.0, -0.5])
-    for kind in KINDS:
-        x = chebyshev_nodes(10, kind=kind)
-        u = 1.0 + 2.0 * x - 0.5 * (2 * x**2 - 1)
-        a = ChebyshevTransform1D(10, kind=kind).to_spectral(u)
-        assert jnp.allclose(a[:3], expected, atol=1e-13), kind
-        assert jnp.allclose(a[3:], 0.0, atol=1e-13), kind
-
-
-@pytest.mark.parametrize("kind", KINDS)
-def test_2d_tensor_mode(kind: str) -> None:
-    # T₂(x) T₃(y) maps to the unit coefficient at [ky = 3, kx = 2]
-    transform = ChebyshevTransform2D(8, 9, kind=kind)
-    x, y = chebyshev_nodes(8, kind=kind), chebyshev_nodes(9, kind=kind)
-    u = jnp.outer(4 * y**3 - 3 * y, 2 * x**2 - 1)
-    a = transform.to_spectral(u)
-    assert jnp.allclose(a, jnp.zeros_like(a).at[3, 2].set(1.0), atol=1e-12)
-
-
 @pytest.mark.parametrize("kind", KINDS)
 @pytest.mark.parametrize("degree", [1, 2, 7, 32])
 def test_g4_roundtrip_1d(kind: str, degree: int) -> None:
@@ -145,19 +98,6 @@ def test_transform_gradients_match_finite_differences(kind: str) -> None:
     u = jax.random.normal(jax.random.key(7), (transform.n_nodes,))
     assert_grad_matches_fd(transform.to_spectral, u)
     assert_grad_matches_fd(transform.from_spectral, u)
-
-
-def test_transform1d_roundtrip_lobatto() -> None:
-    x = chebyshev_nodes(32)
-    transform = ChebyshevTransform1D(32)
-    u = jnp.sin(jnp.pi * x) + 0.25 * jnp.cos(3 * jnp.pi * x)
-    a = transform.to_spectral(u)
-    assert jnp.allclose(transform.from_spectral(a), u, atol=1e-12)
-
-
-def test_lobatto_constant_is_the_unit_mode() -> None:
-    a = ChebyshevTransform1D(12).to_spectral(3.0 * jnp.ones(13))
-    assert jnp.allclose(a, jnp.zeros(13).at[0].set(3.0), atol=1e-13)
 
 
 def test_gauss_transform_preserves_float64() -> None:

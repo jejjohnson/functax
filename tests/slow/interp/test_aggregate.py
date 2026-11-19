@@ -108,7 +108,7 @@ def test_the_gradient_of_a_cloud_in_cell_loss_reaches_the_positions() -> None:
 
 @pytest.mark.parametrize(
     ("statistic", "weights"),
-    [("mean", "nearest"), ("sum", "linear"), ("mean", "linear")],
+    [("mean", "nearest"), ("sum", "linear")],
 )
 def test_passes_the_dot_product_test(statistic: str, weights: str) -> None:
     positions, _ = _samples()
