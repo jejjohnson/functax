@@ -102,14 +102,30 @@ class TestRule:
         rule = trapezoid(jnp.arange(4))
         assert jnp.issubdtype(rule.weights.dtype, jnp.floating)
 
-    def test_rejects_weights_that_are_not_1d(self) -> None:
+    def test_grid_weights_take_nodes_with_or_without_coordinates(self) -> None:
+        # the cells of a 2 × 3 image: scalar nodes, or (x, y) per node
+        scalar = Rule(jnp.zeros((2, 3)), jnp.ones((2, 3)))
+        located = Rule(jnp.zeros((2, 3, 2)), jnp.ones((2, 3)))
+        assert scalar.weights.shape == located.weights.shape == (2, 3)
+        assert located.nodes.shape == (2, 3, 2)
+
+    def test_rejects_scalar_weights(self) -> None:
         # the import hook in conftest.py checks the annotation before the body
         with pytest.raises((ValidationError, TypeCheckError), match="weights"):
-            Rule(jnp.zeros(2), jnp.zeros((2, 2)))
+            Rule(jnp.zeros(()), jnp.zeros(()))
 
-    def test_rejects_nodes_without_one_entry_per_weight(self) -> None:
+    @pytest.mark.parametrize(
+        ("nodes", "weights"),
+        [
+            (jnp.zeros(3), jnp.zeros(2)),
+            (jnp.zeros((3, 2)), jnp.zeros((2, 3))),
+            (jnp.zeros(2), jnp.zeros((2, 3))),
+            (jnp.zeros((2, 3, 2, 1)), jnp.zeros((2, 3))),
+        ],
+    )
+    def test_rejects_nodes_without_the_weights_shape(self, nodes, weights) -> None:
         with pytest.raises((ValidationError, TypeCheckError), match=r"weights|nodes"):
-            Rule(jnp.zeros(3), jnp.zeros(2))
+            Rule(nodes, weights)
 
 
 class TestValidation:

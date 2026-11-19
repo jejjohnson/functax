@@ -46,8 +46,8 @@ class CurveRule(Rule):
         normals: The unit normals nₖ, (K, 2), or ``None`` when D ≠ 2.
 
     Raises:
-        ValidationError: As `Rule`, or if ``normals`` is given and does not
-            have the shape of 2-D ``nodes``.
+        ValidationError: As `Rule`, or if ``weights`` is not (K,), or
+            ``normals`` is given and does not have the shape of 2-D ``nodes``.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -77,6 +77,9 @@ class CurveRule(Rule):
     normals: Float[Array, " node dim"] | None = None
 
     def __check_init__(self) -> None:
+        if self.weights.ndim != 1:
+            msg = f"'weights' must be (K,), got shape {self.weights.shape}"
+            raise ValidationError(msg)
         if self.normals is None:
             return
         if self.nodes.ndim != 2 or self.nodes.shape[1] != 2:

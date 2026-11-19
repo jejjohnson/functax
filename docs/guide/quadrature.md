@@ -57,7 +57,7 @@ bool(jnp.isclose(earth.weights.sum(), 4 * math.pi * 6.371e6**2))  # True
 
 ## Cell areas on grids
 
-A field of cell means $y_k$ on a grid integrates as $\sum_k \lvert C_k \rvert y_k$, with $\lvert C_k \rvert$ the area of cell $k$. [`cell_area`](xref:api#functax.quad.cell_area) returns that sum as a rule: its nodes are the cell centres and its weights the cell areas, one per cell in the order of the field's flattened values. Every pixel of an [`AffineGrid`](xref:api#functax.geometry.AffineGrid) with transform $(a, b, c, d, e, f)$ has the area $\lvert ae - bd \rvert$, and a cell of a [`RectilinearGrid`](xref:api#functax.geometry.RectilinearGrid) is the product of its widths along each axis, from the edges of [`Axis.cell_edges`](xref:api#functax.geometry.Axis.cell_edges) (the axis's `edges`, or the midpoints between its nodes).
+A field of cell means $y_k$ on a grid integrates as $\sum_k \lvert C_k \rvert y_k$, with $\lvert C_k \rvert$ the area of cell $k$. [`cell_area`](xref:api#functax.quad.cell_area) returns that sum as a rule: its weights are the cell areas in the grid's shape, (rows, cols) for an image, and its nodes the cell centres, with a trailing axis of coordinates. Every pixel of an [`AffineGrid`](xref:api#functax.geometry.AffineGrid) with transform $(a, b, c, d, e, f)$ has the area $\lvert ae - bd \rvert$, and a cell of a [`RectilinearGrid`](xref:api#functax.geometry.RectilinearGrid) is the product of its widths along each axis, from the edges of [`Axis.cell_edges`](xref:api#functax.geometry.Axis.cell_edges) (the axis's `edges`, or the midpoints between its nodes).
 
 ```python
 import math
@@ -68,17 +68,17 @@ from functax.quad import cell_area
 # a 64 × 64 scene of 30 m pixels, and a uniform enhancement per unit area
 plume_grid = AffineGrid([30.0, 0.0, 500000.0, 0.0, -30.0, 3600000.0], (64, 64))
 rule = cell_area(plume_grid)
-rule.nodes.shape, rule.weights[0].tolist()  # ((4096, 2), 900.0)
-enhancement = jnp.full(64 * 64, 2e-3)
-float(rule.weights @ enhancement)  # 7372.800000000001
+rule.nodes.shape, rule.weights[0, 0].tolist()  # ((64, 64, 2), 900.0)
+enhancement = jnp.full((64, 64), 2e-3)
+float(jnp.sum(rule.weights * enhancement))  # 7372.800000000001
 ```
 
-With `sphere_radius=a` the coordinates are longitude $\lambda$ and latitude $\varphi$, and `unit=` (`"degrees"` or `"radians"`) is required, as it is for [`Conservative`](xref:api#functax.interp.Conservative) with `sphere=True`. A lon/lat cell then has the area $a^2 \lvert \Delta \lambda \rvert \lvert \sin \varphi_{\text{top}} - \sin \varphi_{\text{bottom}} \rvert$, so a global grid sums to $4 \pi a^2$. An `AffineGrid` must be north-up, with rows of latitude, and a `RectilinearGrid` has its two axes in $(\lambda, \varphi)$ order.
+With `sphere_radius=a` the coordinates are longitude $\lambda$ and latitude $\varphi$, and `unit=` (`"degrees"` or `"radians"`) is required, as it is for [`Conservative`](xref:api#functax.interp.Conservative) with `sphere=True`. A lon/lat cell then has the area $a^2 \lvert \Delta \lambda \rvert \lvert \sin \varphi_{\text{top}} - \sin \varphi_{\text{bottom}} \rvert$, so a global grid sums to $4 \pi a^2$. An `AffineGrid` must be north-up, with rows of latitude, so its weights are $(N_\varphi, N_\lambda)$ like a map. A `RectilinearGrid` has its two axes in $(\lambda, \varphi)$ order and its weights are $(N_\lambda, N_\varphi)$, so a field stored as (lat, lon) is transposed before it meets them. On a grid that is not square, integrix's shape check raises an error at the mismatch instead of pairing each value with another cell's area.
 
 ```python
 globe = AffineGrid([1.0, 0.0, -180.0, 0.0, -1.0, 90.0], (180, 360))
 areas = cell_area(globe, sphere_radius=6.371e6, unit="degrees").weights
-areas.shape  # (64800,)
+areas.shape  # (180, 360)
 bool(jnp.isclose(areas.sum(), 4 * math.pi * 6.371e6**2, rtol=1e-12))  # True
 ```
 
