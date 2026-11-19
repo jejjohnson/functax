@@ -79,7 +79,7 @@ assert jnp.allclose(clenshaw(jnp.array(0.5), jnp.array([1.0, 2.0])), 2.0)
 ## Rules
 
 - Reach for these only when no scheme fits. Composing `Tensor`, `plan.derivative`, `plan[window]` and `outer @ inner` covers most needs without a new class.
-- A new local scheme is a `LocalScheme` with a `bases(source)` method that returns one `Basis` per axis; the stencil, the policies and the adjoint then come for free.
+- A new local scheme is a `LocalScheme` with a `bases(n_axes)` method that returns one `Basis` per source axis; the stencil, the policies and the adjoint then come for free.
 - A new global scheme supplies a `Fit` and a `Readout`. Write `apply_adjoint` by hand for both, and check it with the dot-product test ⟨Hx, r⟩ = ⟨x, Hᵀr⟩.
 - Build stencils on the host. `Stencil(..., check=True)` validates the indices there; functax's own builders pass `check=False` because the check would become a host callback under `jit`.
 - `compose(..., merge=True)` needs concrete indices, so it cannot run on traced stencils.
