@@ -122,7 +122,7 @@ def example_figure() -> None:
     logger.info("example: max |map error| = {:.2f} ppb", worst)
     n_pixels = int(einx.sum("[cell]", ns["cloud_free"]))
     logger.info("example: N_Ωy = {}", n_pixels)
-    grid_area = float(einx.sum("[cell]", ns["area"].weights)) / 1e6
+    grid_area = float(einx.sum("[cell]", ns["cell_weights"])) / 1e6
     logger.info("example: grid area {:.0f} km²", grid_area)
 
     extent = (-104.2, -103.4, 31.6, 32.4)
