@@ -29,7 +29,9 @@ import jax.numpy as jnp
 from functax.geometry import Axis, Points, RectilinearGrid
 from functax.interp import BSpline, Linear, Plan, plan_key
 
-grid = RectilinearGrid((Axis(jnp.linspace(0.0, 1.0, 11)), Axis(jnp.linspace(0.0, 2.0, 21))))
+grid = RectilinearGrid(
+    (Axis(jnp.linspace(0.0, 1.0, 11)), Axis(jnp.linspace(0.0, 2.0, 21)))
+)
 x, y = jnp.meshgrid(grid.axes[0].values, grid.axes[1].values, indexing="ij")
 field = (x**2 + 3.0 * y).ravel()  # (231,), row-major
 targets = Points(jnp.array([[0.25, 0.5], [0.75, 1.5], [0.4, 1.1]]))

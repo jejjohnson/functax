@@ -59,7 +59,10 @@ assert jnp.allclose((areas.ravel() * field).sum(), 100.0 * field.sum())
 
 # a lon/lat grid, with a periodic longitude, and sites on the sphere
 globe = RectilinearGrid(
-    (Axis(jnp.arange(0.0, 360.0, 30.0), period=360.0), Axis(jnp.linspace(-75.0, 75.0, 6)))
+    (
+        Axis(jnp.arange(0.0, 360.0, 30.0), period=360.0),
+        Axis(jnp.linspace(-75.0, 75.0, 6)),
+    )
 )
 assert globe.shape == (12, 6)
 unit = lonlat_to_unit(jnp.array([[2.35, 48.86]]), unit="degrees")  # (1, 3)

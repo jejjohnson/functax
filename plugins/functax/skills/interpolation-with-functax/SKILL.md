@@ -47,7 +47,9 @@ from functax.geometry import Axis, Points, RectilinearGrid
 from functax.interp import Linear, Policies
 
 # a model state on a 21 × 21 grid, observed at three sites
-grid = RectilinearGrid((Axis(jnp.linspace(0.0, 10.0, 21)), Axis(jnp.linspace(0.0, 10.0, 21))))
+grid = RectilinearGrid(
+    (Axis(jnp.linspace(0.0, 10.0, 21)), Axis(jnp.linspace(0.0, 10.0, 21)))
+)
 x, y = jnp.meshgrid(grid.axes[0].values, grid.axes[1].values, indexing="ij")
 truth = (jnp.sin(0.5 * x) + 0.1 * y).ravel()  # (441,)
 sites = Points(jnp.array([[2.0, 3.0], [4.5, 1.25], [7.3, 8.8]]))

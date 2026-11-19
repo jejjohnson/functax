@@ -53,7 +53,9 @@ from functax.interp import (
 cube = RectilinearGrid(
     (Axis(jnp.arange(24.0)), Axis(jnp.arange(4.0)), Axis(jnp.arange(5.0)))
 )
-target = Points(jnp.array([[3.4, 1.5, 2.5], [3.4, 9.0, 2.5]]))  # the second is off the grid
+target = Points(
+    jnp.array([[3.4, 1.5, 2.5], [3.4, 9.0, 2.5]])
+)  # the second is off the grid
 plan = Tensor((Nearest(), Linear(), Linear())).plan(cube, target)
 field = jnp.arange(24 * 4 * 5.0)
 values = plan(field)  # (2,)

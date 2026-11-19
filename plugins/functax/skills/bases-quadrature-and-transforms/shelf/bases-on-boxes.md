@@ -38,7 +38,9 @@ from functax.basis.vector import divfree_basis
 from functax.project import least_squares
 
 # fit a field on the box [-1, 1]² with Laplacian eigenfunctions
-x = jnp.stack(jnp.meshgrid(jnp.linspace(-0.9, 0.9, 12), jnp.linspace(-0.9, 0.9, 12)), -1)
+x = jnp.stack(
+    jnp.meshgrid(jnp.linspace(-0.9, 0.9, 12), jnp.linspace(-0.9, 0.9, 12)), -1
+)
 x = x.reshape(-1, 2)  # (144, 2)
 Phi, eigenvalues = fourier_basis(x, num_basis_per_dim=4, L=1.0)  # (144, 16), (16,)
 y = jnp.cos(0.5 * jnp.pi * x[:, 0]) * jnp.cos(0.5 * jnp.pi * x[:, 1])  # the first mode
@@ -64,7 +66,10 @@ flow, _ = divfree_basis(x, num_basis_per_dim=3, L=1.0)
 assert flow.shape == (144, 9, 2)
 
 # P₂(x) = (3x² − 1)/2
-assert jnp.allclose(legendre_series(jnp.array([0.0, 1.0]), jnp.array([0.0, 0.0, 1.0])), jnp.array([-0.5, 1.0]))
+assert jnp.allclose(
+    legendre_series(jnp.array([0.0, 1.0]), jnp.array([0.0, 0.0, 1.0])),
+    jnp.array([-0.5, 1.0]),
+)
 ```
 
 ## Rules

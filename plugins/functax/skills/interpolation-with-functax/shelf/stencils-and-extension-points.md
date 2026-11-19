@@ -70,7 +70,9 @@ mixed = tensor_stencil(
     grid, target, (NearestBasis(), LinearBasis()), policies=Policies()
 )
 assert mixed.n_taps == 2
-assert jnp.allclose(mixed.apply(jnp.arange(12.0)), 6.5)  # row 1, between columns 2 and 3
+assert jnp.allclose(
+    mixed.apply(jnp.arange(12.0)), 6.5
+)  # row 1, between columns 2 and 3
 
 # T₀ + 2 T₁ at x = 0.5
 assert jnp.allclose(clenshaw(jnp.array(0.5), jnp.array([1.0, 2.0])), 2.0)

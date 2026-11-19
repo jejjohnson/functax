@@ -28,7 +28,11 @@ Open this when the field lives on the sphere, globally or over a region, and you
 import jax.numpy as jnp
 
 from functax.basis.slepian import shannon_number, slepian_cap_basis
-from functax.basis.sphere import harmonic_degrees, needlet_basis, real_spherical_harmonics
+from functax.basis.sphere import (
+    harmonic_degrees,
+    needlet_basis,
+    real_spherical_harmonics,
+)
 from functax.geometry import fibonacci_sphere
 from functax.project import least_squares
 

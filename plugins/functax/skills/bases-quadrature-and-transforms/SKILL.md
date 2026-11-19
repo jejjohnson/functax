@@ -63,7 +63,11 @@ assert jnp.allclose(rule.weights @ fitted, 4 * jnp.pi / 3, atol=1e-3)
 
 # the same coefficients by projection on the rule's nodes
 exact = rule.nodes[:, 2] ** 2 + 0.5 * rule.nodes[:, 0]
-assert jnp.allclose(galerkin(real_spherical_harmonics(rule.nodes, 4), exact, weights=rule.weights), c, atol=1e-3)
+assert jnp.allclose(
+    galerkin(real_spherical_harmonics(rule.nodes, 4), exact, weights=rule.weights),
+    c,
+    atol=1e-3,
+)
 
 # differentiate the field as a function: x is a degree-1 harmonic, Δ_S x = −2x
 n = jnp.array([0.6, 0.0, 0.8])
