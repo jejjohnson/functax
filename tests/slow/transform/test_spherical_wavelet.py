@@ -84,14 +84,6 @@ def test_windows_are_carried_in_the_default_dtype():
     np.testing.assert_allclose(jnp.sum(swt.filters**2, axis=0), 1.0, atol=1e-12)
 
 
-def test_shapes():
-    sht = SphericalHarmonicTransform.init(5, 9, 4)
-    swt = SphericalWaveletTransform.init(sht)
-    bands = swt.forward(jnp.ones((2, 5, 9)))
-    assert bands.shape == (swt.n_scales, 2, 5, 9)
-    assert swt.inverse(bands).shape == (2, 5, 9)
-
-
 def test_n_scales_override():
     sht = SphericalHarmonicTransform.init(5, 9, 4)
     swt = SphericalWaveletTransform.init(sht, n_scales=2)

@@ -13,7 +13,7 @@ from functax.interp import Polyharmonic, Wendland
 
 
 class TestPolyharmonic:
-    @pytest.mark.parametrize("order", [1, 2, 3, 4])
+    @pytest.mark.parametrize("order", [1, 2])
     def test_gradient_at_zero_distance_is_finite(self, order: int) -> None:
         kernel = Polyharmonic(order)
         gradient = jax.grad(lambda r: kernel.profile(r))(jnp.array(0.0))

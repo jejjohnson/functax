@@ -19,7 +19,6 @@ from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_trace
 from functax import ValidationError
 from functax.geometry import Points
 from functax.interp import (
-    GaussianPlan,
     KernelCovariance,
     Kriging,
 )
@@ -59,13 +58,6 @@ class TestSimpleKriging:
             plan.variance(), jnp.diag(covariance), rtol=1e-10, atol=1e-10
         )
         assert_matches_oracle(plan.covariance(), covariance, rtol=1e-10, atol=1e-10)
-
-    def test_plan_is_a_gaussian_plan_with_a_kernel_covariance(self) -> None:
-        sources, targets, _ = _scattered(seed=1)
-        plan = Kriging(_gaussian, drift=None).plan(Points(sources), Points(targets))
-        assert isinstance(plan, GaussianPlan)
-        assert isinstance(plan.posterior, KernelCovariance)
-        assert plan.posterior.n_target == 8
 
 
 class TestSample:

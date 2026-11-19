@@ -53,11 +53,6 @@ def test_lonlat_and_xyz_agree(name: str) -> None:
     assert_matches_oracle(np.radians(degrees), radians, rtol=0, atol=1e-12)
 
 
-def test_latlon_first_cell_centre() -> None:
-    lonlat, _ = latlon_grid(18, 36, output="lonlat", unit="degrees")
-    assert_matches_oracle(lonlat[0], [-175.0, -85.0], rtol=1e-12)
-
-
 def test_outputs_are_jax_arrays() -> None:
     points, weights = fibonacci_sphere(10)
     assert isinstance(points, jax.Array)

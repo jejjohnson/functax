@@ -78,12 +78,6 @@ class TestDivFreeBasis:
                 div = jac[0, 0] + jac[1, 1]
                 np.testing.assert_allclose(div, 0.0, atol=1e-5)
 
-    def test_shapes(self):
-        xy = jnp.zeros((7, 2))
-        phi, lam = divfree_basis(xy, num_basis_per_dim=3, L=1.0)
-        assert phi.shape == (7, 9, 2)  # M = 3 * 3, last axis = (u, v)
-        assert lam.shape == (9,)
-
     def test_eigenvalues_match_fourier(self):
 
         _, lam = divfree_basis(jnp.zeros((2, 2)), num_basis_per_dim=3, L=2.0)

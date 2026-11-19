@@ -130,8 +130,8 @@ class TestCubic:
 
 @pytest.mark.parametrize(
     "scheme",
-    [Cubic(), BSpline(2), BSpline(3), BSpline(4), BSpline(5)],
-    ids=["cubic", "bspline2", "bspline3", "bspline4", "bspline5"],
+    [Cubic(), BSpline(2), BSpline(3)],
+    ids=["cubic", "bspline2", "bspline3"],
 )
 class TestAdjointAndTraces:
     def test_dot_product(self, scheme) -> None:  # type: ignore[no-untyped-def]

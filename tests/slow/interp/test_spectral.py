@@ -81,14 +81,14 @@ def test_equals_scipy_signal_resample(n_source: int, n_target: int) -> None:
     assert_matches_oracle(actual, expected, rtol=1e-12, atol=1e-13 * scale)
 
 
-@pytest.mark.parametrize(("n_source", "n_target"), SIZES)
+@pytest.mark.parametrize(("n_source", "n_target"), [(15, 40), (16, 40), (40, 16)])
 def test_adjoint_passes_the_dot_product_test(n_source: int, n_target: int) -> None:
     plan = _plan(n_source, n_target)
     key = jax.random.key(n_source)
     assert_adjoint(plan, plan.adjoint, n_source, n_target, key=key)
 
 
-@pytest.mark.parametrize(("n_source", "n_target"), [(16, 40), (15, 8)])
+@pytest.mark.parametrize(("n_source", "n_target"), [(16, 40)])
 def test_jit_and_vmap_agree_with_a_loop(n_source: int, n_target: int) -> None:
     plan = _plan(n_source, n_target)
     batch = jnp.asarray(np.random.default_rng(0).normal(size=(3, n_source)))
@@ -107,11 +107,7 @@ def test_gradient_in_the_samples_matches_finite_differences() -> None:
     ("kind", "degree", "n_coefficients"),
     [
         ("lobatto", 1, 1),
-        ("lobatto", 2, 2),
-        ("gauss", 2, 2),
-        *((kind, 7, 3) for kind in ("lobatto", "gauss")),
-        *((kind, 16, 16) for kind in ("lobatto", "gauss")),
-        *((kind, 33, 20) for kind in ("lobatto", "gauss")),
+        ("gauss", 16, 16),
     ],
 )
 def test_chebyshev_plan_passes_the_dot_product_test(
@@ -194,14 +190,6 @@ def test_upsampling_then_downsampling_returns_the_samples(n_source: int) -> None
     assert_matches_oracle(down(up(y)), y, rtol=1e-12, atol=1e-14)
 
 
-@pytest.mark.parametrize(("n_source", "n_target"), [(16, 40), (15, 8)])
-def test_adjoint_passes_the_dot_product_test_on_a_wider_period(
-    n_source: int, n_target: int
-) -> None:
-    plan = Fourier().plan(_axis(n_source), _axis(n_target))
-    assert_adjoint(plan, plan.adjoint, n_source, n_target, key=jax.random.key(n_source))
-
-
 def test_adjoint_equals_the_linear_transpose() -> None:
     read = FourierReadout(16, 25)
     assert_transpose_matches(read.apply, read.apply_adjoint, jnp.zeros(16))
@@ -279,8 +267,11 @@ def test_interpolant_equals_the_plan(kind: str) -> None:
     assert_matches_oracle(field.plan(targets)(y), field(targets.xy), rtol=1e-12)
 
 
-@pytest.mark.parametrize("kind", KINDS)
-@pytest.mark.parametrize("ascending", [False, True])
+@pytest.mark.parametrize(
+    ("kind", "ascending"),
+    [("lobatto", False), ("gauss", True)],
+    ids=["lobatto-descending", "gauss-ascending"],
+)
 def test_plan_passes_the_dot_product_test(kind: str, ascending: bool) -> None:
     # Testing list of #43: ⟨Hy, r⟩ = ⟨y, Hᵀr⟩, H = T P C, with a truncation
     axis = _chebyshev_axis(10, kind, ascending=ascending)

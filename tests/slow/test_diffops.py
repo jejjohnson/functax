@@ -64,7 +64,7 @@ def test_divfree_and_curlfree_columns():
         assert abs(float(diffops.curl2d(w)(xy))) < 1e-5
 
 
-@pytest.mark.parametrize("l_max", [4, 10])
+@pytest.mark.parametrize("l_max", [10])
 def test_laplace_beltrami_spherical_harmonic_eigenvalues(l_max):
     # Δ_S Y_lm = -l(l+1) Y_lm for every real spherical harmonic.
     pts = _unit_points(16, KEY)

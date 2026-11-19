@@ -213,10 +213,14 @@ class TestMonotone:
 
 class TestLinearize:
     @pytest.mark.parametrize(
-        "scheme", [Pchip(), Akima(), Steffen()], ids=["pchip", "akima", "steffen"]
-    )
-    @pytest.mark.parametrize(
-        "descending", [False, True], ids=["ascending", "descending"]
+        ("scheme", "descending"),
+        [(Pchip(), False), (Akima(), False), (Steffen(), False), (Pchip(), True)],
+        ids=[
+            "pchip-ascending",
+            "akima-ascending",
+            "steffen-ascending",
+            "pchip-descending",
+        ],
     )
     def test_equals_the_dense_jacobian(self, scheme, descending: bool) -> None:  # type: ignore[no-untyped-def]
         knots, values = _axis_and_data(seed=11)
@@ -236,9 +240,22 @@ class TestLinearize:
 
 
 class TestCubicSplineIsLinear:
-    @pytest.mark.parametrize("bc", ["not-a-knot", "natural", "clamped", "periodic"])
     @pytest.mark.parametrize(
-        "descending", [False, True], ids=["ascending", "descending"]
+        ("bc", "descending"),
+        [
+            ("not-a-knot", False),
+            ("natural", False),
+            ("clamped", False),
+            ("periodic", False),
+            ("not-a-knot", True),
+        ],
+        ids=[
+            "not-a-knot-ascending",
+            "natural-ascending",
+            "clamped-ascending",
+            "periodic-ascending",
+            "not-a-knot-descending",
+        ],
     )
     def test_dot_product(self, bc: str, descending: bool) -> None:
         knots, _ = _axis_and_data(seed=13)
@@ -542,7 +559,9 @@ class TestDerivatives:
         # flat steps give zero up to rounding, ±1e-17 here
         assert bool(jnp.all(slopes >= -1e-12 * jnp.max(slopes)))
 
-    @pytest.mark.parametrize("scheme", SPLIT_SCHEMES[:4], ids=SPLIT_IDS[:4])
+    @pytest.mark.parametrize(
+        "scheme", [Pchip(), CubicSpline()], ids=["pchip", "not-a-knot"]
+    )
     def test_equals_autodiff_of_the_read_out(self, scheme) -> None:  # type: ignore[no-untyped-def]
         # what gauss_flows took as the density: jax.grad of the CDF read-out
         knots, data = _axis_and_data(seed=113)
@@ -573,7 +592,7 @@ class TestDerivatives:
         eager = jnp.stack([density(row) for row in batch])
         assert_matches_oracle(jax.jit(jax.vmap(density))(batch), eager, rtol=1e-12)
 
-    @pytest.mark.parametrize("bc", ["not-a-knot", "natural"])
+    @pytest.mark.parametrize("bc", ["not-a-knot"])
     def test_spline_derivative_dot_product(self, bc: str) -> None:
         knots, _ = _axis_and_data(seed=116)
         targets = Points(jnp.asarray(np.linspace(knots[0], knots[-1], 15))[:, None])

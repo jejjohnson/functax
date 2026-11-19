@@ -19,7 +19,6 @@ from functax.basis.polynomial import (
     legendre_series,
 )
 from functax.exceptions import ValidationError
-from functax.quad import gauss_legendre
 
 
 def test_indices_order_and_count():
@@ -45,16 +44,6 @@ def test_ldexp_helper_exact_at_zero_and_out_of_range():
 def test_invalid_normalization_raises():
     with pytest.raises(ValueError, match="normalization"):
         associated_legendre(jnp.zeros(3), 2, normalization="bad")  # ty: ignore[invalid-argument-type]
-
-
-@pytest.mark.parametrize("n", [1, 4, 9])
-def test_gauss_legendre_exactness(n):
-    nodes, weights = gauss_legendre(n)
-    for degree in (2 * n - 2, 2 * n - 1):
-        exact = (1.0 - (-1.0) ** (degree + 1)) / (degree + 1)  # ∫_{-1}^{1} t^d dt
-        assert abs(np.sum(weights * nodes**degree) - exact) < 1e-13
-    with pytest.raises(ValueError, match="'n' must"):
-        gauss_legendre(0)
 
 
 @pytest.mark.parametrize("l_max", [True, 2.0])

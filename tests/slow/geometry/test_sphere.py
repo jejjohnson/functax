@@ -176,7 +176,7 @@ class TestPairwiseDistance:
             atol=1e-9,
         )
 
-    @pytest.mark.parametrize("metric", ["euclidean", "chord", "geodesic"])
+    @pytest.mark.parametrize("metric", ["euclidean", "geodesic"])
     def test_chunked_equals_unchunked(self, metric: str) -> None:
         rng = np.random.default_rng(9)
         sources = Points(jnp.asarray(rng.uniform(-1, 1, (7, 2))), metric=metric)

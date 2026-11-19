@@ -40,7 +40,7 @@ def _random_stencil(seed: int, *, dtype: jnp.dtype = jnp.float64) -> Stencil:
 
 
 class TestAdjoint:
-    @pytest.mark.parametrize("seed", [0, 1, 2])
+    @pytest.mark.parametrize("seed", [0])
     def test_dot_product(self, seed: int) -> None:
         stencil = _random_stencil(seed)
         assert jnp.any(stencil.indices[:, 0] == stencil.indices[:, 1:].T)

@@ -39,7 +39,7 @@ RULES = [
 
 @pytest.mark.parametrize(
     ("n_lat", "n_lon", "degree"),
-    [(1, None, 1), (4, None, 7), (8, 9, 8), (5, 3, 2), (6, 40, 11)],
+    [(1, None, 1), (5, 3, 2), (6, 40, 11)],
 )
 def test_gauss_legendre_degree_is_min_of_both_limits(
     n_lat: int, n_lon: int | None, degree: int

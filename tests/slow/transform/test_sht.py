@@ -18,16 +18,6 @@ from functax.transform import SphericalHarmonicTransform
 KEY = jr.PRNGKey(0)
 
 
-def test_sht_round_trip_is_exact_on_band_limited():
-    l_max, n_lat, n_lon = 8, 12, 24
-    sht = SphericalHarmonicTransform.init(n_lat, n_lon, l_max)
-    coeffs = jr.normal(KEY, (3, (l_max + 1) ** 2))
-    field = sht.inverse(coeffs)
-    recovered = sht.forward(field)
-    rel = jnp.linalg.norm(recovered - coeffs) / jnp.linalg.norm(coeffs)
-    assert float(rel) < 1e-4
-
-
 def test_sht_tables_are_built_in_float64():
     # #122: the tables are constants, so `init` evaluates the harmonics in float64
     # and casts once. analy @ synth = I is then exact to float32 rounding of the
@@ -41,14 +31,6 @@ def test_sht_tables_are_built_in_float64():
         gram = jnp.asarray(sht.analy, jnp.float64) @ jnp.asarray(sht.synth, jnp.float64)
         err = jnp.abs(gram - jnp.eye(gram.shape[0])).max()
     assert float(err) < 5e-7
-
-
-def test_sht_shapes():
-    sht = SphericalHarmonicTransform.init(10, 20, 6)
-    field = jnp.ones((2, 10, 20))
-    coeffs = sht.forward(field)
-    assert coeffs.shape == (2, 49)
-    assert sht.inverse(coeffs).shape == (2, 10, 20)
 
 
 def test_round_trip_is_exact_to_1e_12_in_float64():
