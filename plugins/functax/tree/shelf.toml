@@ -11,6 +11,7 @@
 "functax.geometry" = "src/functax/geometry/__init__.py"
 "functax.geometry.affine" = "src/functax/geometry/affine.py"
 "functax.interp" = "src/functax/interp.py"
+"functax.basis" = "src/functax/basis/__init__.py"
 "functax.basis.eigen" = "src/functax/basis/eigen.py"
 "functax.basis.features" = "src/functax/basis/features.py"
 "functax.basis.fourier" = "src/functax/basis/fourier.py"
