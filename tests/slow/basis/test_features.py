@@ -5,11 +5,13 @@ random-feature kernel estimate at 10⁴ features, and gradient, trace and dtype 
 
 from __future__ import annotations
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax.basis.features import (
     fourier_features,
@@ -188,6 +190,66 @@ class TestTraces:
     def test_coordinate_features_over_batches(self, fn: object) -> None:
         batches = jax.random.uniform(jax.random.key(3), (3, 5), maxval=10.0)
         assert_traces(fn, batches)
+
+
+# compiled once per module, so each hypothesis example reuses the kernels
+@jax.jit
+def _rff_gram(frequencies: jax.Array, points: jax.Array) -> jax.Array:
+    """⟨φ(xᵢ), φ(xⱼ)⟩ for 16 random features of lengthscale 0.7."""
+    features = jax.vmap(lambda x: rff_forward(frequencies, 0.7, 16, x))(points)
+    return features @ features.T
+
+
+_FOURIER = jax.jit(lambda x: fourier_features(x, 4, rescale=True))
+
+
+_SEASONAL = jax.jit(lambda x: seasonal_features(x, (7.0, 28.0), (3, 2)))
+
+
+_WINDOWS = jax.jit(gaussian_window_features)
+
+
+class TestProperties:
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_rff_gram_is_translation_invariant(self, seed: int) -> None:
+        # ⟨φ(x + s), φ(y + s)⟩ = (1/F) ∑_f cos(w_fᵀ(x − y)/ℓ), whatever s
+        keys = jax.random.split(jax.random.key(seed), 3)
+        frequencies = jax.random.normal(keys[0], (3, 16))
+        points = jax.random.normal(keys[1], (5, 3))
+        shift = 3.0 * jax.random.normal(keys[2], (3,))
+        assert_matches_oracle(
+            _rff_gram(frequencies, points + shift),
+            _rff_gram(frequencies, points),
+            rtol=0.0,
+            atol=1e-12,
+        )
+
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1), cycles=st.integers(-3, 3))
+    def test_features_are_periodic(self, seed: int, cycles: int) -> None:
+        # the dyadic frequencies 2ᵈ repeat over a unit shift, and the harmonics
+        # of 7 and 28 over 28
+        x = jax.random.uniform(jax.random.key(seed), (6,), minval=-5.0, maxval=5.0)
+        assert_matches_oracle(_FOURIER(x + cycles), _FOURIER(x), rtol=0.0, atol=1e-12)
+        assert_matches_oracle(
+            _SEASONAL(x + 28.0 * cycles), _SEASONAL(x), rtol=0.0, atol=1e-12
+        )
+
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1), shift=st.floats(-50.0, 50.0))
+    def test_windows_move_with_their_centres(self, seed: int, shift: float) -> None:
+        # χ(t + s; t_a + s, T_a) = χ(t; t_a, T_a): only t − t_a enters
+        keys = jax.random.split(jax.random.key(seed), 3)
+        t = jax.random.uniform(keys[0], (7,), maxval=10.0)
+        centres = jax.random.uniform(keys[1], (3,), maxval=10.0)
+        widths = jax.random.uniform(keys[2], (3,), minval=0.5, maxval=3.0)
+        assert_matches_oracle(
+            _WINDOWS(t + shift, centres + shift, widths),
+            _WINDOWS(t, centres, widths),
+            rtol=0.0,
+            atol=1e-12,
+        )
 
 
 class TestDtypes:

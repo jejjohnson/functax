@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import math
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
-from functax.basis.sphere import real_spherical_harmonics, shell_basis
+from functax.basis.sphere import harmonic_degrees, real_spherical_harmonics, shell_basis
 from functax.geometry import gauss_legendre_grid
 from functax.quad import gauss_legendre
 
@@ -50,3 +53,75 @@ def test_chebyshev_radial_takes_its_end_values():
     np.testing.assert_allclose(
         np.asarray(values), y00 * np.array([[1, -1, 1], [1, 1, 1]]), atol=1e-6
     )
+
+
+def _random_rotation(seed: int) -> np.ndarray:
+    """A random proper rotation of ℝ³, from the QR factors of a Gaussian matrix."""
+    q, r = np.linalg.qr(np.random.default_rng(seed).normal(size=(3, 3)))
+    q = q * np.sign(np.diag(r))
+    return q if np.linalg.det(q) > 0 else -q
+
+
+def _shell_points(count: int, seed: int) -> jax.Array:
+    """Random points with radii in the shell (R0, R1)."""
+    keys = jax.random.split(jax.random.key(seed))
+    gaussian = jax.random.normal(keys[0], (count, 3))
+    radii = jax.random.uniform(keys[1], (count, 1), minval=R0 + 0.05, maxval=R1 - 0.05)
+    return radii * gaussian / jnp.linalg.norm(gaussian, axis=-1, keepdims=True)
+
+
+_L_MAX, _N_RADIAL = 3, 2
+
+
+# compiled once per module, so each hypothesis example reuses the kernel
+_SHELL = jax.jit(
+    lambda xyz: shell_basis(xyz, _L_MAX, _N_RADIAL, r_inner=R0, r_outer=R1)[0]
+)
+
+
+# the (ℓ, k) group of each column, ℓ outermost and k fastest, one-hot
+_GROUPS = np.array(
+    [(ell, k) for ell in harmonic_degrees(_L_MAX) for k in range(_N_RADIAL)]
+)
+
+
+_ONEHOT = jnp.asarray(
+    (_GROUPS[:, None, :] == np.unique(_GROUPS, axis=0)[None]).all(-1), dtype=float
+)
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1))
+def test_degree_kernels_are_rotation_invariant(seed: int) -> None:
+    # ∑_m φ_ℓmk(x) φ_ℓmk(y) = (2ℓ + 1)/(4π) P_ℓ(x̂ · ŷ) R_k(‖x‖) R_k(‖y‖) by the
+    # addition theorem: it depends on x̂ · ŷ and the radii only, so rotating
+    # both points leaves it unchanged
+    x = _shell_points(5, seed)
+    y = _shell_points(5, seed + 1)
+    rotation = jnp.asarray(_random_rotation(seed))
+
+    def kernels(a: jax.Array, b: jax.Array) -> jax.Array:
+        return (_SHELL(a) * _SHELL(b)) @ _ONEHOT
+
+    assert_matches_oracle(
+        kernels(x @ rotation.T, y @ rotation.T),
+        kernels(x, y),
+        rtol=0.0,
+        atol=1e-12,
+    )
+
+
+def test_gradient_matches_finite_differences() -> None:
+    # differentiated in the points: the radius, the direction and the
+    # Chebyshev radial recurrence
+    xyz = _shell_points(3, seed=5)
+    assert_grad_matches_fd(
+        lambda p: shell_basis(p, 2, 3, r_inner=R0, r_outer=R1, radial="chebyshev")[0],
+        xyz,
+        rtol=1e-8,
+    )
+
+
+def test_shell_basis_traces() -> None:
+    xyz = jnp.stack([_shell_points(4, seed=6 + b) for b in range(3)])
+    assert_traces(lambda p: shell_basis(p, 2, 2, r_inner=R0, r_outer=R1)[0], xyz)

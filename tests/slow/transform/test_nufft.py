@@ -8,12 +8,14 @@ from __future__ import annotations
 import math
 
 import einx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 import pytest
-from _harness import assert_traces
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax._src.transform._nufft import _corner_slices
 from functax.transform import nonuniform_irfft, nonuniform_rfft
@@ -192,3 +194,75 @@ def test_nonuniform_jit_vmap_grad():
     g_xi, g_q = jax.grad(loss, argnums=(0, 1))(xi[0], query[0])
     assert bool(jnp.all(jnp.isfinite(g_xi))) and bool(jnp.all(jnp.isfinite(g_q)))
     assert float(jnp.abs(g_xi).max()) > 0.0
+
+
+_MODES_2D = (3, 4)
+
+
+# compiled once per module, so each hypothesis example reuses the kernels
+_RFFT_2D = jax.jit(lambda u, xi, w: nonuniform_rfft(u, xi, w, _MODES_2D))
+
+
+_IRFFT_2D = jax.jit(lambda c, xi: nonuniform_irfft(c, xi, _MODES_2D))
+
+
+_RFFT_1D = jax.jit(lambda u, xi, w: nonuniform_rfft(u, xi, w, (6,))[0])
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1))
+def test_synthesis_is_the_weighted_adjoint_of_analysis(seed: int) -> None:
+    # ∑_n w_n u_n · irfft(c)_n = ∑_κ γ_κ (Re c_κ Re ĉ_κ + Im c_κ Im ĉ_κ) with
+    # ĉ = rfft(u), for any points, weights and coefficients (γ_κ = 1 on the
+    # κ_d = 0 plane, 2 elsewhere)
+    keys = jr.split(jr.key(seed), 5)
+    xi = jr.uniform(keys[0], (40, 2))
+    weights = jr.uniform(keys[1], (40,), maxval=0.05)
+    u = jr.normal(keys[2], (2, 40))
+    coeffs = [
+        jax.lax.complex(*jr.normal(key, (2, 2, *_MODES_2D)))
+        for key in jr.split(keys[3], 2)
+    ]
+    lhs = jnp.sum(weights * u * _IRFFT_2D(coeffs, xi))
+    multiplicity = jnp.where(jnp.arange(_MODES_2D[-1]) == 0, 1.0, 2.0)
+    rhs = sum(
+        jnp.sum(multiplicity * (c.real * r.real + c.imag * r.imag))
+        for c, r in zip(coeffs, _RFFT_2D(u, xi, weights), strict=True)
+    )
+    assert_matches_oracle(lhs, rhs, rtol=1e-12)
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1), shift=st.floats(0.0, 1.0))
+def test_a_shift_of_the_points_turns_the_phases(seed: int, shift: float) -> None:
+    # ĉ_κ of the points moved by s (mod 1) is ĉ_κ e^{−2πiκs}
+    keys = jr.split(jr.key(seed), 3)
+    xi = jr.uniform(keys[0], (30, 1))
+    weights = jr.uniform(keys[1], (30,), maxval=0.05)
+    u = jr.normal(keys[2], (2, 30))
+    moved = _RFFT_1D(u, (xi + shift) % 1.0, weights)
+    turn = jnp.exp(-2j * jnp.pi * jnp.arange(6) * shift)
+    expected = _RFFT_1D(u, xi, weights) * turn
+    for part in (jnp.real, jnp.imag):
+        assert_matches_oracle(part(moved), part(expected), rtol=0.0, atol=1e-12)
+
+
+def test_gradients_in_the_points_match_finite_differences() -> None:
+    # rfft and irfft differentiated in the coordinates ξ (real and imaginary
+    # parts stacked, as the Jacobian needs a real output)
+    keys = jr.split(jr.key(9), 3)
+    xi = jr.uniform(keys[0], (6, 2))
+    u = jr.normal(keys[1], (1, 6))
+    coeffs = [
+        jax.lax.complex(*jr.normal(key, (2, 1, 2, 2))) for key in jr.split(keys[2], 2)
+    ]
+    weights = jnp.full(6, 1.0 / 6.0)
+
+    def analysis(points: jax.Array) -> list[jax.Array]:
+        blocks = nonuniform_rfft(u, points, weights, (2, 2))
+        return [jnp.stack([b.real, b.imag]) for b in blocks]
+
+    assert_grad_matches_fd(analysis, xi, rtol=1e-8)
+    assert_grad_matches_fd(
+        lambda points: nonuniform_irfft(coeffs, points, (2, 2)), xi, rtol=1e-8
+    )

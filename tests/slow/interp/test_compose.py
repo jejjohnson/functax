@@ -5,6 +5,8 @@ each a second or more (mostly einx compiling new shapes).
 
 from __future__ import annotations
 
+import equinox as eqx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -16,6 +18,7 @@ from _harness import (
     assert_traces,
     assert_transpose_matches,
 )
+from hypothesis import given, settings
 
 from functax.geometry import Axis, Points
 from functax.interp import (
@@ -144,6 +147,63 @@ class TestCompose:
             # each index once, plus padding at weight 0
             carried = row_indices[row_weights != 0]
             assert carried.size == np.unique(carried).size
+
+
+class TestProperties:
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_the_product_applies_the_stencils_in_turn(self, seed: int) -> None:
+        # (H_o H_i) x = H_o (H_i x) and (H_o H_i)ᵀ r = H_iᵀ (H_oᵀ r)
+        outer, inner = _pair(seed)
+        key_source, key_target = jax.random.split(jax.random.key(seed))
+        source = jax.random.normal(key_source, (N_SOURCE,))
+        residual = jax.random.normal(key_target, (N_TARGET,))
+        product, in_turn = _product_in_one_jit(outer, inner, source, residual)
+        assert_matches_oracle(product, in_turn, rtol=1e-12, atol=1e-13)
+
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_a_composed_plan_equals_the_plans_in_turn(self, seed: int) -> None:
+        # (outer @ inner)(y) = outer(inner(y)) on random uneven axes, every row
+        # inside, so every row is valid
+        rng = np.random.default_rng(seed)
+        fine = np.cumsum(rng.uniform(0.5, 1.5, size=20))
+        centres = np.sort(rng.uniform(fine[0], fine[-1], size=12))
+        channels = rng.uniform(centres[0], centres[-1], size=7)
+        radiance = rng.normal(size=(2, 20))
+        values, expected = _compose_in_one_jit(
+            jnp.asarray(fine),
+            jnp.asarray(centres),
+            jnp.asarray(channels),
+            jnp.asarray(radiance),
+        )
+        assert_matches_oracle(values, expected, rtol=1e-12, atol=1e-13)
+
+
+@eqx.filter_jit
+def _product_in_one_jit(
+    outer: Stencil, inner: Stencil, source: jax.Array, residual: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    """[Hx; Hᵀr] of the product and of the two stencils in turn, compiled once."""
+    product = compose(outer, inner)
+    forward = jnp.concatenate([product.apply(source), product.apply_adjoint(residual)])
+    in_turn = jnp.concatenate(
+        [
+            outer.apply(inner.apply(source)),
+            inner.apply_adjoint(outer.apply_adjoint(residual)),
+        ]
+    )
+    return forward, in_turn
+
+
+@jax.jit
+def _compose_in_one_jit(
+    fine: jax.Array, centres: jax.Array, channels: jax.Array, radiance: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    """(outer @ inner)(y) and outer(inner(y)), compiled once for every example."""
+    inner = Linear().plan(Axis(fine), Points(centres[:, None]))
+    outer = Linear().plan(Axis(centres), Points(channels[:, None]))
+    return (outer @ inner)(radiance), outer(inner(radiance))
 
 
 class TestComposedPlan:

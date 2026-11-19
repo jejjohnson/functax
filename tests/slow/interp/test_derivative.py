@@ -5,13 +5,23 @@ second or more (mostly einx compiling new shapes).
 
 from __future__ import annotations
 
+import functools
+
 import einx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 import scipy.interpolate
-from _harness import assert_adjoint, assert_matches_oracle, assert_transpose_matches
+from _harness import (
+    assert_adjoint,
+    assert_grad_matches_fd,
+    assert_matches_oracle,
+    assert_traces,
+    assert_transpose_matches,
+)
+from hypothesis import given, settings
 from scipy.ndimage import spline_filter1d
 
 from functax.geometry import AffineGrid, Axis, Points, RectilinearGrid
@@ -200,6 +210,92 @@ class TestFiniteDifferences:
         for axis in (0, 1):
             expected = plan.derivative(axis=axis)(field)
             assert_matches_oracle(gradient[:, axis], expected, rtol=1e-12, atol=1e-13)
+
+
+@functools.cache
+def _compiled_slope(scheme, axis: int):  # type: ignore[no-untyped-def]
+    """``(rows, cols, targets, data) ↦ ∂H y/∂x_axis``, built and applied in one jit."""
+
+    def slope(
+        rows: jax.Array, cols: jax.Array, targets: jax.Array, data: jax.Array
+    ) -> jax.Array:
+        grid = RectilinearGrid((Axis(rows), Axis(cols)))
+        return scheme.plan(grid, Points(targets)).derivative(axis=axis)(data)
+
+    return jax.jit(slope)
+
+
+def _uneven_grid_and_targets(seed: int) -> tuple[list[np.ndarray], np.ndarray]:
+    """Uneven (5, 6) nodes and 15 targets mid-cell, away from the knots."""
+    rng = np.random.default_rng(seed)
+    nodes = [np.cumsum(rng.uniform(0.5, 1.5, size=n)) for n in (5, 6)]
+    columns = []
+    for axis_nodes in nodes:
+        cell = rng.integers(1, axis_nodes.size - 2, 15)
+        offset = rng.uniform(0.1, 0.9, 15)
+        columns.append(
+            axis_nodes[cell] + offset * (axis_nodes[cell + 1] - axis_nodes[cell])
+        )
+    return nodes, np.column_stack(columns)
+
+
+class TestProperties:
+    @settings(max_examples=20, deadline=None)
+    @given(
+        seed=st.integers(0, 2**31 - 1),
+        slope=st.tuples(st.floats(-5.0, 5.0), st.floats(-5.0, 5.0)),
+        axis=st.integers(0, 1),
+    )
+    def test_linear_slope_of_an_affine_field_is_its_gradient(
+        self, seed: int, slope: tuple[float, float], axis: int
+    ) -> None:
+        # ∂(aᵀx + b)/∂x_d = a_d on any uneven grid
+        nodes, targets = _uneven_grid_and_targets(seed)
+        mesh = np.stack(np.meshgrid(*nodes, indexing="ij"), axis=-1)
+        field = einx.id("... -> (...)", mesh @ np.asarray(slope) + 2.0)
+        values = _compiled_slope(Linear(), axis)(
+            *(jnp.asarray(n) for n in nodes), jnp.asarray(targets), jnp.asarray(field)
+        )
+        assert_matches_oracle(values, np.full(15, slope[axis]), rtol=1e-12, atol=1e-12)
+
+    @pytest.mark.parametrize("scheme", [Cubic(), BSpline(3)], ids=["cubic", "bspline3"])
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1), level=st.floats(-10.0, 10.0))
+    def test_a_constant_shift_leaves_the_derivative_unchanged(
+        self, scheme, seed: int, level: float
+    ) -> None:  # type: ignore[no-untyped-def]
+        # ∂(f̂ + c)/∂x = ∂f̂/∂x: each row of derivative weights sums to zero
+        nodes, targets = _uneven_grid_and_targets(seed)
+        field = np.random.default_rng(seed + 1).normal(size=30)
+        data = jnp.asarray(np.stack([field, field + level]))
+        values = _compiled_slope(scheme, 1)(
+            *(jnp.asarray(n) for n in nodes), jnp.asarray(targets), data
+        )
+        assert_matches_oracle(values[1], values[0], rtol=1e-10, atol=1e-10)
+
+
+def _slope_at(scheme, positions: jax.Array) -> jax.Array:  # type: ignore[no-untyped-def]
+    """∂f̂/∂x₁ on a (6, 7) grid, the plan built at the traced positions."""
+    grid = RectilinearGrid((Axis(jnp.arange(6.0)), Axis(jnp.arange(7.0))))
+    plan = scheme.plan(grid, Points(positions))
+    return plan.derivative(axis=1)(jnp.sin(jnp.arange(42.0)))
+
+
+class TestGradientAndTraces:
+    def test_gradient_in_the_target_positions(self) -> None:
+        # differentiates the target positions through the derivative weights;
+        # offsets in (0.1, 0.9) of a cell keep clear of the knots
+        rng = np.random.default_rng(12)
+        xy = rng.integers(1, 4, size=(5, 2)) + rng.uniform(0.1, 0.9, size=(5, 2))
+        assert_grad_matches_fd(
+            functools.partial(_slope_at, BSpline(3)), jnp.asarray(xy)
+        )
+
+    def test_jit_and_vmap_agree_with_a_loop(self) -> None:
+        rng = np.random.default_rng(13)
+        xy = jnp.asarray(rng.uniform(0.5, 4.5, size=(2, 5, 2)))
+        # linear, whose eager build compiles far fewer ops than the B-spline's
+        assert_traces(functools.partial(_slope_at, Linear()), xy)
 
 
 class TestLinearity:

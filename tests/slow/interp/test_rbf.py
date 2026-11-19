@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import warnings
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import lineax as lx
@@ -20,6 +21,7 @@ from _harness import (
     assert_traces,
     assert_transpose_matches,
 )
+from hypothesis import given, settings
 
 from functax import ValidationError
 from functax.geometry import Axis, Points, RectilinearGrid
@@ -216,6 +218,38 @@ class TestTargetsAndPolicies:
         plan = RBF(Polyharmonic(2)).plan(source, target, policies=policies)
         expected = RBF(Polyharmonic(2)).plan(source, target)(filled)
         assert_matches_oracle(plan(gappy), expected, rtol=1e-12)
+
+
+@jax.jit
+def _thin_plate_read(
+    sources: jax.Array, targets: jax.Array, data: jax.Array
+) -> jax.Array:
+    """f̂ at the sources and the targets of a thin-plate RBF with a linear tail."""
+    nodes = jnp.concatenate([sources, targets])
+    return RBF(Polyharmonic(2)).plan(Points(sources), Points(nodes))(data)
+
+
+class TestProperties:
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_interpolates_the_nodes_and_reproduces_its_tail(self, seed: int) -> None:
+        # without smoothing f̂(xⱼ) = yⱼ at every source; with a degree-1 tail an
+        # affine field f = a + bᵀx is read exactly everywhere (f̂ = f)
+        rng = np.random.default_rng(seed)
+        sources = rng.uniform(0.0, 1.0, (20, 2))
+        targets = rng.uniform(-0.2, 1.2, (10, 2))
+        data = rng.normal(size=20)
+        offset, slope = rng.normal(), rng.normal(size=2)
+        read = _thin_plate_read(jnp.asarray(sources), jnp.asarray(targets), data)
+        # a solve on random clouds with close pairs: the worst of 300 seeds was
+        # 4e-12 at the nodes and 3e-15 relative on the affine field
+        assert_matches_oracle(read[:20], data, rtol=1e-9, atol=1e-9)
+        affine = _thin_plate_read(
+            jnp.asarray(sources), jnp.asarray(targets), offset + sources @ slope
+        )
+        expected = offset + np.concatenate([sources, targets]) @ slope
+        scale = float(np.max(np.abs(expected)))
+        assert_matches_oracle(affine, expected, rtol=1e-12, atol=1e-12 * scale)
 
 
 class TestValidationAndConfig:

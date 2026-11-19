@@ -6,11 +6,13 @@ mostly the eager FFTs compiling for every new shape.
 
 from __future__ import annotations
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax.geometry import chebyshev_nodes
 from functax.transform import ChebyshevTransform1D, ChebyshevTransform2D
@@ -123,3 +125,33 @@ def test_transform_of_t_k_is_the_kth_unit_vector(kind: str, k: int) -> None:
 def test_transform_of_the_end_mode_on_lobatto_nodes() -> None:
     a = ChebyshevTransform1D(24).to_spectral(_chebyshev(24, chebyshev_nodes(24)))
     assert_matches_oracle(a, jnp.eye(25)[24], rtol=0.0, atol=1e-13)
+
+
+# compiled once per kind, so each hypothesis example reuses the kernels
+_TRANSFORMS = {
+    kind: (
+        jax.jit(ChebyshevTransform2D(6, 4, kind=kind).to_spectral),
+        jax.jit(ChebyshevTransform1D(4, kind=kind).to_spectral),
+        jax.jit(ChebyshevTransform1D(6, kind=kind).to_spectral),
+    )
+    for kind in KINDS
+}
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1), kind=st.sampled_from(KINDS))
+def test_2d_transform_of_a_product_is_the_product_of_1d_transforms(
+    seed: int, kind: str
+) -> None:
+    # u(yᵢ, xⱼ) = f(yᵢ) g(xⱼ) on the grid has the coefficients a_{lk} = (a_f)_l (a_g)_k
+    to_spectral, along_y, along_x = _TRANSFORMS[kind]
+    shape = ChebyshevTransform2D(6, 4, kind=kind).shape
+    keys = jax.random.split(jax.random.key(seed))
+    f = jax.random.normal(keys[0], (shape[0],))
+    g = jax.random.normal(keys[1], (shape[1],))
+    assert_matches_oracle(
+        to_spectral(jnp.outer(f, g)),
+        jnp.outer(along_y(f), along_x(g)),
+        rtol=0.0,
+        atol=1e-13,
+    )

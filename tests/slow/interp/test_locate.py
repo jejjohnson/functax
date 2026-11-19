@@ -10,13 +10,14 @@ import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
-from _harness import assert_grad_matches_fd, assert_matches_oracle
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
 from hypothesis import given, settings
 
 from functax.geometry import Axis
 from functax.interp import (
     index_positions,
     locate,
+    remap_taps,
 )
 
 
@@ -123,3 +124,79 @@ class TestLocate:
         assert cell.tolist() == [0, 1]
         assert offset.tolist() == [0.5, 0.5]
         assert inside.tolist() == [True, True]
+
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1), descending=st.booleans())
+    def test_the_cell_and_offset_rebuild_the_target(
+        self, seed: int, descending: bool
+    ) -> None:
+        # x = xᵢ + t (xᵢ₊₁ − xᵢ) inside, and inside ⇔ x within the nodes
+        rng = np.random.default_rng(seed)
+        nodes = np.cumsum(rng.uniform(0.1, 2.0, size=12))
+        values = nodes[::-1] if descending else nodes
+        targets = rng.uniform(nodes[0] - 1.0, nodes[-1] + 1.0, size=16)
+        cell, offset, inside = _located(jnp.asarray(values), jnp.asarray(targets))
+        cell, offset, inside = np.asarray(cell), np.asarray(offset), np.asarray(inside)
+        expected_inside = (targets >= nodes[0]) & (targets <= nodes[-1])
+        np.testing.assert_array_equal(inside, expected_inside)
+        # inside, i ≤ N − 2 (a draw on the last node has probability zero);
+        # the clip only keeps the outside rows' gathers in range
+        left = np.clip(cell, 0, 10)
+        rebuilt = values[left] + offset * (values[left + 1] - values[left])
+        assert_matches_oracle(rebuilt, targets, rtol=1e-12, atol=1e-12, where=inside)
+        assert bool(np.all((offset[inside] >= 0.0) & (offset[inside] < 1.0)))
+
+    def test_gradient_of_the_offset_in_the_nodes_and_targets(self) -> None:
+        # differentiates t in both the node values and the targets, mid-cell
+        nodes = jnp.array([0.0, 2.0, 3.0, 7.0, 7.5])
+        targets = jnp.array([0.4, 2.5, 5.0, 7.2])
+
+        def offset(inputs: tuple[jax.Array, jax.Array]) -> jax.Array:
+            values, positions = inputs
+            return locate(Axis(values), positions)[1]
+
+        assert_grad_matches_fd(offset, (nodes, targets))
+
+    def test_jit_and_vmap_agree_with_a_loop(self) -> None:
+        rng = np.random.default_rng(3)
+        nodes = jnp.asarray(np.cumsum(rng.uniform(0.1, 2.0, size=(3, 9)), axis=1))
+        targets = jnp.asarray(rng.uniform(-1.0, 12.0, size=(3, 7)))
+        assert_traces(lambda values, x: locate(Axis(values), x), nodes, targets)
+
+
+@jax.jit
+def _located(
+    values: jax.Array, targets: jax.Array
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """`locate` on an axis of the given values, compiled once for every example."""
+    return locate(Axis(values), targets)
+
+
+class TestRemapTaps:
+    @settings(max_examples=20, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1), n_nodes=st.integers(2, 9))
+    def test_boundary_rules_are_symmetric_and_periodic(
+        self, seed: int, n_nodes: int
+    ) -> None:
+        # every rule lands on [0, N − 1] and leaves in-range taps alone; mirror
+        # is even, j ↦ −j, with period 2(N − 1); wrap has period N
+        taps = jnp.asarray(np.random.default_rng(seed).integers(-30, 30, size=(4, 8)))
+        in_range = (taps >= 0) & (taps <= n_nodes - 1)
+        for boundary in ("mirror", "wrap", "edge", "constant"):
+            indices, kept = remap_taps(taps, n_nodes, boundary)
+            assert bool(jnp.all((indices >= 0) & (indices <= n_nodes - 1)))
+            assert bool(jnp.all(jnp.where(in_range, indices == taps, True)))
+            assert bool(jnp.all(jnp.where(in_range, kept, True)))
+        mirror = remap_taps(taps, n_nodes, "mirror")[0]
+        np.testing.assert_array_equal(remap_taps(-taps, n_nodes, "mirror")[0], mirror)
+        shifted = taps + 2 * (n_nodes - 1)
+        np.testing.assert_array_equal(remap_taps(shifted, n_nodes, "mirror")[0], mirror)
+        wrap = remap_taps(taps, n_nodes, "wrap")[0]
+        np.testing.assert_array_equal(
+            remap_taps(taps + n_nodes, n_nodes, "wrap")[0], wrap
+        )
+
+    def test_jit_and_vmap_agree_with_a_loop(self) -> None:
+        taps = jnp.asarray(np.random.default_rng(4).integers(-12, 12, size=(3, 5, 4)))
+        for boundary in ("mirror", "wrap", "edge", "constant"):
+            assert_traces(lambda j, b=boundary: remap_taps(j, 5, b), taps)

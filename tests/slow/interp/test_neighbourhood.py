@@ -1,12 +1,14 @@
 """Tests for `InverseDistance`: the weights against a NumPy re-implementation, the
-oracle sweep, the tree and brute-force searches, the chord metric, grid targets, the
-dot-product test, gradients, the radius, padding taps and coincident targets. The
-slow tier: each compiles new shapes eagerly.
+oracle sweep, the partition of unity on random clouds, the tree and brute-force
+searches, the chord metric, grid targets, the dot-product test, gradients, the
+radius, padding taps and coincident targets. The slow tier: each compiles new shapes
+eagerly.
 """
 
 from __future__ import annotations
 
 import einx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -18,6 +20,7 @@ from _harness import (
     assert_traces,
     assert_transpose_matches,
 )
+from hypothesis import given, settings
 
 import functax._src.interp._neighbourhood as neighbourhood
 from functax import OutsideDomainError
@@ -179,6 +182,41 @@ def test_jit_and_vmap_agree_with_a_loop() -> None:
 
     batched = jnp.asarray(TARGET_XY[:24]).reshape(3, 8, 2)
     assert_traces(read, batched)
+
+
+@jax.jit
+def _idw_read(
+    source_xy: jax.Array, target_xy: jax.Array, values: jax.Array
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """The weights, the valid mask and f̂ of IDW (k = 6, p = 2, radius 3)."""
+    plan = InverseDistance(k=6, power=2.0, radius=3.0).plan(
+        Points(source_xy), Points(target_xy)
+    )
+    return plan.read.weights, plan.valid, plan(values)
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    seed=st.integers(0, 2**31 - 1),
+    # no levels near the subnormals, where wᵢⱼ c underflows
+    level=st.floats(-1e3, 1e3).filter(lambda c: c == 0.0 or abs(c) > 1e-100),
+)
+def test_weights_are_a_partition_of_unity(seed: int, level: float) -> None:
+    # wᵢⱼ ≥ 0 and ∑ⱼ wᵢⱼ = 1 at every target with a neighbour, so a constant
+    # c is read as c and any f̂ lies between the smallest and largest sample
+    rng = np.random.default_rng(seed)
+    sources = rng.uniform(0.0, 10.0, (40, 2))
+    # some targets far off, with no source within the radius
+    targets = rng.uniform(-5.0, 15.0, (30, 2))
+    values = rng.normal(size=40)
+    weights, valid, read = _idw_read(sources, targets, values)
+    weights, valid = np.asarray(weights), np.asarray(valid)
+    assert bool(np.all(weights >= 0.0))
+    assert_matches_oracle(weights.sum(axis=1), np.ones(30), rtol=1e-14, where=valid)
+    read = np.asarray(read)[valid]
+    assert bool(np.all((read >= values.min() - 1e-14) & (read <= values.max() + 1e-14)))
+    _, _, flat = _idw_read(sources, targets, np.full(40, level))
+    assert_matches_oracle(flat, np.full(30, level), rtol=1e-14, where=valid)
 
 
 def test_a_radius_with_no_neighbours_is_invalid() -> None:

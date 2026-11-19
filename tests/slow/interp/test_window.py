@@ -6,10 +6,17 @@ second or more (mostly einx compiling new shapes).
 from __future__ import annotations
 
 import einx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
-from _harness import assert_adjoint, assert_matches_oracle
+from _harness import (
+    assert_adjoint,
+    assert_grad_matches_fd,
+    assert_matches_oracle,
+    assert_traces,
+)
+from hypothesis import given, settings
 
 from functax.geometry import AffineGrid, Axis, Points, RectilinearGrid
 from functax.interp import (
@@ -76,6 +83,51 @@ class TestWindow:
         np.testing.assert_array_equal(
             composed[0:4, 3:6](field), _as_raster(composed(field))[0:4, 3:6].ravel()
         )
+
+
+class TestProperties:
+    @settings(max_examples=20, deadline=None)
+    @given(
+        seed=st.integers(0, 2**31 - 1),
+        row=st.integers(0, 5),
+        col=st.integers(0, 5),
+    )
+    def test_a_chip_is_its_slice_of_the_full_read_out(
+        self, seed: int, row: int, col: int
+    ) -> None:
+        # plan[r:r+3, c:c+4](y) = plan(y)[r:r+3, c:c+4] bit for bit, and the
+        # chip's adjoint passes the dot-product test; a fixed 3 × 4 chip
+        warp = _warp(Policies(outside="clamp"))
+        chip = warp[row : row + 3, col : col + 4]
+        field = jax.random.normal(jax.random.key(seed), (120,))
+        expected = _as_raster(warp(field))[row : row + 3, col : col + 4]
+        np.testing.assert_array_equal(chip(field), expected.ravel())
+        operator = chip.operator()
+        assert_adjoint(
+            lambda y: operator.mv(y),
+            chip.adjoint,
+            120,
+            12,
+            key=jax.random.fold_in(jax.random.key(seed), 1),
+        )
+
+
+def _windowed_read(positions: jax.Array) -> jax.Array:
+    """Rows 1…4 of a linear plan built at the traced target positions."""
+    field = jnp.sin(jnp.arange(8.0))
+    plan = Linear().plan(Axis(jnp.arange(8.0)), Points(positions[:, None]))
+    return plan[1:5](field)
+
+
+class TestGradientAndTraces:
+    def test_gradient_in_the_target_positions(self) -> None:
+        # differentiates the six target positions; mid-cell, away from the kinks
+        positions = jnp.array([0.3, 1.4, 2.6, 3.5, 5.7, 6.2])
+        assert_grad_matches_fd(_windowed_read, positions)
+
+    def test_jit_and_vmap_agree_with_a_loop(self) -> None:
+        positions = jnp.asarray(np.random.default_rng(8).uniform(0.0, 7.0, size=(3, 6)))
+        assert_traces(_windowed_read, positions)
 
 
 class TestToGaussx:

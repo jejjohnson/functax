@@ -7,6 +7,7 @@ eager call.
 from __future__ import annotations
 
 import einx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -18,6 +19,7 @@ from _harness import (
     assert_traces,
     assert_transpose_matches,
 )
+from hypothesis import given, settings
 
 from functax._src.interp._clip import planar_polygon_area
 from functax._src.interp._conservative import _node_corners, _polygon_cells
@@ -30,12 +32,37 @@ from functax.geometry import (
     spherical_polygon_area,
     unit_to_lonlat,
 )
-from functax.interp import Conservative, Policies
+from functax.interp import Conservative, Policies, overlap_weights_1d
 
 
 def random_edges(rng: np.random.Generator, n: int, lo: float, hi: float) -> np.ndarray:
     inner = np.sort(rng.uniform(lo, hi, n - 1))
     return np.concatenate([[lo], inner, [hi]])
+
+
+def _jittered_edges(
+    rng: np.random.Generator,
+    n: int,
+    lo: float,
+    hi: float,
+    *,
+    inside: tuple[int, ...] | None = None,
+) -> np.ndarray:
+    """Random, uneven edges of a fixed overlap pattern, so the plan's band keeps one
+    shape for every draw and compiles once.
+
+    Without ``inside``: the n + 1 edges of n source cells, each interior edge
+    jittered by up to a quarter cell. With it: target edges inside source cells
+    ``inside`` (within the middle 40 % of the unjittered cell, which every
+    jitter keeps inside the jittered one), and ``lo`` and ``hi``.
+    """
+    width = (hi - lo) / n
+    if inside is None:
+        interior = lo + width * (np.arange(1, n) + rng.uniform(-0.25, 0.25, n - 1))
+    else:
+        cells = np.asarray(inside, dtype=float)
+        interior = lo + width * (cells + rng.uniform(0.3, 0.7, cells.size))
+    return np.concatenate([[lo], interior, [hi]])
 
 
 def axis_from_edges(edges: np.ndarray, *, period: float | None = None) -> Axis:
@@ -85,6 +112,31 @@ class TestConservation:
         source_integral = field @ cell_areas(*source)
         target_integral = np.asarray(remapped) @ cell_areas(*target)
         assert_matches_oracle(target_integral, source_integral, rtol=1e-12)
+
+    @settings(max_examples=15, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_integrals_and_constants_are_preserved(self, seed: int) -> None:
+        # ∑ᵢ |Cᵢ| ŷᵢ = ∑ⱼ |cⱼ| yⱼ when the target covers the source, and the
+        # weights wᵢⱼ = |cⱼ ∩ Cᵢ| / |Cᵢ| of each row sum to one, so ŷ = c for y = c
+        rng = np.random.default_rng(seed)
+        source = (
+            _jittered_edges(rng, 12, 0.0, 5.0),
+            _jittered_edges(rng, 9, -2.0, 3.0),
+        )
+        target = (
+            _jittered_edges(rng, 12, 0.0, 5.0, inside=(2, 5, 8)),
+            _jittered_edges(rng, 9, -2.0, 3.0, inside=(3, 6)),
+        )
+        plan = Conservative().plan(grid_from_edges(*source), grid_from_edges(*target))
+        field = rng.normal(size=12 * 9)
+        remapped = np.asarray(plan(jnp.asarray(field)))
+        assert_matches_oracle(
+            remapped @ cell_areas(*target), field @ cell_areas(*source), rtol=1e-12
+        )
+        level = rng.uniform(-10.0, 10.0)
+        assert_matches_oracle(
+            plan(jnp.full(12 * 9, level)), np.full(4 * 3, level), rtol=1e-14
+        )
 
     def test_a_wider_target_conserves_under_extrapolate(self) -> None:
         rng = np.random.default_rng(3)
@@ -147,6 +199,30 @@ class TestConservation:
         refined = Conservative().plan(coarse, fine)(field)
         back = Conservative().plan(fine, coarse)(refined)
         assert_matches_oracle(back, field, rtol=1e-13)
+
+
+class TestOverlapWeights:
+    @settings(max_examples=15, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1))
+    def test_rows_and_columns_sum_to_the_covered_lengths(self, seed: int) -> None:
+        # ∑ⱼ |cⱼ ∩ Cᵢ| = |Cᵢ ∩ [e₀, e_N]| and ∑ᵢ |cⱼ ∩ Cᵢ| = |cⱼ ∩ [E₀, E_M]|:
+        # the cells of each axis tile their span, so the overlaps add up to the
+        # part of a cell the other axis covers
+        rng = np.random.default_rng(seed)
+        source = random_edges(rng, 12, rng.uniform(-1.0, 0.0), rng.uniform(1.0, 2.0))
+        target = random_edges(rng, 6, rng.uniform(-1.5, 0.5), rng.uniform(0.5, 2.5))
+        dense = overlap_weights_1d(source, target)
+        assert bool(np.all(dense >= 0.0))
+        covered_rows = np.clip(target[1:], source[0], source[-1]) - np.clip(
+            target[:-1], source[0], source[-1]
+        )
+        covered_columns = np.clip(source[1:], target[0], target[-1]) - np.clip(
+            source[:-1], target[0], target[-1]
+        )
+        assert_matches_oracle(dense.sum(axis=1), covered_rows, rtol=1e-13, atol=1e-15)
+        assert_matches_oracle(
+            dense.sum(axis=0), covered_columns, rtol=1e-13, atol=1e-15
+        )
 
 
 class TestAdjoint:

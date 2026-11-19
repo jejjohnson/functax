@@ -5,7 +5,10 @@ second or more (mostly einx compiling new shapes).
 
 from __future__ import annotations
 
+import functools
+
 import einx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -17,6 +20,7 @@ from _harness import (
     assert_traces,
     assert_transpose_matches,
 )
+from hypothesis import given, settings
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import map_coordinates
 
@@ -98,6 +102,74 @@ class TestOracle:
         expected = map_coordinates(field, targets.T, order=order)
         flat = einx.id("... -> (...)", jnp.asarray(field))
         assert_matches_oracle(plan(flat), expected, rtol=1e-12, atol=1e-14)
+
+
+LOCAL_SCHEMES = [Nearest(), Linear(), Cubic(), BSpline(3)]
+
+
+LOCAL_IDS = ["nearest", "linear", "cubic", "bspline3"]
+
+
+@functools.cache
+def _compiled_read(scheme):  # type: ignore[no-untyped-def]
+    """``(nodes, targets, data) ↦ H y``, the plan built and applied in one jit.
+
+    Hypothesis draws new node values each example; under ``jit`` the plan
+    compiles once per scheme rather than dispatching every op eagerly.
+    """
+
+    def read(
+        rows: jax.Array, cols: jax.Array, targets: jax.Array, data: jax.Array
+    ) -> jax.Array:
+        grid = RectilinearGrid((Axis(rows), Axis(cols)))
+        return scheme.plan(grid, Points(targets))(data)
+
+    return jax.jit(read)
+
+
+class TestProperties:
+    """Invariants of the local plans H = ⊗_d H_d built by `tensor_stencil`."""
+
+    @pytest.mark.parametrize("scheme", LOCAL_SCHEMES, ids=LOCAL_IDS)
+    @settings(max_examples=20, deadline=None)
+    @given(
+        seed=st.integers(0, 2**31 - 1),
+        scale=st.floats(-3.0, 3.0),
+        level=st.floats(-10.0, 10.0),
+    )
+    def test_linear_in_the_data_and_reproduces_constants(
+        self, scheme, seed: int, scale: float, level: float
+    ) -> None:  # type: ignore[no-untyped-def]
+        # H(a y₁ + y₂ + c 1) = a H y₁ + H y₂ + c, since every row sums to one
+        _, nodes = _rectilinear((5, 6), seed=seed)
+        targets = _interior(nodes, 20, seed=seed + 1)
+        first, second = np.random.default_rng(seed + 2).normal(size=(2, 30))
+        data = np.stack([scale * first + second + level, first, second])
+        values = _compiled_read(scheme)(
+            *(jnp.asarray(n) for n in nodes), jnp.asarray(targets), jnp.asarray(data)
+        )
+        expected = scale * values[1] + values[2] + level
+        assert_matches_oracle(values[0], expected, rtol=1e-12, atol=1e-12)
+
+    @settings(max_examples=20, deadline=None)
+    @given(
+        seed=st.integers(0, 2**31 - 1),
+        slope=st.tuples(st.floats(-5.0, 5.0), st.floats(-5.0, 5.0)),
+        offset=st.floats(-5.0, 5.0),
+    )
+    def test_linear_reproduces_affine_fields_on_uneven_grids(
+        self, seed: int, slope: tuple[float, float], offset: float
+    ) -> None:
+        # f(x) = aᵀx + b is exact: u is affine in x within a cell
+        _, nodes = _rectilinear((5, 6), seed=seed)
+        mesh = np.stack(np.meshgrid(*nodes, indexing="ij"), axis=-1)
+        field = einx.id("... -> (...)", mesh @ np.asarray(slope) + offset)
+        targets = _interior(nodes, 20, seed=seed + 1)
+        values = _compiled_read(Linear())(
+            *(jnp.asarray(n) for n in nodes), jnp.asarray(targets), jnp.asarray(field)
+        )
+        expected = targets @ np.asarray(slope) + offset
+        assert_matches_oracle(values, expected, rtol=1e-12, atol=1e-12)
 
 
 class TestAdjoint:
@@ -191,6 +263,28 @@ class TestSchemes:
             bilinear(einx.id("y x -> (y x)", field[f]))[k] for k, f in enumerate(frame)
         ]
         assert_matches_oracle(values, jnp.stack(expected), rtol=1e-12, atol=1e-14)
+
+    def test_tensor_gradient_and_traces_in_the_target_positions(self) -> None:
+        # differentiates the target positions through a linear × cubic read-out
+        grid, nodes = _rectilinear((5, 6), seed=97)
+        field = jax.random.normal(jax.random.key(98), (30,))
+        scheme = Tensor((Linear(), Cubic()))
+        rng = np.random.default_rng(99)
+        # offsets in (0.2, 0.8) of a cell: away from the linear kinks at the nodes
+        cells = [rng.integers(1, n.size - 2, 6) for n in nodes]
+        offsets = rng.uniform(0.2, 0.8, size=(6, 2))
+        xy = np.column_stack(
+            [
+                n[c] + t * (n[c + 1] - n[c])
+                for n, c, t in zip(nodes, cells, offsets.T, strict=True)
+            ]
+        )
+
+        def read(positions: jax.Array) -> jax.Array:
+            return scheme.plan(grid, Points(positions))(field)
+
+        assert_grad_matches_fd(read, jnp.asarray(xy))
+        assert_traces(read, einx.id("(b m) d -> b m d", jnp.asarray(xy), b=2))
 
     def test_periodic_longitude_reads_across_the_dateline(self) -> None:
         longitude = Axis(jnp.arange(0.0, 360.0, 10.0), period=360.0)

@@ -5,15 +5,18 @@ checks, each a second or more.
 
 from __future__ import annotations
 
+import functools
 import warnings
 
 import einx
 import equinox as eqx
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax import ValidationError
 from functax.geometry import Points
@@ -155,6 +158,44 @@ class TestOrdinaryAndUniversal:
         assert bool(jnp.all(jnp.isnan(plan(data)) == ~valid))
         draw = plan.sample(data, key=jax.random.key(0))
         assert bool(jnp.all(jnp.isfinite(draw[valid])))
+
+
+@functools.partial(jax.jit, static_argnames="drift")
+def _posterior(
+    sources: jax.Array, targets: jax.Array, drift: object
+) -> tuple[jax.Array, jax.Array]:
+    """Σ_{*∣y} and σ_*² of kriging with a nugget of 0.01 at the targets."""
+    plan = Kriging(_gaussian, drift=drift, nugget=0.01).plan(
+        Points(sources), Points(targets)
+    )
+    return plan.covariance(), plan.variance()
+
+
+class TestProperties:
+    @settings(max_examples=12, deadline=None)
+    @given(seed=st.integers(0, 2**31 - 1), drift=st.sampled_from([None, "constant", 1]))
+    def test_posterior_covariance_is_symmetric_positive_semi_definite(
+        self, seed: int, drift: object
+    ) -> None:
+        # Σ_{*∣y} = Σ_{*∣y}ᵀ ⪰ 0 with diag Σ_{*∣y} = σ_*², for ordinary and
+        # universal kriging (the dense GP oracle checks simple kriging's Σ_{*∣y});
+        # targets repeat two sources, where Σ_{*∣y} is near singular. Over 200
+        # seeds both were exact and no eigenvalue was negative
+        rng = np.random.default_rng(seed)
+        sources = rng.uniform(0.0, 1.0, (15, 2))
+        targets = np.concatenate([rng.uniform(-0.2, 1.2, (8, 2)), sources[:2]])
+        covariance, variance = _posterior(
+            jnp.asarray(sources), jnp.asarray(targets), drift
+        )
+        covariance = np.asarray(covariance)
+        scale = float(np.max(np.abs(covariance)))
+        assert_matches_oracle(covariance, covariance.T, rtol=0.0)
+        assert_matches_oracle(
+            np.diag(covariance), variance, rtol=1e-12, atol=1e-14 * scale
+        )
+        eigenvalues = np.linalg.eigvalsh(0.5 * (covariance + covariance.T))
+        # a symmetric eigensolve rounds at about ε M ‖Σ‖
+        assert float(np.min(eigenvalues)) >= -1e-12 * scale
 
 
 class TestValidationAndConfig:

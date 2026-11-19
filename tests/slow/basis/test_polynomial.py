@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import math
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 import scipy.special as sp
-from _harness import assert_grad_matches_fd, assert_traces
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax.basis.polynomial import (
     associated_legendre,
@@ -263,3 +265,59 @@ def test_legendre_series_low_degrees_and_shapes() -> None:
 def test_legendre_series_keeps_float32() -> None:
     x = jnp.linspace(-1.0, 1.0, 5, dtype=jnp.float32)
     assert legendre_series(x, jnp.ones(4, dtype=jnp.float32)).dtype == jnp.float32
+
+
+_L_MAX = 12
+
+
+_ORDERS = np.array(associated_legendre_indices(_L_MAX))
+
+
+# (−1)^{ℓ+m} per column of `associated_legendre`, (−1)^ℓ per degree
+_ASSOCIATED_PARITY = (-1.0) ** _ORDERS.sum(axis=1)
+
+
+_PARITY = (-1.0) ** np.arange(_L_MAX + 1)
+
+
+# compiled once per module, so each hypothesis example reuses the kernels
+_ASSOCIATED = {
+    normalization: jax.jit(
+        lambda t, normalization=normalization: associated_legendre(
+            t, _L_MAX, normalization=normalization
+        )
+    )
+    for normalization in ("orthonormal", "schmidt", "none")
+}
+
+
+_LEGENDRE = jax.jit(lambda t: legendre_polynomials(t, _L_MAX))
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    seed=st.integers(0, 2**31 - 1),
+    normalization=st.sampled_from(["orthonormal", "schmidt", "none"]),
+)
+def test_parity_under_reflection(seed: int, normalization: str) -> None:
+    # Pₗᵐ(−t) = (−1)^{ℓ+m} Pₗᵐ(t) in every normalisation, Pₗ(−t) = (−1)^ℓ Pₗ(t)
+    t = jax.random.uniform(jax.random.key(seed), (16,), minval=-1.0, maxval=1.0)
+    associated = _ASSOCIATED[normalization]
+    reflected = associated(-t)
+    scale = float(jnp.max(jnp.abs(reflected)))
+    assert_matches_oracle(
+        reflected, associated(t) * _ASSOCIATED_PARITY, rtol=0.0, atol=1e-13 * scale
+    )
+    assert_matches_oracle(_LEGENDRE(-t), _LEGENDRE(t) * _PARITY, rtol=0.0, atol=1e-13)
+
+
+def test_legendre_polynomials_gradient_matches_finite_differences() -> None:
+    # differentiated in t, inside (−1, 1)
+    assert_grad_matches_fd(
+        lambda t: legendre_polynomials(t, 8), jnp.array([-0.8, -0.1, 0.35, 0.9])
+    )
+
+
+def test_legendre_tables_trace() -> None:
+    t = jax.random.uniform(jax.random.key(4), (3, 5), minval=-1.0, maxval=1.0)
+    assert_traces(lambda x: associated_legendre(x, 6), t)

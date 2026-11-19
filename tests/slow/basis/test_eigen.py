@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import math
 
+import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from _harness import assert_matches_oracle
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
+from hypothesis import given, settings
 
 from functax.basis.eigen import (
     cotangent_laplacian_eigpairs,
@@ -157,3 +159,61 @@ def test_the_flat_square_has_the_neumann_spectrum() -> None:
     assert float(areas.sum()) == pytest.approx(1.0, rel=1e-12)
     assert abs(float(eigvals[0])) < 1e-10
     assert_matches_oracle(np.asarray(eigvals)[1:], expected[1:], rtol=0.05)
+
+
+def _eof_subspace(data: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """ΦΦᵀ and σ of the three leading EOFs: free of the sign of each pattern."""
+    patterns, singular_values = eof_basis(data, 3)
+    return patterns @ patterns.T, singular_values
+
+
+# compiled once per module, so each hypothesis example reuses the kernel
+_EOF_SUBSPACE = jax.jit(_eof_subspace)
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1))
+def test_eofs_ignore_the_mean_and_the_sample_order(seed: int) -> None:
+    # centring removes x̄, so adding a constant pattern to every sample, or
+    # reordering the samples, leaves the EOF subspace and the σ unchanged
+    keys = jax.random.split(jax.random.key(seed), 3)
+    data = jax.random.normal(keys[0], (12, 6)) * jnp.arange(6.0, 0.0, -1.0)
+    offset = 5.0 * jax.random.normal(keys[1], (6,))
+    order = jax.random.permutation(keys[2], 12)
+    projector, singular_values = _EOF_SUBSPACE(data)
+    moved_projector, moved_values = _EOF_SUBSPACE(data[order] + offset)
+    assert_matches_oracle(moved_projector, projector, rtol=0.0, atol=1e-10)
+    assert_matches_oracle(moved_values, singular_values, rtol=1e-10)
+
+
+def test_eof_gradient_matches_finite_differences() -> None:
+    # differentiated in the data, through ΦΦᵀ and σ; the column scales keep the
+    # leading singular values apart, so the SVD is differentiable there
+    data = jax.random.normal(jax.random.key(5), (8, 4)) * jnp.array(
+        [4.0, 2.5, 1.5, 1.0]
+    )
+    assert_grad_matches_fd(_eof_subspace, data, rtol=1e-7)
+
+
+def test_eof_traces() -> None:
+    data = jax.random.normal(jax.random.key(6), (3, 8, 4)) * jnp.array(
+        [4.0, 2.5, 1.5, 1.0]
+    )
+    assert_traces(_eof_subspace, data, rtol=1e-10)
+
+
+@settings(max_examples=20, deadline=None)
+@given(seed=st.integers(0, 2**31 - 1), scale=st.floats(0.2, 5.0))
+def test_mesh_spectrum_follows_similarity_transforms(seed: int, scale: float) -> None:
+    # an orthogonal map and a shift leave the cotangent spectrum unchanged; a
+    # scale s divides the eigenvalues by s² and multiplies the vertex areas by s²
+    vertices, triangles = icosphere(1)
+    rng = np.random.default_rng(seed)
+    orthogonal, _ = np.linalg.qr(rng.normal(size=(3, 3)))
+    moved = scale * np.asarray(vertices) @ orthogonal.T + rng.normal(size=3)
+    eigvals, _, areas = cotangent_laplacian_eigpairs(vertices, triangles, 9)
+    moved_eigvals, _, moved_areas = cotangent_laplacian_eigpairs(moved, triangles, 9)
+    assert_matches_oracle(
+        moved_eigvals * scale**2, eigvals, rtol=0.0, atol=1e-10 * float(eigvals[-1])
+    )
+    assert_matches_oracle(moved_areas, scale**2 * areas, rtol=1e-12)
