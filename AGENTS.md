@@ -222,7 +222,7 @@ uv run poe test-slow          # -m slow: tests/slow and the slow doctests
 uv run poe test-integration   # -m integration: tests/integration
 ```
 
-CI ("Tests", `ci.yml`) runs the fast tier on Python 3.12 and 3.13, and every tier with coverage (the 90 % gate) on 3.12.
+CI ("Tests", `ci.yml`) runs the whole fast tier on Python 3.12 and 3.13 on every pull request. A pull request then runs only the slow and integration tests its changes reach: `scripts/affected_tests.py` follows functax's imports module by module from the changed files to the tests and doctests that use them, and a change to a shared file (`conftest.py`, `tests/_harness.py`, `pyproject.toml`, `uv.lock`, `ci.yml`) selects everything. Pushes to main, the nightly run, manual runs and release-please pull requests run every tier with coverage (the 90 % gate) on 3.12. All runs are parallel (`pytest-xdist`, `-n auto --dist loadfile`); run `uv run python scripts/affected_tests.py` to see what your branch will run.
 
 ### Which tests to run while you work
 
