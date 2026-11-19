@@ -27,7 +27,7 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
-from jaxtyping import Array, ArrayLike, Bool, Float, Int, Real
+from jaxtyping import Array, ArrayLike, Bool, Complex, Float, Int, Real, Shaped
 
 from functax._src._dtypes import promote_integers
 from functax._src.basis._legendre import _check_degree
@@ -64,7 +64,9 @@ _GRID_RTOL = 1e-12
 
 def resampling_modes(
     n_source: int, n_target: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[
+    Int[np.ndarray, " mode"], Int[np.ndarray, " mode"], Float[np.ndarray, " mode"]
+]:
     """The mode map S of N → M resampling: (output bin, input bin, weight) triples.
 
     Bins are in full-FFT order (0, 1, …, then the negative wavenumbers). With
@@ -80,17 +82,34 @@ def resampling_modes(
     Returns:
         Three 1-D arrays of one length: the output bins, the input bins, and
         the weights (float64).
+
+    Examples:
+        Upsampling 4 → 8 copies bins 0 and ±1 and splits the Nyquist bin 2:
+
+        >>> from functax._src.interp._spectral import resampling_modes
+        >>> outputs, inputs, weights = resampling_modes(4, 8)
+        >>> outputs.tolist(), inputs.tolist()
+        ([0, 1, 2, 7, 6], [0, 1, 2, 3, 2])
+        >>> weights.tolist() == [1.0, 1.0, 0.5, 1.0, 0.5]
+        True
+
+        Equal sizes copy every bin once:
+
+        >>> outputs, inputs, weights = resampling_modes(5, 5)
+        >>> bool((outputs == inputs).all()), weights.shape
+        (True, (5,))
     """
-    m = min(n_source, n_target)
+    n_kept = min(n_source, n_target)
     # the bins k = 0, …, ⌊m/2⌋, then the negative bins k = −1, …, −(m − ⌊m/2⌋ − 1)
-    n_nonnegative = m // 2 + 1
+    n_nonnegative = n_kept // 2 + 1
     positive = np.arange(n_nonnegative)
-    negative = np.arange(1, m - n_nonnegative + 1)
+    negative = np.arange(1, n_kept - n_nonnegative + 1)
+    # bin −k of a length-L DFT sits at L − k
     outputs = [positive, n_target - negative]
     inputs = [positive, n_source - negative]
     weights = [np.ones(positive.size), np.ones(negative.size)]
-    if m % 2 == 0 and n_source != n_target:
-        half = m // 2
+    if n_kept % 2 == 0 and n_source != n_target:
+        half = n_kept // 2
         if n_target > n_source:
             # split input bin N/2 into output bins +N/2 and −N/2
             weights[0][half] = 0.5
@@ -166,16 +185,22 @@ class FourierReadout(Readout):
 
     def _map_modes(
         self,
-        spectrum: jax.Array,
-        gather: jax.Array,
-        scatter: jax.Array,
+        spectrum: Complex[Array, "*batch bin"],
+        gather: Int[Array, " mode"],
+        scatter: Int[Array, " mode"],
         size: int,
-    ) -> jax.Array:
+    ) -> Complex[Array, "*batch out_bin"]:
         """Z[scatter] += w · X[gather] over the last axis: S X, or Sᵀ X swapped."""
         weights = self.mode_weights.astype(spectrum.real.dtype)
-        contributions = spectrum[..., gather] * weights
+        # X[gather]
+        gathered = einx.get_at("... [bin], mode -> ... mode", spectrum, gather)
+        # w · X[gather]
+        contributions = einx.multiply("... mode, mode -> ... mode", gathered, weights)
         zeros = jnp.zeros((*spectrum.shape[:-1], size), spectrum.dtype)
-        return zeros.at[..., scatter].add(contributions)
+        # Z[scatter] += w · X[gather]
+        return einx.add_at(
+            "... [bin], mode, ... mode -> ... [bin]", zeros, scatter, contributions
+        )
 
     def apply(
         self, coefficients: Float[Array, "*batch source"]
@@ -198,8 +223,9 @@ class FourierReadout(Readout):
         padded = self._map_modes(
             spectrum, self.input_modes, self.output_modes, self.n_target
         )
-        # (M/N) Re F⁻¹_M[S F_N y]
+        # Re F⁻¹_M[S F_N y]
         resampled = jnp.fft.ifft(padded).real
+        # (M/N) Re F⁻¹_M[S F_N y]
         return resampled * (self.n_target / self.n_source)
 
     def apply_adjoint(
@@ -232,7 +258,7 @@ class FourierReadout(Readout):
         return lx.FunctionLinearOperator(self.apply, structure)
 
 
-def _check_last_axis(array: jax.Array, size: int, name: str) -> None:
+def _check_last_axis(array: Shaped[Array, "*shape"], size: int, name: str) -> None:
     if array.ndim < 1 or array.shape[-1] != size:
         msg = (
             f"'{name}' must have a last axis of length {size}, got shape {array.shape}"
@@ -257,9 +283,13 @@ def _periodic_grid(axis: Any, name: str) -> tuple[float, float, int]:
     values = np.asarray(axis.values, dtype=np.float64)
     n_nodes = values.shape[0]
     period = axis.period
-    # xⱼ = x₀ + jP/N: ascending, equally spaced, tiling the whole period
-    expected = values[0] + np.arange(n_nodes) * (period / n_nodes)
-    deviation = np.max(np.abs(values - expected))
+    # jP/N: ascending, equally spaced, tiling the whole period
+    offsets = np.arange(n_nodes) * (period / n_nodes)
+    # xⱼ = x₀ + jP/N
+    expected = values[0] + offsets
+    # max_j |xⱼ − (x₀ + jP/N)|
+    misfit = np.abs(values - expected)
+    deviation = einx.max("[node]", misfit)
     if deviation > _grid_tolerance(axis) * period:
         msg = (
             f"'{name}' must have the nodes x0 + j * period / n (ascending, "
@@ -407,25 +437,27 @@ def clenshaw(
         ValidationError: If ``coefficients`` is not 1-D and non-empty, or the
             interval is not two finite numbers with a < b.
 
-    References:
-        Clenshaw, C. W. (1955). A note on the summation of Chebyshev series.
-        Mathematical Tables and Other Aids to Computation 9(51), 118–120.
-
     Examples:
         >>> import jax.numpy as jnp
         >>> from functax.interp import clenshaw
         >>> # T₂(x) = 2x² − 1
-        >>> clenshaw(
+        >>> values = clenshaw(
         ...     jnp.array([0.0, 0.5, 1.0]), jnp.array([0.0, 0.0, 1.0])
-        ... ).tolist()
-        [-1.0, -0.5, 1.0]
+        ... )
+        >>> bool(jnp.allclose(values, jnp.array([-1.0, -0.5, 1.0])))
+        True
         >>> # on [0, 4], T₁(ξ) = ξ = (x − 2)/2
-        >>> clenshaw(
+        >>> shifted = clenshaw(
         ...     jnp.array([3.0]), jnp.array([0.0, 1.0]), interval=(0.0, 4.0)
-        ... ).tolist()
-        [0.5]
+        ... )
+        >>> bool(jnp.allclose(shifted, 0.5))
+        True
         >>> clenshaw(jnp.zeros((2, 3)), jnp.ones(5)).shape
         (2, 3)
+
+    References:
+        Clenshaw, C. W. (1955). A note on the summation of Chebyshev series.
+        Mathematical Tables and Other Aids to Computation 9(51), 118–120.
     """
     lower, upper = _reference_interval(interval)
     series = promote_integers(jnp.asarray(coefficients))
@@ -437,14 +469,16 @@ def clenshaw(
     points = points.astype(dtype)
     series = series.astype(dtype)
     # ξ = (2x − a − b)/(b − a)
-    reference = (2.0 * points - (lower + upper)) / (upper - lower)
+    stretched = 2.0 * points - (lower + upper)
+    reference = stretched / (upper - lower)
     # f = a₀ for K = 1
     if series.shape[0] == 1:
         return jnp.full_like(reference, series[0])
 
     def step(
-        carry: tuple[jax.Array, jax.Array], coefficient: jax.Array
-    ) -> tuple[tuple[jax.Array, jax.Array], None]:
+        carry: tuple[Float[Array, "*batch"], Float[Array, "*batch"]],
+        coefficient: Float[Array, ""],
+    ) -> tuple[tuple[Float[Array, "*batch"], Float[Array, "*batch"]], None]:
         later, latest = carry
         # bₖ = aₖ + 2ξ bₖ₊₁ − bₖ₊₂
         current = coefficient + 2.0 * reference * later - latest
@@ -497,7 +531,9 @@ def _chebyshev_grid(axis: Any, kind: str, name: str) -> _ChebyshevGrid:
         half_width = (first - last) / (2.0 * math.cos(math.pi / (2 * degree)))
         lower, upper = float(centre - half_width), float(centre + half_width)
     expected = _mapped_nodes(degree, kind, lower, upper)
-    deviation = float(np.max(np.abs(descending_values - expected)))
+    # max_j |xⱼ − x̂ⱼ| against the nodes of [a, b]
+    misfit = np.abs(descending_values - expected)
+    deviation = float(einx.max("[node]", misfit))
     if deviation > _grid_tolerance(axis) * (upper - lower):
         msg = (
             f"'{name}' must hold the {kind} Chebyshev nodes of an interval (in "
@@ -554,7 +590,9 @@ class ChebyshevFit(Fit):
             )
             raise ValidationError(msg)
 
-    def _oriented(self, values: jax.Array) -> jax.Array:
+    def _oriented(
+        self, values: Float[Array, "*batch node"]
+    ) -> Float[Array, "*batch node"]:
         """The values in the transform's (descending) node order, or back."""
         return values[..., ::-1] if self.ascending else values
 
@@ -592,9 +630,11 @@ class ChebyshevFit(Fit):
             # Cᵀ = C on the Lobatto nodes
             back = self.transform.to_spectral(padded)
         else:
-            # Cᵀ g = (2/N) synthesis(g/c), with c₀ = 2
+            # g/c, with c₀ = 2
             halved = padded.at[..., 0].multiply(0.5)
-            back = self.transform.from_spectral(halved) * (2.0 / self.transform.n)
+            # Cᵀ g = (2/N) synthesis(g/c)
+            synthesis = self.transform.from_spectral(halved)
+            back = synthesis * (2.0 / self.transform.n)
         return self._oriented(back)
 
     def data_size(self, n_coefficients: int) -> int:
@@ -616,14 +656,14 @@ def _reference_points(
     under every rule, and read ξ = 0 so no NaN reaches a gradient.
     """
     # ξ = (2x − a − b)/(b − a)
-    reference = (2.0 * coordinates - (grid.lower + grid.upper)) / (
-        grid.upper - grid.lower
-    )
+    stretched = 2.0 * coordinates - (grid.lower + grid.upper)
+    reference = stretched / (grid.upper - grid.lower)
     finite = jnp.isfinite(reference)
     # a target within rounding of an end counts as on it: 1e-12, or 8ε of a
     # coarser dtype
     epsilon = float(jnp.finfo(reference.dtype).eps)
     tolerance = max(_GRID_RTOL, 8 * epsilon)
+    # |ξ| ≤ 1 + tol
     inside = finite & (jnp.abs(reference) <= 1.0 + tolerance)
     check_outside(inside, policies)
     valid = finite if policies.outside in ("clamp", "extrapolate") else inside
@@ -632,7 +672,9 @@ def _reference_points(
         # onto ±1 with a unit derivative up to the ends (jnp.clip halves it
         # there) and zero beyond them
         one = jnp.ones((), safe.dtype)
-        safe = jnp.where(safe > 1.0, one, jnp.where(safe < -1.0, -one, safe))
+        # ξ ↦ max(ξ, −1), then min(ξ, 1)
+        raised = jnp.where(safe < -1.0, -one, safe)
+        safe = jnp.where(safe > 1.0, one, raised)
     elif policies.outside != "extrapolate":
         safe = jnp.where(inside, safe, jnp.zeros((), safe.dtype))
     return safe, valid
@@ -673,8 +715,9 @@ class ChebyshevInterpolant(eqx.Module):
         ...     )
         ... )
         True
-        >>> field(jnp.array([[3.0]])).tolist()
-        [nan]
+        >>> # off [a, b], the default policy reads NaN
+        >>> bool(jnp.isnan(field(jnp.array([[3.0]]))).all())
+        True
     """
 
     coefficients: Float[Array, "*batch mode"]
@@ -712,9 +755,10 @@ class ChebyshevInterpolant(eqx.Module):
             )
             raise GeometryError(msg)
         grid = _ChebyshevGrid(0, self.lower, self.upper, ascending=False)
-        reference, valid = _reference_points(coordinates[:, 0], grid, self.policies)
+        positions = einx.id("target 1 -> target", coordinates)
+        reference, valid = _reference_points(positions, grid, self.policies)
 
-        def evaluate(series: jax.Array) -> jax.Array:
+        def evaluate(series: Float[Array, " mode"]) -> Float[Array, " target"]:
             # the coefficients are already on [−1, 1]: ξ is the point
             return clenshaw(reference, series)
 
@@ -828,12 +872,14 @@ class Chebyshev(Scheme):
                 "the Chebyshev source has 1 axis"
             )
             raise GeometryError(msg)
-        reference, valid = _reference_points(coordinates[:, 0], grid, policies)
+        positions = einx.id("target 1 -> target", coordinates)
+        reference, valid = _reference_points(positions, grid, policies)
         # T_pk = Tₖ(ξ_p)
         table = _chebyshev(reference, self.n_coefficients)
+        read = KernelReadout(table, valid)
         is_grid = isinstance(target, RectilinearGrid | AffineGrid)
         target_shape = target.shape if is_grid else None
-        return Plan(fit, KernelReadout(table, valid), policies, None, target_shape)
+        return Plan(fit, read, policies, None, target_shape)
 
     def fit(
         self,
@@ -864,7 +910,9 @@ class Chebyshev(Scheme):
         data = promote_integers(jnp.asarray(data))
         if policies.missing == "fill":
             fill = jnp.asarray(policies.fill_value, dtype=data.dtype)
-            data = jnp.where(jnp.isfinite(data), data, fill)
+            finite = jnp.isfinite(data)
+            data = jnp.where(finite, data, fill)
+        # c = P C y
         coefficients = fit.apply(data)
         return ChebyshevInterpolant(
             coefficients, source, self, policies, grid.lower, grid.upper

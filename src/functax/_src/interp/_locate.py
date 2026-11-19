@@ -21,7 +21,6 @@ require_jax(__name__)
 
 from typing import Any
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, ArrayLike, Bool, Float, Int
@@ -45,19 +44,21 @@ __all__ = [
 ]
 
 
-def _ascending(axis: Axis) -> tuple[jax.Array, bool | jax.Array]:
+def _ascending(axis: Axis) -> tuple[Float[Array, " node"], bool | Bool[Array, ""]]:
     """The node values in increasing order, and whether they were reversed."""
     values = axis.values
     if is_tracer(values):
         # a traced axis cannot say which way it runs; compare its ends
         descending = values[0] > values[-1]
-        ascending = jnp.where(descending, values[::-1], values)
+        reversed_values = values[::-1]
+        ascending = jnp.where(descending, reversed_values, values)
         return ascending, descending
     # np.asarray first: under jit, indexing a concrete JAX array stages a
     # traced slice, which bool() cannot read
-    ends = np.asarray(values)[[0, -1]]
-    descending = bool(ends[0] > ends[1])
-    return (values[::-1] if descending else values), descending
+    host_values = np.asarray(values)
+    descending = bool(host_values[0] > host_values[-1])
+    ascending = values[::-1] if descending else values
+    return ascending, descending
 
 
 def _rectilinear_positions(
@@ -66,12 +67,15 @@ def _rectilinear_positions(
     """u = i + (x − xᵢ)/(xᵢ₊₁ − xᵢ) on increasing nodes, linear past the ends."""
     n_nodes = nodes.shape[0]
     # i = searchsorted(x, side="right") − 1, kept to a real cell [0, N − 2]
-    cell = jnp.searchsorted(nodes, positions, side="right") - 1
+    insertion = jnp.searchsorted(nodes, positions, side="right")
+    cell = insertion - 1
     cell = jnp.clip(cell, 0, n_nodes - 2)
+    # xᵢ and xᵢ₊₁
     left = nodes[cell]
     right = nodes[cell + 1]
     # t = (x − xᵢ)/(xᵢ₊₁ − xᵢ), outside [0, 1] beyond the end cells
     offset = (positions - left) / (right - left)
+    # u = i + t
     return cell + offset
 
 
@@ -87,23 +91,34 @@ def _repeated_positions(
     u = N − 1 + (x − x_{N−1})/h_last from x_{N−1} on.
     """
     n_nodes = nodes.shape[0]
+    # hᵢ = xᵢ₊₁ − xᵢ
     widths = nodes[1:] - nodes[:-1]
     # i = searchsorted(x, side="right") − 1, −1 below x₀ and N − 1 from x_{N−1}
-    cell = jnp.searchsorted(nodes, positions, side="right") - 1
+    insertion = jnp.searchsorted(nodes, positions, side="right")
+    cell = insertion - 1
     inner = jnp.clip(cell, 0, n_nodes - 2)
     left = nodes[inner]
+    # xᵢ₊₁ − xᵢ for the clipped cell
     width = nodes[inner + 1] - left
     has_width = width > 0
     # a zero width is only reached below x₀ or from x_{N−1} on, which do not use it
-    safe_width = jnp.where(has_width, width, jnp.ones((), width.dtype))
+    one = jnp.ones((), width.dtype)
+    safe_width = jnp.where(has_width, width, one)
+    # u = i + (x − xᵢ)/(xᵢ₊₁ − xᵢ)
     interior = inner + (positions - left) / safe_width
     # h_first and h_last, the outermost positive widths (the span is positive)
     positive = widths > 0
-    first_width = widths[jnp.argmax(positive)]
-    last_width = widths[n_nodes - 2 - jnp.argmax(positive[::-1])]
+    first_positive = jnp.argmax(positive)
+    first_width = widths[first_positive]
+    positive_from_end = positive[::-1]
+    last_positive = n_nodes - 2 - jnp.argmax(positive_from_end)
+    last_width = widths[last_positive]
+    # u = (x − x₀)/h_first below x₀
     below = (positions - nodes[0]) / first_width
+    # u = N − 1 + (x − x_{N−1})/h_last from x_{N−1} on
     above = (n_nodes - 1) + (positions - nodes[-1]) / last_width
-    return jnp.where(cell < 0, below, jnp.where(cell >= n_nodes - 1, above, interior))
+    inside_or_above = jnp.where(cell >= n_nodes - 1, above, interior)
+    return jnp.where(cell < 0, below, inside_or_above)
 
 
 def hold_repeated_ends(
@@ -134,7 +149,9 @@ def hold_repeated_ends(
     # end node too, where min and max would split the gradient
     zero = jnp.zeros((), positions.dtype)
     last = jnp.asarray(n_nodes - 1, positions.dtype)
+    # u ← 0 below a repeated first node
     positions = jnp.where(low_held & (positions < 0), zero, positions)
+    # u ← N − 1 above a repeated last node
     return jnp.where(high_held & (positions >= n_nodes - 1), last, positions)
 
 
@@ -167,12 +184,14 @@ def require_no_repeats(source: Any, reader: str, *, axes: Any = None) -> None:
             )
             raise GeometryError(msg)
         values = np.asarray(axis.values)
-        repeated = np.flatnonzero(values[1:] == values[:-1])
+        # xₖ = xₖ₊₁
+        is_repeat = values[1:] == values[:-1]
+        repeated = np.flatnonzero(is_repeat)
         if repeated.size:
-            k = int(repeated[0])
+            first = int(repeated[0])
             msg = (
                 f"{reader} cannot read repeated nodes, but axis {index} repeats "
-                f"x[{k}] = x[{k + 1}] = {float(values[k])!r}"
+                f"x[{first}] = x[{first + 1}] = {float(values[first])!r}"
             )
             raise GeometryError(msg)
 
@@ -189,22 +208,31 @@ def _one_node_positions(
     non-finite target stays invalid under every policy.
     """
     node = axis.values[0]
+    # x − x₀
     offset = positions - node
     # sign(±∞) would be finite, so a non-finite target keeps its position
     finite = jnp.isfinite(offset)
     if axis.edges is None:
-        return jnp.where(finite, jnp.sign(offset), offset)
+        # u = sign(x − x₀)
+        sign = jnp.sign(offset)
+        return jnp.where(finite, sign, offset)
     lower = jnp.minimum(axis.edges[0], axis.edges[1])
     upper = jnp.maximum(axis.edges[0], axis.edges[1])
     below = offset < 0
     # w, from x₀ to the edge on the side of x
     width = jnp.where(below, node - lower, upper - node)
     has_width = width > 0
-    safe_width = jnp.where(has_width, width, jnp.ones((), width.dtype))
+    one = jnp.ones((), width.dtype)
+    safe_width = jnp.where(has_width, width, one)
+    # |x − x₀|
     distance = jnp.abs(offset)
-    # ½ |x − x₀|/w, or sign |x − x₀| (0 or 1, ∞ and NaN kept) past a zero width
-    past = jnp.where(finite, jnp.sign(distance), distance)
-    magnitude = jnp.where(has_width, 0.5 * distance / safe_width, past)
+    # sign |x − x₀| (0 or 1, ∞ and NaN kept) past a zero width
+    distance_sign = jnp.sign(distance)
+    past = jnp.where(finite, distance_sign, distance)
+    # ½ |x − x₀|/w
+    scaled = 0.5 * distance / safe_width
+    magnitude = jnp.where(has_width, scaled, past)
+    # u = ±½ |x − x₀|/w on the side of x
     return jnp.where(below, -magnitude, magnitude)
 
 
@@ -250,6 +278,14 @@ def index_positions(
     sits at its last node, and past the ends it continues with the outermost
     cell of positive width.
 
+    Algorithm:
+        1. Sort the nodes increasing, noting whether the axis was reversed.
+        2. On a periodic axis, map x into one period and append the wrap
+           node x₀ + P; on one node, use ``sign(x − x₀)`` or the edges.
+        3. Locate u on the increasing nodes: (x − x₀)/Δ on a regular axis,
+           i + t from ``searchsorted`` otherwise (right-continuous at repeats).
+        4. On a reversed axis, return (N − 1) − u.
+
     Args:
         axis: The source axis, increasing or decreasing, maybe periodic.
         positions: x, the target coordinates, any shape.
@@ -269,14 +305,23 @@ def index_positions(
         ...     Axis(jnp.array([3.0, 2.0, 1.0])), jnp.array([2.5])
         ... ).tolist()
         [0.5]
+
+        A periodic axis maps x into one period first:
+
+        >>> periodic = Axis(jnp.arange(4.0), period=4.0)
+        >>> index_positions(periodic, jnp.array([-0.5, 5.0])).tolist()
+        [3.5, 1.0]
     """
     positions = jnp.asarray(positions)
     n_nodes = axis.values.shape[0]
     nodes, descending = _ascending(axis)
     if axis.period is not None:
         origin = nodes[0]
-        # x′ = x₀ + ((x − x₀) mod P), then the wrap cell x_{N−1} → x₀ + P
-        wrapped = origin + jnp.mod(positions - origin, axis.period)
+        # (x − x₀) mod P
+        within_period = jnp.mod(positions - origin, axis.period)
+        # x′ = x₀ + ((x − x₀) mod P)
+        wrapped = origin + within_period
+        # the wrap cell x_{N−1} → x₀ + P
         extended = jnp.append(nodes, origin + axis.period)
         positions_ascending = _rectilinear_positions(extended, wrapped)
     elif n_nodes == 1:
@@ -361,7 +406,9 @@ def locate(
     """
     lower, upper = domain_bounds(axis.values.shape[0], extent)
     position = index_positions(axis, positions)
+    # i = ⌊u⌋
     cell_float = jnp.floor(position)
+    # t = u − i
     offset = position - cell_float
     cell = cell_float.astype(jnp.int32)
     finite = jnp.isfinite(position)
@@ -416,19 +463,25 @@ def remap_taps(
         msg = f"'boundary' must be one of {list(BOUNDARY)}, got {boundary!r}"
         raise PolicyError(msg)
     taps = jnp.asarray(taps)
+    # 0 ≤ j ≤ N − 1
     in_range = (taps >= 0) & (taps <= n_nodes - 1)
     all_kept = jnp.ones(taps.shape, dtype=bool)
     if periodic or boundary == "wrap":
-        return jnp.mod(taps, n_nodes), all_kept
+        # j mod N
+        wrapped = jnp.mod(taps, n_nodes)
+        return wrapped, all_kept
+    # clip(j, 0, N − 1), for edge and constant
+    clipped = jnp.clip(taps, 0, n_nodes - 1)
     if boundary == "edge":
-        return jnp.clip(taps, 0, n_nodes - 1), all_kept
+        return clipped, all_kept
     if boundary == "constant":
-        return jnp.clip(taps, 0, n_nodes - 1), in_range
+        return clipped, in_range
     if n_nodes == 1:
         return jnp.zeros_like(taps), all_kept
     # mirror: j mod 2(N − 1), then fold the second half back
     period = 2 * (n_nodes - 1)
     folded = jnp.mod(taps, period)
+    # j ↦ 2(N − 1) − j on the second half
     mirrored = jnp.where(folded > n_nodes - 1, period - folded, folded)
     return mirrored, all_kept
 
@@ -444,6 +497,22 @@ def check_outside(inside: ArrayLike, policies: Policies) -> None:
         PolicyError: Under ``outside="raise"`` on traced targets, which cannot
             be checked before they run.
         OutsideDomainError: Under ``outside="raise"`` when a target is outside.
+
+    Examples:
+        Every target inside passes, and any other policy never raises:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.interp import Policies, check_outside
+        >>> check_outside(jnp.array([True, True]), Policies(outside="raise"))
+        >>> check_outside(jnp.array([True, False]), Policies(outside="nan"))
+
+        Under ``outside="raise"`` a target outside is refused:
+
+        >>> check_outside(
+        ...     jnp.array([True, False]), Policies(outside="raise")
+        ... )  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        functax.exceptions.OutsideDomainError: 1 of 2 targets lie outside ...
     """
     if policies.outside != "raise":
         return
@@ -454,6 +523,7 @@ def check_outside(inside: ArrayLike, policies: Policies) -> None:
         )
         raise PolicyError(msg)
     flags = np.asarray(inside)
+    # full reduction, not einx: a plan may have no targets
     if flags.all():
         return
     outside = np.flatnonzero(~flags)

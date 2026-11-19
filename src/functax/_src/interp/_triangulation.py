@@ -63,15 +63,17 @@ def _as_simplices(value: Any) -> tuple[tuple[int, ...], ...] | None:
     if not np.issubdtype(rows.dtype, np.integer):
         msg = f"'simplices' must hold integer vertex indices, got {rows.dtype}"
         raise ValidationError(msg)
-    if (rows < 0).any():
+    negative = rows < 0
+    if np.any(negative):
         msg = "'simplices' must hold non-negative vertex indices"
         raise ValidationError(msg)
     return tuple(tuple(operator.index(index) for index in row) for row in rows)
 
 
 def _affine_maps(
-    vertices: np.ndarray, simplices: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
+    vertices: Float[np.ndarray, "source dim"],
+    simplices: Int[np.ndarray, "simplex vertex"],
+) -> tuple[Float[np.ndarray, "simplex dim dim"], Float[np.ndarray, "simplex dim"]]:
     """T_τ⁻¹ and r_τ of each simplex, in the layout of ``Delaunay.transform``.
 
     With r_τ the last vertex and T_τ the D × D matrix of edges vₖ − r_τ as
@@ -82,22 +84,38 @@ def _affine_maps(
     """
     corners = vertices[simplices]
     reference = corners[:, -1]
-    # columns vₖ − r_τ, k = 1, …, D
-    edges = np.swapaxes(corners[:, :-1] - reference[:, None], 1, 2)
+    # vₖ − r_τ, k = 1, …, D
+    offsets = einx.subtract(
+        "simplex vertex dim, simplex dim -> simplex vertex dim",
+        corners[:, :-1],
+        reference,
+    )
+    # T_τ, with the edges vₖ − r_τ as columns
+    edges = einx.id("simplex col row -> simplex row col", offsets)
+    # det T_τ
     determinants = np.linalg.det(edges)
-    scale = np.abs(edges).max(axis=(1, 2)) ** edges.shape[1]
-    degenerate = np.abs(determinants) <= 1e-14 * scale
-    if degenerate.any():
+    # (maxₖₗ |T_τ,kl|)ᴰ, the volume of a simplex of that size up to a constant
+    magnitude = np.abs(edges)
+    largest = einx.max("simplex [row col]", magnitude)
+    scale = largest ** edges.shape[1]
+    # |det T_τ| ≤ 10⁻¹⁴ (maxₖₗ |T_τ,kl|)ᴰ
+    volume = np.abs(determinants)
+    degenerate = volume <= 1e-14 * scale
+    if np.any(degenerate):
         first = int(np.flatnonzero(degenerate)[0])
         msg = f"'simplices' row {first} is degenerate (zero volume)"
         raise GeometryError(msg)
     # the host fit of a fixed mesh: one D × D inverse per simplex, as SciPy stores
-    return np.linalg.inv(edges), reference
+    # it, so the two paths share one layout and every target reuses it
+    inverses = np.linalg.inv(edges)
+    return inverses, reference
 
 
 def _locate_in_mesh(
-    targets: np.ndarray, inverses: np.ndarray, references: np.ndarray
-) -> np.ndarray:
+    targets: Float[np.ndarray, "target dim"],
+    inverses: Float[np.ndarray, "simplex dim dim"],
+    references: Float[np.ndarray, "simplex dim"],
+) -> Int[np.ndarray, " target"]:
     """The first simplex holding each target, or −1, by brute force on the host."""
     n_targets = targets.shape[0]
     n_simplices = inverses.shape[0]
@@ -105,15 +123,28 @@ def _locate_in_mesh(
     chunk = max(1, _MAX_PAIRS // n_simplices)
     for start in range(0, n_targets, chunk):
         block = targets[start : start + chunk]
-        # (b₁, …, b_D) = T_τ⁻¹ (x − r_τ) for every target and simplex
-        offsets = block[:, None, :] - references[None, :, :]
-        leading = np.einsum("srd,tsd->tsr", inverses, offsets)
-        last = 1.0 - leading.sum(axis=-1)
-        inside = (leading >= -_INSIDE_TOLERANCE).all(axis=-1) & (
-            last >= -_INSIDE_TOLERANCE
+        # x − r_τ for every target and simplex
+        offsets = einx.subtract(
+            "target dim, simplex dim -> target simplex dim", block, references
         )
-        hit = inside.any(axis=1)
-        found[start : start + chunk] = np.where(hit, inside.argmax(axis=1), -1)
+        # (b₁, …, b_D) = T_τ⁻¹ (x − r_τ)
+        leading = einx.dot(
+            "simplex row col, target simplex col -> target simplex row",
+            inverses,
+            offsets,
+        )
+        # ∑ₖ bₖ
+        leading_sum = einx.sum("target simplex [row]", leading)
+        # b_{D+1} = 1 − ∑ₖ bₖ
+        last = 1.0 - leading_sum
+        # bₖ ≥ −tol for every k ≤ D + 1
+        leading_inside = leading >= -_INSIDE_TOLERANCE
+        all_leading_inside = einx.all("target simplex [row]", leading_inside)
+        last_inside = last >= -_INSIDE_TOLERANCE
+        inside = all_leading_inside & last_inside
+        hit = einx.any("target [simplex]", inside)
+        first_simplex = einx.argmax("target [simplex] -> target", inside)
+        found[start : start + chunk] = np.where(hit, first_simplex, -1)
     return found
 
 
@@ -130,15 +161,19 @@ def _barycentric_stencil(
     zero_index = jnp.zeros((), simplex.dtype)
     safe_simplex = jnp.where(row_ok, simplex, zero_index)
     zero = jnp.zeros((), coordinates.dtype)
+    target_references = references[safe_simplex]
     # x − r_τ, with a target outside read at the origin of simplex 0 and masked
-    offsets = coordinates - references[safe_simplex]
+    offsets = coordinates - target_references
     offsets = einx.where("target, target dim, -> target dim", row_ok, offsets, zero)
+    target_inverses = inverses[safe_simplex]
     # (b₁, …, b_D) = T_τ⁻¹ (x − r_τ)
     leading = einx.dot(
-        "target row col, target col -> target row", inverses[safe_simplex], offsets
+        "target row col, target col -> target row", target_inverses, offsets
     )
+    # ∑ₖ bₖ
+    leading_sum = einx.sum("target [row]", leading)
     # b_{D+1} = 1 − ∑ₖ bₖ
-    last = 1.0 - einx.sum("target [row]", leading)
+    last = 1.0 - leading_sum
     weights = einx.id("target row, target -> target (row + 1)", leading, last)
     weights = einx.where("target, target tap, -> target tap", row_ok, weights, zero)
     # an invalid row reads vertex 0 with weight 0
@@ -278,8 +313,13 @@ class Delaunay(Scheme):
             if source.valid is None
             else np.asarray(source.valid)
         )
-        finite = np.asarray(np.isfinite(targets).all(axis=1))
-        queries = np.where(finite[:, None], targets, 0.0)
+        is_finite = np.isfinite(targets)
+        finite = einx.all("target [dim]", is_finite)
+        origin = np.zeros((), targets.dtype)
+        # a non-finite target is located at the origin and masked later
+        queries = einx.where(
+            "target, target dim, -> target dim", finite, targets, origin
+        )
         if self.simplices is None:
             spatial = import_scipy("spatial", needed_by="Delaunay.plan")
             kept = np.flatnonzero(real)
@@ -302,23 +342,33 @@ class Delaunay(Scheme):
                     f"{int(simplices.max())}"
                 )
                 raise ValidationError(msg)
-            simplices = simplices[real[simplices].all(axis=1)]
+            # a given simplex that touches a padding source is dropped
+            vertex_real = real[simplices]
+            all_real = einx.all("simplex [vertex]", vertex_real)
+            simplices = simplices[all_real]
             inverses, references = _affine_maps(vertices, simplices)
             simplex = _locate_in_mesh(queries, inverses, references)
 
         # --- weigh in JAX, in the dtype of the coordinates ---
-        row_ok = (simplex >= 0) & finite
+        located = simplex >= 0
+        row_ok = located & finite
         if target_valid is not None:
-            row_ok = row_ok & np.asarray(target_valid)
+            host_target_valid = np.asarray(target_valid)
+            row_ok = row_ok & host_target_valid
         check_outside(row_ok, policies)
         dtype = coordinates.dtype
+        device_simplex = jnp.asarray(simplex, dtype=jnp.int32)
+        device_simplices = jnp.asarray(simplices, dtype=jnp.int32)
+        device_inverses = jnp.asarray(inverses, dtype=dtype)
+        device_references = jnp.asarray(references, dtype=dtype)
+        device_row_ok = jnp.asarray(row_ok)
         stencil = _barycentric_stencil(
             coordinates,
-            jnp.asarray(simplex, dtype=jnp.int32),
-            jnp.asarray(simplices, dtype=jnp.int32),
-            jnp.asarray(inverses, dtype=dtype),
-            jnp.asarray(references, dtype=dtype),
-            jnp.asarray(row_ok),
+            device_simplex,
+            device_simplices,
+            device_inverses,
+            device_references,
+            device_row_ok,
             n_source,
         )
         return Plan(Identity(), stencil, policies, None, target_shape)

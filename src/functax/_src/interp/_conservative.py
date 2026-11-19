@@ -26,6 +26,7 @@ import einx
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from jaxtyping import Bool, Float, Int
 
 from functax._src.geometry._sphere import _check_unit, lonlat_to_unit
 from functax._src.geometry._types import (
@@ -50,14 +51,17 @@ __all__ = [
 ]
 
 
-def _cell_axes(geometry: Any, name: str) -> list[tuple[np.ndarray, float | None]]:
+def _cell_axes(
+    geometry: Any, name: str
+) -> list[tuple[Float[np.ndarray, " edge"], float | None]]:
     """The (edges, period) of each axis of a tensor-product grid of cells.
 
     An `AffineGrid` must be north-up (b = d = 0): its cells are then the
     tensor product of row edges f + e·i and column edges c + a·j.
     """
     if isinstance(geometry, Axis):
-        return [(np.asarray(geometry.cell_edges()), geometry.period)]
+        edges = np.asarray(geometry.cell_edges())
+        return [(edges, geometry.period)]
     if isinstance(geometry, RectilinearGrid):
         return [(np.asarray(axis.cell_edges()), axis.period) for axis in geometry.axes]
     if isinstance(geometry, AffineGrid):
@@ -69,9 +73,12 @@ def _cell_axes(geometry: Any, name: str) -> list[tuple[np.ndarray, float | None]
             )
             raise GeometryError(msg)
         rows, cols = geometry.shape
-        # y = f + e·i at row edge i, x = c + a·j at column edge j
-        row_edges = f + e * np.arange(rows + 1, dtype=np.float64)
-        col_edges = c + a * np.arange(cols + 1, dtype=np.float64)
+        row_index = np.arange(rows + 1, dtype=np.float64)
+        col_index = np.arange(cols + 1, dtype=np.float64)
+        # y = f + e·i at row edge i
+        row_edges = f + e * row_index
+        # x = c + a·j at column edge j
+        col_edges = c + a * col_index
         return [(row_edges, None), (col_edges, None)]
     msg = (
         f"'{name}' must be an Axis, a RectilinearGrid or an AffineGrid, got "
@@ -80,15 +87,21 @@ def _cell_axes(geometry: Any, name: str) -> list[tuple[np.ndarray, float | None]
     raise GeometryError(msg)
 
 
-def _axis_weights(band: OverlapBand, policies: Policies) -> np.ndarray:
+def _axis_weights(
+    band: OverlapBand, policies: Policies
+) -> Float[np.ndarray, "target tap"]:
     """wᵢⱼ on one axis: |cⱼ ∩ Cᵢ| / |Cᵢ|, or over the covered length under clamp."""
     if policies.outside != "clamp":
         # wᵢⱼ = |cⱼ ∩ Cᵢ| / |Cᵢ|
-        return band.lengths / band.target_lengths[:, None]
-    # wᵢⱼ = |cⱼ ∩ Cᵢ| / ∑ⱼ |cⱼ ∩ Cᵢ|, the target cut to the source domain
-    covered = band.lengths.sum(axis=1)
-    safe_covered = np.where(covered > 0, covered, 1.0)
-    return band.lengths / safe_covered[:, None]
+        return einx.divide(
+            "target tap, target -> target tap", band.lengths, band.target_lengths
+        )
+    # ∑ⱼ |cⱼ ∩ Cᵢ|, the length of the target cut to the source domain
+    covered = einx.sum("target [tap]", band.lengths)
+    has_cover = covered > 0
+    safe_covered = np.where(has_cover, covered, 1.0)
+    # wᵢⱼ = |cⱼ ∩ Cᵢ| / ∑ⱼ |cⱼ ∩ Cᵢ|
+    return einx.divide("target tap, target -> target tap", band.lengths, safe_covered)
 
 
 # a target cell whose overlaps sum to its area to this relative tolerance is
@@ -97,10 +110,10 @@ _COVERED_RTOL = 1e-9
 
 
 def _policy_stencil(
-    indices: np.ndarray,
-    weights: np.ndarray,
-    covered: np.ndarray,
-    touched: np.ndarray,
+    indices: Int[np.ndarray, "target tap"],
+    weights: Float[np.ndarray, "target tap"],
+    covered: Bool[np.ndarray, " target"],
+    touched: Bool[np.ndarray, " target"],
     n_source: int,
     policies: Policies,
 ) -> Stencil:
@@ -118,12 +131,16 @@ def _policy_stencil(
         or policies.missing == "renormalise"
     )
     valid = touched if keep_partial else covered
-    weights = np.where(valid[:, None], weights, np.zeros((), weights.dtype))
+    zero = np.zeros((), weights.dtype)
+    weights = einx.where("target, target tap, -> target tap", valid, weights, zero)
+    device_indices = jnp.asarray(indices)
+    device_weights = jnp.asarray(weights)
+    device_valid = jnp.asarray(valid)
     return Stencil(
-        jnp.asarray(indices),
-        jnp.asarray(weights),
+        device_indices,
+        device_weights,
         n_source=n_source,
-        valid=jnp.asarray(valid),
+        valid=device_valid,
         check=False,
     )
 
@@ -155,18 +172,21 @@ def tensor_stencil_of_cells(source: Any, target: Any, *, policies: Policies) -> 
     covered = bands[0].covered
     touched = bands[0].touched
     for n_cells, band in zip(source_shape[1:], bands[1:], strict=True):
-        # flat index ((j₁ n₂ + j₂) n₃ + j₃) …, weight w₁ w₂ w₃ …
-        indices = einx.add("a s, b t -> (a b) (s t)", indices * n_cells, band.indices)
-        weights = einx.multiply(
-            "a s, b t -> (a b) (s t)", weights, _axis_weights(band, policies)
-        )
+        # flat index ((j₁ n₂ + j₂) n₃ + j₃) …
+        scaled = indices * n_cells
+        indices = einx.add("a s, b t -> (a b) (s t)", scaled, band.indices)
+        # weight w₁ w₂ w₃ …
+        axis_weights = _axis_weights(band, policies)
+        weights = einx.multiply("a s, b t -> (a b) (s t)", weights, axis_weights)
         covered = einx.logical_and("a, b -> (a b)", covered, band.covered)
         touched = einx.logical_and("a, b -> (a b)", touched, band.touched)
     n_source = math.prod(source_shape)
     return _policy_stencil(indices, weights, covered, touched, n_source, policies)
 
 
-def _node_corners(nodes: np.ndarray, sphere: bool) -> np.ndarray:
+def _node_corners(
+    nodes: Float[np.ndarray, "row col dim"], sphere: bool
+) -> Float[np.ndarray, "row_edge col_edge dim"]:
     """The (R + 1, C + 1, D) cell corners of (R, C, D) nodes, each cell's centre a node.
 
     The nodes are extended by one row and column on each side by linear
@@ -175,35 +195,64 @@ def _node_corners(nodes: np.ndarray, sphere: bool) -> np.ndarray:
     On the sphere the means are of unit vectors, normalised, so the corners
     need no unwrapped longitudes.
     """
-    padded = np.concatenate(
-        [2 * nodes[:1] - nodes[1:2], nodes, 2 * nodes[-1:] - nodes[-2:-1]]
+    # --- extrapolate one ring ---
+    # x₋₁ = 2x₀ − x₁, and xᵣ = 2xᵣ₋₁ − xᵣ₋₂ past the last row
+    first_row = 2 * nodes[0] - nodes[1]
+    last_row = 2 * nodes[-1] - nodes[-2]
+    padded = einx.id(
+        "col dim, row col dim, col dim -> (1 + row + 1) col dim",
+        first_row,
+        nodes,
+        last_row,
     )
-    padded = np.concatenate(
-        [
-            2 * padded[:, :1] - padded[:, 1:2],
-            padded,
-            2 * padded[:, -1:] - padded[:, -2:-1],
-        ],
-        axis=1,
+    # the same along the columns
+    first_col = 2 * padded[:, 0] - padded[:, 1]
+    last_col = 2 * padded[:, -1] - padded[:, -2]
+    padded = einx.id(
+        "row dim, row col dim, row dim -> row (1 + col + 1) dim",
+        first_col,
+        padded,
+        last_col,
     )
-    # the mean of the four nodes around each corner
-    corners = 0.25 * (
-        padded[:-1, :-1] + padded[1:, :-1] + padded[:-1, 1:] + padded[1:, 1:]
-    )
+
+    # --- corners ---
+    below_left = padded[:-1, :-1]
+    above_left = padded[1:, :-1]
+    below_right = padded[:-1, 1:]
+    above_right = padded[1:, 1:]
+    # x₀₀ + x₁₀ + x₀₁ + x₁₁, the four nodes around each corner
+    node_sum = below_left + above_left + below_right + above_right
+    # ¼ (x₀₀ + x₁₀ + x₀₁ + x₁₁)
+    corners = 0.25 * node_sum
     if sphere:
-        corners = corners / np.linalg.norm(corners, axis=-1, keepdims=True)
+        # ‖c‖
+        length = np.linalg.norm(corners, axis=-1)
+        # c / ‖c‖
+        corners = einx.divide("row col dim, row col -> row col dim", corners, length)
     return corners
 
 
-def _corner_cells(corners: np.ndarray) -> np.ndarray:
+def _corner_cells(
+    corners: Float[np.ndarray, "row_edge col_edge dim"],
+) -> Float[np.ndarray, "cell 4 dim"]:
     """(R C, 4, D) cells, row-major, from (R + 1, C + 1, D) corners."""
-    cells = np.stack(
-        [corners[:-1, :-1], corners[1:, :-1], corners[1:, 1:], corners[:-1, 1:]], axis=2
+    below_left = corners[:-1, :-1]
+    above_left = corners[1:, :-1]
+    above_right = corners[1:, 1:]
+    below_right = corners[:-1, 1:]
+    return einx.id(
+        "row col dim, row col dim, row col dim, row col dim"
+        " -> (row col) (1 + 1 + 1 + 1) dim",
+        below_left,
+        above_left,
+        above_right,
+        below_right,
     )
-    return cells.reshape(-1, 4, corners.shape[-1])
 
 
-def _polygon_cells(geometry: Any, name: str, unit: str | None) -> np.ndarray:
+def _polygon_cells(
+    geometry: Any, name: str, unit: str | None
+) -> Float[np.ndarray, "cell 4 dim"]:
     """The quadrilateral cells of a 2-D grid: (x, y) corners, or unit vectors.
 
     ``unit`` is that of (λ, φ) on the sphere, and ``None`` in the plane.
@@ -213,10 +262,15 @@ def _polygon_cells(geometry: Any, name: str, unit: str | None) -> np.ndarray:
     a target read on a curvilinear source does.
     """
     if isinstance(geometry, CurvilinearGrid):
-        nodes = np.stack([np.asarray(geometry.x), np.asarray(geometry.y)], axis=-1)
+        node_x = np.asarray(geometry.x)
+        node_y = np.asarray(geometry.y)
+        nodes = einx.id("row col, row col -> row col (1 + 1)", node_x, node_y)
         if unit is not None:
-            nodes = np.asarray(lonlat_to_unit(jnp.asarray(nodes), unit=unit))
-        return _corner_cells(_node_corners(nodes, sphere=unit is not None))
+            device_nodes = jnp.asarray(nodes)
+            unit_nodes = lonlat_to_unit(device_nodes, unit=unit)
+            nodes = np.asarray(unit_nodes)
+        corners = _node_corners(nodes, sphere=unit is not None)
+        return _corner_cells(corners)
     if isinstance(geometry, RectilinearGrid) and len(geometry.axes) == 2:
         x_edges, y_edges = (np.asarray(axis.cell_edges()) for axis in geometry.axes)
         if unit is not None:
@@ -224,9 +278,11 @@ def _polygon_cells(geometry: Any, name: str, unit: str | None) -> np.ndarray:
             pole = 90.0 if unit == "degrees" else math.pi / 2
             y_edges = np.clip(y_edges, -pole, pole)
         x, y = np.meshgrid(x_edges, y_edges, indexing="ij")
-        corners = np.stack([x, y], axis=-1)
+        corners = einx.id("row col, row col -> row col (1 + 1)", x, y)
         if unit is not None:
-            corners = np.asarray(lonlat_to_unit(jnp.asarray(corners), unit=unit))
+            device_corners = jnp.asarray(corners)
+            unit_corners = lonlat_to_unit(device_corners, unit=unit)
+            corners = np.asarray(unit_corners)
         return _corner_cells(corners)
     msg = (
         f"'{name}' must be a CurvilinearGrid or a 2-D RectilinearGrid for "
@@ -257,34 +313,51 @@ def polygon_stencil_of_cells(
             raise GeometryError(msg)
     overlaps = cell_overlaps(source_cells, target_cells, sphere=unit is not None)
     n_target = target_cells.shape[0]
+
     # --- the pairs as rows of S taps, padded with zero weight ---
     order = np.argsort(overlaps.target, kind="stable")
     rows = overlaps.target[order]
     columns = overlaps.source[order]
     areas = overlaps.areas[order]
     counts = np.bincount(rows, minlength=n_target)
-    n_taps = max(int(counts.max(initial=0)), 1)
-    starts = np.cumsum(counts) - counts
-    tap = np.arange(len(rows)) - starts[rows]
+    # initial=0: no pairs at all leaves no maximum
+    most_taps = int(counts.max(initial=0))
+    n_taps = max(most_taps, 1)
+    # the first pair of each row, ∑_{i′ < i} Sᵢ′
+    running = np.cumsum(counts)
+    starts = running - counts
+    pair = np.arange(len(rows))
+    tap = pair - starts[rows]
     indices = np.zeros((n_target, n_taps), np.int32)
     lengths = np.zeros((n_target, n_taps), areas.dtype)
     indices[rows, tap] = columns
     lengths[rows, tap] = areas
     # padding repeats the row's first index (0 for an empty row)
-    padding = np.arange(n_taps)[None, :] >= counts[:, None]
-    indices = np.where(padding, indices[:, :1], indices)
-    # wᵢⱼ = |cⱼ ∩ Cᵢ| / |Cᵢ|, and the covered fraction ∑ⱼ wᵢⱼ
+    tap_index = np.arange(n_taps)
+    padding = einx.greater_equal("tap, target -> target tap", tap_index, counts)
+    first = indices[:, 0]
+    indices = einx.where(
+        "target tap, target, target tap -> target tap", padding, first, indices
+    )
+
+    # --- weights ---
     target_areas = overlaps.target_areas
     real = target_areas > 0
     safe_areas = np.where(real, target_areas, 1.0)
-    weights = lengths / safe_areas[:, None]
-    fraction = weights.sum(axis=1)
-    covered = real & (fraction >= 1.0 - _COVERED_RTOL)
-    touched = real & (fraction > 0)
+    # wᵢⱼ = |cⱼ ∩ Cᵢ| / |Cᵢ|
+    weights = einx.divide("target tap, target -> target tap", lengths, safe_areas)
+    # the covered fraction ∑ⱼ wᵢⱼ
+    fraction = einx.sum("target [tap]", weights)
+    full = fraction >= 1.0 - _COVERED_RTOL
+    covered = real & full
+    some = fraction > 0
+    touched = real & some
     if policies.outside == "clamp":
-        # wᵢⱼ = |cⱼ ∩ Cᵢ| / ∑ⱼ |cⱼ ∩ Cᵢ|
         safe_fraction = np.where(touched, fraction, 1.0)
-        weights = weights / safe_fraction[:, None]
+        # wᵢⱼ = |cⱼ ∩ Cᵢ| / ∑ⱼ |cⱼ ∩ Cᵢ|
+        weights = einx.divide(
+            "target tap, target -> target tap", weights, safe_fraction
+        )
     n_source = source_cells.shape[0]
     return _policy_stencil(indices, weights, covered, touched, n_source, policies)
 

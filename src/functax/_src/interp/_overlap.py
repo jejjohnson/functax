@@ -19,8 +19,8 @@ from functax._src._backend import require_jax
 require_jax(__name__)
 
 import dataclasses
-from typing import Any
 
+import einx
 import numpy as np
 from jaxtyping import ArrayLike, Bool, Float, Int
 
@@ -48,10 +48,31 @@ class OverlapBand:
     reaches a row only through a source it overlaps.
 
     Attributes:
-        indices: j, the source cell of each tap, (M, S).
-        lengths: |cⱼ ∩ Cᵢ| of each tap, (M, S).
-        target_lengths: |Cᵢ|, (M,).
-        covered: Whether Cᵢ lies inside the source cells, (M,).
+        indices: j, the source cell of each tap.
+        lengths: |cⱼ ∩ Cᵢ| of each tap.
+        target_lengths: |Cᵢ|.
+        covered: Whether Cᵢ lies inside the source cells.
+
+    Examples:
+        Two targets of length 1.5 over three unit source cells:
+
+        >>> import numpy as np
+        >>> from functax._src.interp._overlap import overlap_band
+        >>> band = overlap_band(
+        ...     np.array([0.0, 1.0, 2.0, 3.0]), np.array([0.0, 1.5, 3.0])
+        ... )
+        >>> band.indices.shape
+        (2, 2)
+        >>> band.lengths.tolist()
+        [[1.0, 0.5], [0.5, 1.0]]
+
+        A target past the source cells is neither covered nor touched:
+
+        >>> band = overlap_band(
+        ...     np.array([0.0, 1.0, 2.0]), np.array([1.5, 2.5, 3.5])
+        ... )
+        >>> band.covered.tolist(), band.touched.tolist()
+        ([False, False], [True, False])
     """
 
     indices: Int[np.ndarray, "target tap"]
@@ -61,11 +82,13 @@ class OverlapBand:
 
     @property
     def touched(self) -> Bool[np.ndarray, " target"]:
-        """Whether Cᵢ overlaps any source cell, (M,)."""
-        return self.lengths.sum(axis=1) > 0
+        """Whether Cᵢ overlaps any source cell."""
+        # ∑ⱼ |cⱼ ∩ Cᵢ|
+        row_length = einx.sum("target [tap]", self.lengths)
+        return row_length > 0
 
 
-def _host_edges(edges: Any, name: str) -> np.ndarray:
+def _host_edges(edges: ArrayLike, name: str) -> Float[np.ndarray, " edge"]:
     """``edges`` as a 1-D, floating, finite, strictly monotone NumPy array."""
     if is_tracer(edges):
         msg = (
@@ -80,6 +103,7 @@ def _host_edges(edges: Any, name: str) -> np.ndarray:
     if not np.issubdtype(host.dtype, np.floating):
         msg = f"'{name}' must have a floating dtype, got {host.dtype}"
         raise ValidationError(msg)
+    # Δeⱼ = eⱼ₊₁ − eⱼ
     spacing = np.diff(host)
     monotone = np.all(spacing > 0) or np.all(spacing < 0)
     if not (np.all(np.isfinite(host)) and monotone):
@@ -88,9 +112,13 @@ def _host_edges(edges: Any, name: str) -> np.ndarray:
     return host
 
 
-def _intervals(edges: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _intervals(
+    edges: Float[np.ndarray, " edge"],
+) -> tuple[Float[np.ndarray, " cell"], Float[np.ndarray, " cell"]]:
     """(lo, hi) of each cell [eⱼ, eⱼ₊₁], with lo < hi whichever way e runs."""
+    # loⱼ = min(eⱼ, eⱼ₊₁)
     lower = np.minimum(edges[:-1], edges[1:])
+    # hiⱼ = max(eⱼ, eⱼ₊₁)
     upper = np.maximum(edges[:-1], edges[1:])
     return lower, upper
 
@@ -102,6 +130,9 @@ def overlap_band(
     period: float | None = None,
 ) -> OverlapBand:
     """The band of overlaps |cⱼ ∩ Cᵢ| between two sets of cells on one axis.
+
+    |cⱼ ∩ Cᵢ| = max(0, min(eⱼ₊₁, Eᵢ₊₁) − max(eⱼ, Eᵢ)), kept only on the S
+    source cells j that each target i overlaps.
 
     Algorithm:
         1. Turn each set of edges into (lo, hi) intervals and sort the source
@@ -126,7 +157,27 @@ def overlap_band(
             edges or more, not floating, or not finite and strictly monotone;
             if the source edges span more than P or a target cell is longer
             than P.
+
+    Examples:
+        Two targets of length 1.5 over three unit source cells:
+
+        >>> import numpy as np
+        >>> from functax._src.interp._overlap import overlap_band
+        >>> band = overlap_band(
+        ...     np.array([0.0, 1.0, 2.0, 3.0]), np.array([0.0, 1.5, 3.0])
+        ... )
+        >>> band.indices.tolist()
+        [[0, 1], [1, 2]]
+
+        A target across the seam of a periodic axis reads both ends:
+
+        >>> band = overlap_band(
+        ...     np.arange(0.0, 361.0, 90.0), np.array([-45.0, 45.0]), period=360.0
+        ... )
+        >>> band.indices.tolist(), band.lengths.tolist()
+        ([[3, 0]], [[45.0, 45.0]])
     """
+    # --- intervals ---
     source = _host_edges(source_edges, "source_edges")
     target = _host_edges(target_edges, "target_edges")
     dtype = np.result_type(source, target)
@@ -142,9 +193,16 @@ def overlap_band(
     target_lengths = target_upper - target_lower
     domain_lower = cell_lower[0]
     domain_upper = cell_upper[-1]
+
+    # --- period ---
     if period is None:
-        covered = (target_lower >= domain_lower) & (target_upper <= domain_upper)
+        # Eᵢ ≥ e_min
+        above_lower = target_lower >= domain_lower
+        # Eᵢ₊₁ ≤ e_max
+        below_upper = target_upper <= domain_upper
+        covered = above_lower & below_upper
     else:
+        # e_max − e_min
         span = domain_upper - domain_lower
         if span > period * (1.0 + _FULL_CIRCLE_RTOL):
             msg = f"'source_edges' must span at most the period {period}, got {span}"
@@ -152,35 +210,65 @@ def overlap_band(
         if np.any(target_lengths > period):
             msg = f"'target_edges' must hold cells no longer than the period {period}"
             raise ValidationError(msg)
+        # Eᵢ − e_min
+        offset = target_lower - domain_lower
+        # (Eᵢ − e_min) mod P
+        wrapped = np.mod(offset, period)
         # Eᵢ ↦ e_min + ((Eᵢ − e_min) mod P), the length kept
-        shifted_lower = domain_lower + np.mod(target_lower - domain_lower, period)
+        shifted_lower = domain_lower + wrapped
+        # Eᵢ₊₁ ↦ Eᵢ + |Cᵢ|
         target_upper = shifted_lower + target_lengths
         target_lower = shifted_lower
         full_circle = span >= period * (1.0 - _FULL_CIRCLE_RTOL)
-        covered = np.full(target_lengths.shape, full_circle) | (
-            target_upper <= domain_upper
-        )
+        all_covered = np.full(target_lengths.shape, full_circle)
+        # Eᵢ₊₁ ≤ e_max
+        below_upper = target_upper <= domain_upper
+        covered = all_covered | below_upper
         # the source again, one period on
-        cell_lower = np.concatenate([cell_lower, cell_lower + period])
-        cell_upper = np.concatenate([cell_upper, cell_upper + period])
-        cell_index = np.concatenate([cell_index, cell_index])
+        shifted_cell_lower = cell_lower + period
+        shifted_cell_upper = cell_upper + period
+        cell_lower = einx.id("a, b -> (a + b)", cell_lower, shifted_cell_lower)
+        cell_upper = einx.id("a, b -> (a + b)", cell_upper, shifted_cell_upper)
+        cell_index = einx.id("a, b -> (a + b)", cell_index, cell_index)
+
+    # --- taps ---
     # the first cell with hi > Eᵢ, and the first with lo ≥ Eᵢ₊₁
     start = np.searchsorted(cell_upper, target_lower, side="right")
     stop = np.searchsorted(cell_lower, target_upper, side="left")
-    counts = np.maximum(stop - start, 0)
-    n_taps = max(int(counts.max()), 1)
+    # Sᵢ = max(stopᵢ − startᵢ, 0)
+    span_taps = stop - start
+    counts = np.maximum(span_taps, 0)
+    # S = max(maxᵢ Sᵢ, 1)
+    most_taps = einx.max("[target]", counts)
+    n_taps = max(int(most_taps), 1)
     tap = np.arange(n_taps)
     # every (target, tap) pair, the taps past a row's count clipped and dropped
-    position = np.minimum(start[:, None] + tap, cell_lower.shape[0] - 1)
-    in_row = tap < counts[:, None]
+    last_cell = cell_lower.shape[0] - 1
+    unclipped = einx.add("target, tap -> target tap", start, tap)
+    position = np.minimum(unclipped, last_cell)
+    in_row = einx.less("tap, target -> target tap", tap, counts)
+
+    # --- lengths ---
+    tap_upper = einx.get_at("[cell], target tap -> target tap", cell_upper, position)
+    tap_lower = einx.get_at("[cell], target tap -> target tap", cell_lower, position)
+    # min(eⱼ₊₁, Eᵢ₊₁)
+    upper = einx.minimum("target tap, target -> target tap", tap_upper, target_upper)
+    # max(eⱼ, Eᵢ)
+    lower = einx.maximum("target tap, target -> target tap", tap_lower, target_lower)
     # |cⱼ ∩ Cᵢ| = min(eⱼ₊₁, Eᵢ₊₁) − max(eⱼ, Eᵢ), positive on every tap in the row
-    upper = np.minimum(cell_upper[position], target_upper[:, None])
-    lower = np.maximum(cell_lower[position], target_lower[:, None])
-    lengths = np.where(in_row, upper - lower, np.zeros((), dtype))
-    indices = cell_index[position]
+    overlap = upper - lower
+    zero = np.zeros((), dtype)
+    lengths = einx.where("target tap, target tap, -> target tap", in_row, overlap, zero)
+
+    # --- indices ---
+    indices = einx.get_at("[cell], target tap -> target tap", cell_index, position)
     # padding repeats the row's first index (0 for an empty row)
-    first = np.where(counts > 0, indices[:, 0], 0)
-    indices = np.where(in_row, indices, first[:, None]).astype(np.int32)
+    has_taps = counts > 0
+    first = np.where(has_taps, indices[:, 0], 0)
+    padded = einx.where(
+        "target tap, target tap, target -> target tap", in_row, indices, first
+    )
+    indices = padded.astype(np.int32)
     return OverlapBand(indices, lengths, target_lengths, covered)
 
 
@@ -230,9 +318,13 @@ def overlap_weights_1d(
     """
     band = overlap_band(source_edges, target_edges, period=period)
     n_source = np.asarray(source_edges).shape[0] - 1
-    n_target, n_taps = band.indices.shape
+    n_target = band.indices.shape[0]
     dense = np.zeros((n_target, n_source), dtype=band.lengths.dtype)
-    rows = np.repeat(np.arange(n_target), n_taps)
-    # repeated indices add, as a target round the whole circle reads one cell twice
-    np.add.at(dense, (rows, band.indices.ravel()), band.lengths.ravel())
-    return dense
+    # Wᵢⱼ = ∑_taps |cⱼ ∩ Cᵢ|; repeated indices add, as a target round the whole
+    # circle reads one cell twice
+    return einx.add_at(
+        "target [source], target tap, target tap -> target [source]",
+        dense,
+        band.indices,
+        band.lengths,
+    )

@@ -48,7 +48,7 @@ __all__ = [
 ]
 
 
-type Tail = Callable[[jax.Array], jax.Array]
+type Tail = Callable[[Float[Array, "obs dim"]], Float[Array, "obs term"]]
 """P(x), the (n, P) tail or drift matrix at n points."""
 
 
@@ -105,7 +105,7 @@ class KernelReadout(Readout):
         self.valid = valid
 
     @staticmethod
-    def _check_last_axis(array: jax.Array, size: int, name: str) -> None:
+    def _check_last_axis(array: Float[Array, "*shape"], size: int, name: str) -> None:
         if array.ndim < 1 or array.shape[-1] != size:
             msg = (
                 f"'{name}' must have a last axis of length {size}, "
@@ -123,6 +123,7 @@ class KernelReadout(Readout):
         """
         coefficients = jnp.asarray(coefficients)
         self._check_last_axis(coefficients, self.matrix.shape[1], "coefficients")
+        # f̂ = H c
         return einx.dot(
             "... coefficient, target coefficient -> ... target",
             coefficients,
@@ -139,6 +140,7 @@ class KernelReadout(Readout):
         """
         residual = jnp.asarray(residual)
         self._check_last_axis(residual, self.matrix.shape[0], "residual")
+        # g = Hᵀ r
         return einx.dot(
             "... target, target coefficient -> ... coefficient",
             residual,
@@ -171,6 +173,26 @@ class PolynomialTail(eqx.Module):
         shift: s, the centre of the sources' bounding box.
         scale: h, its half-widths.
         powers: The exponents a_p of each of the P monomials.
+
+    Examples:
+        The degree-1 tail of three sources, scaled onto [−1, 1]²:
+
+        >>> import jax.numpy as jnp
+        >>> from functax._src.interp._rbf import PolynomialTail
+        >>> sources = jnp.array([[0.0, 0.0], [2.0, 0.0], [0.0, 4.0]])
+        >>> tail = PolynomialTail.from_sources(sources, 1)
+        >>> tail.powers
+        ((0, 0), (1, 0), (0, 1))
+        >>> tail(sources).tolist()
+        [[1.0, -1.0, -1.0], [1.0, 1.0, -1.0], [1.0, -1.0, 1.0]]
+
+        An axis of zero extent keeps h = 1:
+
+        >>> flat = PolynomialTail.from_sources(
+        ...     jnp.array([[0.0, 1.0], [2.0, 1.0]]), 2
+        ... )
+        >>> flat.scale.tolist(), flat.n_terms
+        ([1.0, 1.0], 6)
     """
 
     shift: Float[Array, " dim"]
@@ -184,10 +206,13 @@ class PolynomialTail(eqx.Module):
         """The tail of degree ``degree`` ≥ 0, scaled to the sources' bounding box."""
         lower = einx.min("[source] dim", sources)
         upper = einx.max("[source] dim", sources)
+        # s = (x_max + x_min)/2
         shift = (upper + lower) / 2
+        # h = (x_max − x_min)/2, or 1 on an axis of zero extent
         half_width = (upper - lower) / 2
         flat = half_width == 0
-        scale = jnp.where(flat, jnp.ones((), half_width.dtype), half_width)
+        one = jnp.ones((), half_width.dtype)
+        scale = jnp.where(flat, one, half_width)
         powers = _monomial_powers(sources.shape[1], degree)
         return cls(shift, scale, powers)
 
@@ -207,9 +232,11 @@ class PolynomialTail(eqx.Module):
             column = ones
             for dim, exponent in enumerate(power):
                 if exponent:
-                    # integer powers, so the gradient at x̂ = 0 is finite
+                    # pₚ(x) = ∏_d x̂_d^{a_pd}; integer powers, so the gradient at
+                    # x̂ = 0 is finite
                     column = column * scaled[:, dim] ** exponent
             columns.append(column)
+        # one column per monomial, however many the degree gives
         return jnp.column_stack(columns)
 
 
@@ -270,7 +297,7 @@ def kernel_system(
     source: Any,
     target: Any,
     *,
-    tail_for: Callable[[jax.Array], Tail | None],
+    tail_for: Callable[[Float[Array, "source dim"]], Tail | None],
     diagonal: float | int,
     solver: lx.AbstractLinearSolver | None,
     positive_definite: bool = True,
@@ -299,9 +326,11 @@ def kernel_system(
     sources = _scattered_source(source)
     coordinates, valid, target_shape = _targets(target)
     # --- the fit: K̃ = K + λI and P on the sources ---
+    # K
     gram = kernel_matrix(kernel, sources, sources)
     if diagonal:
         identity = jnp.eye(gram.shape[0], dtype=gram.dtype)
+        # K̃ = K + λI
         gram = gram + diagonal * identity
     tail = tail_for(sources)
     source_terms = None if tail is None else tail(sources)
@@ -309,9 +338,12 @@ def kernel_system(
         gram, source_terms, solver=solver, positive_definite=positive_definite
     )
     # --- the read-out: H = [K* P*] at the targets ---
+    # K*
     cross = kernel_matrix(kernel, coordinates, sources)
     if tail is not None:
+        # P*
         target_terms = tail(coordinates)
+        # H = [K* P*]
         cross = einx.id("target a, target b -> target (a + b)", cross, target_terms)
     zero = jnp.zeros((), cross.dtype)
     matrix = einx.where(
@@ -480,11 +512,14 @@ class RBF(Scheme):
         if self.neighbors is not None:
             return self._local_plan(source, target, policies, degree)
 
-        def tail_for(sources: jax.Array) -> Tail | None:
+        def tail_for(sources: Float[Array, "source dim"]) -> Tail | None:
             if degree < 0:
                 return None
             return PolynomialTail.from_sources(sources, degree)
 
+        # the system is positive definite on the null space of a tail this high
+        min_degree = getattr(self.kernel, "min_degree", -1)
+        positive_definite = degree >= min_degree
         system = kernel_system(
             self.kernel,
             source,
@@ -492,7 +527,7 @@ class RBF(Scheme):
             tail_for=tail_for,
             diagonal=self.smoothing,
             solver=self.solver,
-            positive_definite=degree >= getattr(self.kernel, "min_degree", -1),
+            positive_definite=positive_definite,
         )
         return Plan(system.fit, system.read, policies, None, system.target_shape)
 
@@ -506,7 +541,10 @@ class RBF(Scheme):
         neighbors = self.neighbors
         assert neighbors is not None
         n_taps = min(neighbors, n_source)
-        n_terms = len(_monomial_powers(sources.shape[1], degree)) if degree >= 0 else 0
+        n_terms = 0
+        if degree >= 0:
+            powers = _monomial_powers(sources.shape[1], degree)
+            n_terms = len(powers)
         if n_terms >= n_taps:
             msg = (
                 f"the degree-{degree} tail has {n_terms} terms, so each target "
@@ -514,7 +552,8 @@ class RBF(Scheme):
             )
             raise ValidationError(msg)
         indices, found = nearest_sources(sources, coordinates, None, n_taps, None)
-        positive_definite = degree >= getattr(self.kernel, "min_degree", -1)
+        min_degree = getattr(self.kernel, "min_degree", -1)
+        positive_definite = degree >= min_degree
 
         def tap_weights(
             point: Float[Array, " dim"], taps: Int[Array, " tap"]
@@ -523,28 +562,38 @@ class RBF(Scheme):
             neighbours = sources[taps]
             point_row = einx.id("dim -> 1 dim", point)
             # --- the system on 𝒩ᵢ: K̃ = K + λI and P, scaled to its box ---
+            # K_𝒩ᵢ
             gram = kernel_matrix(self.kernel, neighbours, neighbours)
             if self.smoothing:
                 identity = jnp.eye(gram.shape[0], dtype=gram.dtype)
+                # K̃ = K_𝒩ᵢ + λI
                 gram = gram + self.smoothing * identity
+            # k*ᵢ
             cross = kernel_matrix(self.kernel, point_row, neighbours)
             terms = None
             if degree >= 0:
                 tail = PolynomialTail.from_sources(neighbours, degree)
+                # P_𝒩ᵢ
                 terms = tail(neighbours)
-                cross = einx.id("1 a, 1 b -> 1 (a + b)", cross, tail(point_row))
+                # p*ᵢ
+                point_terms = tail(point_row)
+                # [k*ᵢ p*ᵢ]
+                cross = einx.id("1 a, 1 b -> 1 (a + b)", cross, point_terms)
             fit = KernelSolve(
                 gram,
                 terms,
                 solver=self.solver,
                 positive_definite=positive_definite,
             )
+            read_row = einx.id("1 coefficient -> coefficient", cross)
             # f̂(x*ᵢ) = [k*ᵢ p*ᵢ] 𝒮ᵢ y_𝒩ᵢ, so its weights are 𝒮ᵢᵀ [k*ᵢ; p*ᵢ]
-            return fit.apply_adjoint(einx.id("1 coefficient -> coefficient", cross))
+            return fit.apply_adjoint(read_row)
 
-        weights = jax.vmap(tap_weights)(coordinates, indices)
+        all_tap_weights = jax.vmap(tap_weights)
+        weights = all_tap_weights(coordinates, indices)
         # a padding or non-finite target reads nothing
-        row_ok = valid & einx.all("target [tap]", found)
+        all_found = einx.all("target [tap]", found)
+        row_ok = valid & all_found
         zero = jnp.zeros((), weights.dtype)
         weights = einx.where("target, target tap, -> target tap", row_ok, weights, zero)
         stencil = Stencil(indices, weights, n_source=n_source, valid=row_ok)

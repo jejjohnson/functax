@@ -47,11 +47,22 @@ N_NEWTON_STEPS: int = 4
 N_WALKS: int = 3
 """Moves to a neighbouring cell when (s, t) leaves the unit square."""
 
+# (a, b, d, e) of one coordinate in each target's cell, x(s, t) = a + b s + d t + e s t
+_Terms = tuple[
+    Float[Array, " target"],
+    Float[Array, " target"],
+    Float[Array, " target"],
+    Float[Array, " target"],
+]
+
 
 def _cell_centres(nodes: Float[Array, "row col"]) -> Float[Array, " cell"]:
     """x̄_{r,c} = ¼ (x_{r,c} + x_{r+1,c} + x_{r,c+1} + x_{r+1,c+1}), flat row-major."""
+    # x_{r,c} + x_{r+1,c} + x_{r,c+1} + x_{r+1,c+1}
     total = nodes[:-1, :-1] + nodes[1:, :-1] + nodes[:-1, 1:] + nodes[1:, 1:]
-    return einx.id("row col -> (row col)", 0.25 * total)
+    # x̄_{r,c} = ¼ (…)
+    centres = 0.25 * total
+    return einx.id("row col -> (row col)", centres)
 
 
 def _nearest_cell(
@@ -64,35 +75,44 @@ def _nearest_cell(
     entries; it traces, so a plan can be built under ``jit``.
     """
     n_cols = grid.shape[1]
-    centres = einx.id(
-        "cell, cell -> cell (1 + 1)", _cell_centres(grid.x), _cell_centres(grid.y)
-    )
+    centre_x = _cell_centres(grid.x)
+    centre_y = _cell_centres(grid.y)
+    centres = einx.id("cell, cell -> cell (1 + 1)", centre_x, centre_y)
     n_cells = centres.shape[0]
 
     def nearest(target: Float[Array, " 2"]) -> Int[Array, ""]:
-        # ‖x̄ − x*‖² for every cell
-        difference = einx.subtract("cell c, c -> cell c", centres, target)
-        squared = einx.sum("cell [c]", difference**2)
+        # x̄ − x* for every cell
+        difference = einx.subtract("cell dim, dim -> cell dim", centres, target)
+        squared_difference = difference**2
+        # ‖x̄ − x*‖²
+        squared = einx.sum("cell [dim]", squared_difference)
+        # argmin over the cells of ‖x̄ − x*‖²
         index = einx.argmin("[cell]", squared)
         return einx.id("1 ->", index)
 
     batch_size = max(1, MAX_PAIRS // n_cells)
     flat = jax.lax.map(nearest, coordinates, batch_size=batch_size)
     # flat cell k = r (N_c − 1) + c
-    return flat // (n_cols - 1), flat % (n_cols - 1)
+    row = flat // (n_cols - 1)
+    col = flat % (n_cols - 1)
+    return row, col
 
 
 def _bilinear_terms(
     nodes: Float[Array, "row col"],
     row: Int[Array, " target"],
     col: Int[Array, " target"],
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+) -> _Terms:
     """(a, b, d, e) of one coordinate, so that x(s, t) = a + b s + d t + e s t."""
+    next_row = row + 1
+    next_col = col + 1
     corner_00 = nodes[row, col]
-    corner_10 = nodes[row + 1, col]
-    corner_01 = nodes[row, col + 1]
-    corner_11 = nodes[row + 1, col + 1]
+    corner_10 = nodes[next_row, col]
+    corner_01 = nodes[row, next_col]
+    corner_11 = nodes[next_row, next_col]
+    # b = x_{r+1,c} − x_{r,c}
     along_row = corner_10 - corner_00
+    # d = x_{r,c+1} − x_{r,c}
     along_col = corner_01 - corner_00
     # e = x_{r+1,c+1} − x_{r+1,c} − x_{r,c+1} + x_{r,c}, zero on a parallelogram
     twist = corner_11 - corner_10 - corner_01 + corner_00
@@ -100,26 +120,33 @@ def _bilinear_terms(
 
 
 def _misfit(
-    terms: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
-    row_offset: jax.Array,
-    col_offset: jax.Array,
-    target: jax.Array,
-) -> jax.Array:
+    terms: _Terms,
+    row_offset: Float[Array, " target"],
+    col_offset: Float[Array, " target"],
+    target: Float[Array, " target"],
+) -> Float[Array, " target"]:
     """F = x(s, t) − x* for one coordinate."""
     origin, along_row, along_col, twist = terms
     # x(s, t) = a + b s + d t + e s t
     mapped = (
         origin + along_row * row_offset + along_col * col_offset
     ) + twist * row_offset * col_offset
+    # F = x(s, t) − x*
     return mapped - target
 
 
 def _jacobian(
-    terms_x: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
-    terms_y: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
-    row_offset: jax.Array,
-    col_offset: jax.Array,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    terms_x: _Terms,
+    terms_y: _Terms,
+    row_offset: Float[Array, " target"],
+    col_offset: Float[Array, " target"],
+) -> tuple[
+    Float[Array, " target"],
+    Float[Array, " target"],
+    Float[Array, " target"],
+    Float[Array, " target"],
+    Float[Array, " target"],
+]:
     """The entries of J = [∂x/∂s ∂x/∂t] at (s, t), and det J."""
     _, row_edge_x, col_edge_x, twist_x = terms_x
     _, row_edge_y, col_edge_y, twist_y = terms_y
@@ -128,6 +155,7 @@ def _jacobian(
     ds_y = row_edge_y + twist_y * col_offset
     dt_x = col_edge_x + twist_x * row_offset
     dt_y = col_edge_y + twist_y * row_offset
+    # det J = ∂x/∂s ∂y/∂t − ∂x/∂t ∂y/∂s
     determinant = ds_x * dt_y - dt_x * ds_y
     return ds_x, ds_y, dt_x, dt_y, determinant
 
@@ -138,7 +166,7 @@ def _newton(
     col: Int[Array, " target"],
     coordinates: Float[Array, "target 2"],
     n_steps: int,
-) -> tuple[jax.Array, jax.Array, Bool[Array, " target"]]:
+) -> tuple[Float[Array, " target"], Float[Array, " target"], Bool[Array, " target"]]:
     """(s, t) solving x(s, t) = x* in cell (row, col), and whether it converged."""
     target_x = coordinates[:, 0]
     target_y = coordinates[:, 1]
@@ -150,13 +178,15 @@ def _newton(
     col_offset = jnp.full(target_x.shape, 0.5, dtype=dtype)
     one = jnp.ones((), dtype)
     for _ in range(n_steps):
+        # F = x(s, t) − x*
         misfit_x = _misfit(terms_x, row_offset, col_offset, target_x)
         misfit_y = _misfit(terms_y, row_offset, col_offset, target_y)
         ds_x, ds_y, dt_x, dt_y, determinant = _jacobian(
             terms_x, terms_y, row_offset, col_offset
         )
         # det J set to 1 where J is singular; such a target fails below
-        safe_determinant = jnp.where(determinant != 0, determinant, one)
+        invertible = determinant != 0
+        safe_determinant = jnp.where(invertible, determinant, one)
         # (Δs, Δt) = J⁻¹ F, the closed-form 2 × 2 solve (Cramer's rule)
         row_step = (misfit_x * dt_y - misfit_y * dt_x) / safe_determinant
         col_step = (ds_x * misfit_y - ds_y * misfit_x) / safe_determinant
@@ -171,17 +201,22 @@ def _newton(
     eps = jnp.finfo(dtype).eps
     _, row_edge_x, col_edge_x, _ = terms_x
     _, row_edge_y, col_edge_y, _ = terms_y
-    cell_size = jnp.maximum(
-        jnp.maximum(jnp.abs(row_edge_x), jnp.abs(col_edge_x)),
-        jnp.maximum(jnp.abs(row_edge_y), jnp.abs(col_edge_y)),
-    )
-    magnitude = jnp.maximum(
-        jnp.maximum(jnp.abs(target_x), jnp.abs(terms_x[0])),
-        jnp.maximum(jnp.abs(target_y), jnp.abs(terms_y[0])),
-    )
-    tolerance = jnp.sqrt(eps) * cell_size + 8 * eps * magnitude
+    # h = max(|b_x|, |d_x|, |b_y|, |d_y|), the cell size
+    edge_size_x = jnp.maximum(jnp.abs(row_edge_x), jnp.abs(col_edge_x))
+    edge_size_y = jnp.maximum(jnp.abs(row_edge_y), jnp.abs(col_edge_y))
+    cell_size = jnp.maximum(edge_size_x, edge_size_y)
+    # |x| = max(|x*|, |a_x|, |y*|, |a_y|), the size of the coordinates
+    magnitude_x = jnp.maximum(jnp.abs(target_x), jnp.abs(terms_x[0]))
+    magnitude_y = jnp.maximum(jnp.abs(target_y), jnp.abs(terms_y[0]))
+    magnitude = jnp.maximum(magnitude_x, magnitude_y)
+    # tol = √ε h + 8 ε |x|
+    sqrt_eps = jnp.sqrt(eps)
+    tolerance = sqrt_eps * cell_size + 8 * eps * magnitude
+    # |F|_∞
     misfit = jnp.maximum(jnp.abs(misfit_x), jnp.abs(misfit_y))
-    converged = (misfit <= tolerance) & (determinant != 0)
+    within = misfit <= tolerance
+    invertible = determinant != 0
+    converged = within & invertible
     return row_offset, col_offset, converged
 
 
@@ -194,10 +229,16 @@ def _walk(
     """Move ⌊s⌋ cells along one index where s leaves [0, 1], kept on the grid."""
     leaves = (offset < -slack) | (offset > 1 + slack)
     # clipped before the cast, so a diverged offset cannot overflow int32
-    finite_offset = jnp.where(jnp.isfinite(offset), offset, 0.0)
-    jump = jnp.floor(jnp.clip(finite_offset, -n_cells, n_cells))
+    is_finite = jnp.isfinite(offset)
+    finite_offset = jnp.where(is_finite, offset, 0.0)
+    clipped = jnp.clip(finite_offset, -n_cells, n_cells)
+    # ⌊s⌋
+    jump = jnp.floor(clipped)
     jump = jnp.where(leaves, jump, 0.0)
-    return jnp.clip(cell + jump.astype(jnp.int32), 0, n_cells - 1)
+    whole_jump = jump.astype(jnp.int32)
+    # r ← r + ⌊s⌋, kept on the grid
+    moved = cell + whole_jump
+    return jnp.clip(moved, 0, n_cells - 1)
 
 
 def _settled(
@@ -230,20 +271,20 @@ def curvilinear_positions(
     row, col = _nearest_cell(grid, coordinates)
     dtype = jnp.result_type(grid.x, coordinates)
     # an offset this close past 0 or 1 sits on the shared edge, not beyond it
-    slack = math.sqrt(float(np.finfo(dtype).eps))
+    eps = float(np.finfo(dtype).eps)
+    slack = math.sqrt(eps)
     for _ in range(n_walks):
         row_offset, col_offset, _ = _newton(grid, row, col, coordinates, n_steps)
         row = _walk(row, row_offset, n_rows - 1, slack)
         col = _walk(col, col_offset, n_cols - 1, slack)
     row_offset, col_offset, converged = _newton(grid, row, col, coordinates, n_steps)
-    settled = _settled(row, row_offset, n_rows - 1, slack) & _settled(
-        col, col_offset, n_cols - 1, slack
-    )
-    found = converged & settled
+    row_settled = _settled(row, row_offset, n_rows - 1, slack)
+    col_settled = _settled(col, col_offset, n_cols - 1, slack)
+    found = converged & row_settled & col_settled
     # u = (r + s, c + t)
-    positions = einx.id(
-        "target, target -> target (1 + 1)", row + row_offset, col + col_offset
-    )
+    row_position = row + row_offset
+    col_position = col + col_offset
+    positions = einx.id("target, target -> target (1 + 1)", row_position, col_position)
     nan = jnp.asarray(jnp.nan, dtype=positions.dtype)
     return einx.where("target, target c, -> target c", found, positions, nan)
 
@@ -324,7 +365,9 @@ def locate_curvilinear(
     row_lower, row_upper = domain_bounds(n_rows, extent)
     col_lower, col_upper = domain_bounds(n_cols, extent)
     index = curvilinear_positions(grid, positions, n_steps=n_steps, n_walks=n_walks)
+    # ⌊u⌋
     cell_float = jnp.floor(index)
+    # u − ⌊u⌋
     offset = index - cell_float
     cell = cell_float.astype(jnp.int32)
     row_index = index[:, 0]

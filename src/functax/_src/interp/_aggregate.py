@@ -99,14 +99,18 @@ class TransposedStencil(Readout):
         self, coefficients: Float[Array, "*batch obs"]
     ) -> Float[Array, "*batch cell"]:
         """f̂ⱼ = sⱼ (Hᵀ y)ⱼ, over any leading batch dims."""
+        # Hᵀ y
         gathered = self.stencil.apply_adjoint(coefficients)
+        # f̂ⱼ = sⱼ (Hᵀ y)ⱼ
         return einx.multiply("... cell, cell -> ... cell", gathered, self.scale)
 
     def apply_adjoint(
         self, residual: Float[Array, "*batch cell"]
     ) -> Float[Array, "*batch obs"]:
         """g = H diag(s) r, over any leading batch dims."""
+        # diag(s) r
         scaled = einx.multiply("... cell, cell -> ... cell", residual, self.scale)
+        # g = H diag(s) r
         return self.stencil.apply(scaled)
 
     def operator(self) -> lx.FunctionLinearOperator:
@@ -131,6 +135,35 @@ class BinningPlan(Plan):
     Args:
         counts: n = Hᵀ 1, the (weighted) number of samples in each cell.
         statistic: ``"mean"``, ``"sum"`` or ``"count"``.
+
+    Examples:
+        Three samples binned into three cells, the middle one empty:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis, Points
+        >>> from functax.interp import Binning
+        >>> cells = Axis(jnp.arange(3.0))
+        >>> samples = Points(jnp.array([[0.1], [0.4], [2.2]]))
+        >>> means = Binning("mean").plan(samples, cells)
+        >>> means.counts.tolist(), means.valid.tolist()
+        ([2.0, 0.0, 1.0], [True, False, True])
+
+        A batch of fields, and the adjoint of the sums, which gathers:
+
+        >>> means(jnp.ones((2, 3))).shape
+        (2, 3)
+        >>> sums = Binning("sum").plan(samples, cells)
+        >>> sums.adjoint(jnp.array([1.0, 10.0, 100.0])).tolist()
+        [1.0, 1.0, 100.0]
+
+        A count has no linear map:
+
+        >>> Binning("count").plan(
+        ...     samples, cells
+        ... ).operator()  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        NonlinearSchemeError: a count does not depend on the data
     """
 
     counts: Float[Array, " cell"] = eqx.field(kw_only=True)
@@ -147,7 +180,9 @@ class BinningPlan(Plan):
             The statistic per cell, with the cells last.
         """
         if self.statistic == "count":
-            data = jnp.ones_like(jnp.asarray(data))
+            # n = Hᵀ 1, whatever the data
+            samples = jnp.asarray(data)
+            data = jnp.ones_like(samples)
         return super().__call__(data)
 
     def _require_linear(self, what: str) -> None:
@@ -326,25 +361,31 @@ class Binning(Scheme):
             weights = einx.where(
                 "obs, obs tap, -> obs tap", source.valid, stencil.weights, zero
             )
+            real_valid = stencil.valid & source.valid
             stencil = Stencil(
                 stencil.indices,
                 weights,
                 n_source=stencil.n_source,
-                valid=stencil.valid & source.valid,
+                valid=real_valid,
                 check=False,
             )
-            inside = inside | ~source.valid
+            padding = ~source.valid
+            inside = inside | padding
         check_outside(inside, policies)
 
         # --- n = Hᵀ 1, and the scale of each cell ---
         ones = jnp.ones(stencil.n_target, stencil.weights.dtype)
+        # n = Hᵀ 1
         counts = stencil.apply_adjoint(ones)
         if self.statistic == "mean":
             occupied = counts > 0
-            safe_counts = jnp.where(occupied, counts, jnp.ones((), counts.dtype))
+            one = jnp.ones((), counts.dtype)
+            safe_counts = jnp.where(occupied, counts, one)
             zero = jnp.zeros((), counts.dtype)
+            # 1/nⱼ
+            reciprocal = 1.0 / safe_counts
             # sⱼ = 1/nⱼ, and 0 at an empty cell, whose row the plan marks invalid
-            scale = jnp.where(occupied, 1.0 / safe_counts, zero)
+            scale = jnp.where(occupied, reciprocal, zero)
         else:
             occupied = jnp.ones(counts.shape, dtype=bool)
             scale = jnp.ones(counts.shape, counts.dtype)

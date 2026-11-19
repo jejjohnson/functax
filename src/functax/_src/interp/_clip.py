@@ -22,6 +22,7 @@ require_jax(__name__)
 
 import dataclasses
 
+import einx
 import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Float, Int
@@ -54,7 +55,22 @@ class CellOverlaps:
         target: i, the target cell of each pair.
         source: j, the source cell of each pair.
         areas: |cⱼ ∩ Cᵢ|, positive.
-        target_areas: |Cᵢ| of every target cell, (M,).
+        target_areas: |Cᵢ| of every target cell.
+
+    Examples:
+        Two unit squares under one 2 × 1 target:
+
+        >>> import numpy as np
+        >>> from functax._src.interp._clip import cell_overlaps
+        >>> square = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+        >>> source = np.stack([square, square + [1.0, 0.0]])
+        >>> overlaps = cell_overlaps(
+        ...     source, (square * [2.0, 1.0])[None], sphere=False
+        ... )
+        >>> overlaps.source.tolist(), overlaps.areas.tolist()
+        ([0, 1], [1.0, 1.0])
+        >>> overlaps.target_areas.tolist()
+        [2.0]
     """
 
     target: Int[np.ndarray, " pair"]
@@ -77,6 +93,15 @@ def clip_polygons(
     ends lie on opposite sides. Subjects may be any simple polygon; a zero-length
     clip edge cuts nothing.
 
+    Algorithm:
+        1. For each clip edge q₀ → q₁, find the side d(p) of every subject
+           vertex and of its predecessor.
+        2. Give each vertex two slots: the crossing of the edge into it, kept
+           where the two ends lie on opposite sides, and the vertex itself,
+           kept where it is inside.
+        3. Pack the kept slots to the front of each row (a stable sort) and
+           trim the padding to the longest polygon.
+
     Args:
         subjects: The subject vertices, padded past ``counts``.
         counts: The number of vertices of each subject.
@@ -84,69 +109,190 @@ def clip_polygons(
 
     Returns:
         The clipped vertices, padded, and their counts (0 where nothing is left).
+
+    Examples:
+        A unit square shifted by half its side keeps a quarter:
+
+        >>> import numpy as np
+        >>> from functax._src.interp._clip import clip_polygons, planar_polygon_area
+        >>> square = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+        >>> points, counts = clip_polygons(
+        ...     (square + 0.5)[None], np.array([4]), square[None]
+        ... )
+        >>> points.shape, counts.tolist()
+        ((1, 4, 2), [4])
+        >>> planar_polygon_area(points, counts).tolist()
+        [0.25]
+
+        A subject outside the clip polygon leaves nothing:
+
+        >>> points, counts = clip_polygons(
+        ...     (square + 2.0)[None], np.array([4]), square[None]
+        ... )
+        >>> counts.tolist()
+        [0]
     """
     points = subjects
     n_corners = clips.shape[1]
     for corner in range(n_corners):
+        # --- side of the clip edge q₀ → q₁ ---
         start = clips[:, corner]
-        edge = clips[:, (corner + 1) % n_corners] - start
+        end = clips[:, (corner + 1) % n_corners]
+        # q₁ − q₀
+        edge = end - start
         width = points.shape[1]
         vertex = np.arange(width)
-        valid = vertex < counts[:, None]
+        valid = einx.less("vertex, pair -> pair vertex", vertex, counts)
         # the previous vertex, cyclically within each polygon's own count
         safe_counts = np.maximum(counts, 1)
-        previous_index = (vertex[None, :] - 1) % safe_counts[:, None]
-        previous = np.take_along_axis(points, previous_index[..., None], axis=1)
+        # k − 1 mod nₚ (einx has no remainder, so both sides are broadcast first)
+        shifted = einx.id("vertex -> pair vertex", vertex - 1, pair=len(counts))
+        period = einx.id("pair -> pair vertex", safe_counts, vertex=width)
+        previous_index = np.mod(shifted, period)
+        previous = einx.get_at(
+            "pair [vertex] dim, pair slot -> pair slot dim", points, previous_index
+        )
+        # p − q₀
+        offset = einx.subtract(
+            "pair vertex dim, pair dim -> pair vertex dim", points, start
+        )
         # d(p) = (q₁ − q₀) × (p − q₀)
-        offset = points - start[:, None, :]
-        side = edge[:, None, 0] * offset[..., 1] - edge[:, None, 1] * offset[..., 0]
-        previous_side = np.take_along_axis(side, previous_index, axis=1)
+        along_y = einx.multiply(
+            "pair, pair vertex -> pair vertex", edge[:, 0], offset[..., 1]
+        )
+        along_x = einx.multiply(
+            "pair, pair vertex -> pair vertex", edge[:, 1], offset[..., 0]
+        )
+        side = along_y - along_x
+        previous_side = einx.get_at(
+            "pair [vertex], pair slot -> pair slot", side, previous_index
+        )
         inside = side >= 0
         previous_inside = previous_side >= 0
-        crosses = valid & (inside != previous_inside)
+        changes_side = inside != previous_inside
+        crosses = valid & changes_side
+
+        # --- crossings ---
+        # d(p) − d(p′)
+        side_drop = previous_side - side
+        denominator = np.where(crosses, side_drop, 1.0)
         # t = d(p) / (d(p) − d(p′)), the two of opposite sign where it crosses
-        denominator = np.where(crosses, previous_side - side, 1.0)
-        fraction = np.where(crosses, previous_side / denominator, 0.0)
-        crossing = previous + fraction[..., None] * (points - previous)
+        ratio = previous_side / denominator
+        fraction = np.where(crosses, ratio, 0.0)
+        # p′ − p
+        step = points - previous
+        # t (p′ − p)
+        advance = einx.multiply(
+            "pair vertex, pair vertex dim -> pair vertex dim", fraction, step
+        )
+        # p + t (p′ − p)
+        crossing = previous + advance
+
+        # --- pack ---
         # two slots per vertex, the crossing first, then the vertex if kept
-        slots = np.stack([crossing, points], axis=2).reshape(len(points), -1, 2)
-        kept = np.stack([crosses, valid & inside], axis=2).reshape(len(points), -1)
-        order = np.argsort(~kept, axis=1, kind="stable")
-        points = np.take_along_axis(slots, order[..., None], axis=1)
-        counts = kept.sum(axis=1)
-        points = points[:, : max(int(counts.max(initial=0)), 1)]
+        slots = einx.id(
+            "pair vertex dim, pair vertex dim -> pair (vertex (1 + 1)) dim",
+            crossing,
+            points,
+        )
+        keeps_vertex = valid & inside
+        kept = einx.id(
+            "pair vertex, pair vertex -> pair (vertex (1 + 1))", crosses, keeps_vertex
+        )
+        dropped = ~kept
+        order = np.argsort(dropped, axis=1, kind="stable")
+        points = einx.get_at(
+            "pair [slot] dim, pair packed -> pair packed dim", slots, order
+        )
+        counts = einx.sum("pair [slot]", kept)
+        # initial=0: an empty batch of pairs has no maximum
+        longest = int(counts.max(initial=0))
+        points = points[:, : max(longest, 1)]
     return points, counts
 
 
 def planar_polygon_area(
     points: Float[np.ndarray, "pair vertex 2"], counts: Int[np.ndarray, " pair"]
 ) -> Float[np.ndarray, " pair"]:
-    """The signed shoelace area ½ ∑ₖ (xₖ yₖ₊₁ − xₖ₊₁ yₖ) of padded polygons."""
-    vertex = np.arange(points.shape[1])
+    """The signed shoelace area of padded polygons.
+
+    A = ½ ∑ₖ (xₖ yₖ₊₁ − xₖ₊₁ yₖ), the sum over each polygon's own ``counts``
+    vertices, with k + 1 taken cyclically; positive when counter-clockwise.
+
+    Args:
+        points: The vertices (x, y), padded past ``counts``.
+        counts: The number of vertices of each polygon.
+
+    Returns:
+        The signed area A of each polygon.
+
+    Examples:
+        The unit square, then the same square clockwise:
+
+        >>> import numpy as np
+        >>> from functax._src.interp._clip import planar_polygon_area
+        >>> square = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+        >>> planar_polygon_area(square[None], np.array([4])).tolist()
+        [1.0]
+        >>> planar_polygon_area(square[None, ::-1], np.array([4])).tolist()
+        [-1.0]
+    """
+    width = points.shape[1]
+    vertex = np.arange(width)
     safe_counts = np.maximum(counts, 1)
-    following_index = (vertex[None, :] + 1) % safe_counts[:, None]
-    following = np.take_along_axis(points, following_index[..., None], axis=1)
+    # k + 1 mod nₚ (einx has no remainder, so both sides are broadcast first)
+    shifted = einx.id("vertex -> pair vertex", vertex + 1, pair=len(counts))
+    period = einx.id("pair -> pair vertex", safe_counts, vertex=width)
+    following_index = np.mod(shifted, period)
+    following = einx.get_at(
+        "pair [vertex] dim, pair slot -> pair slot dim", points, following_index
+    )
     # xₖ yₖ₊₁ − xₖ₊₁ yₖ on the polygon's own edges only
-    terms = points[..., 0] * following[..., 1] - following[..., 0] * points[..., 1]
-    terms = np.where(vertex[None, :] < counts[:, None], terms, 0.0)
-    return 0.5 * terms.sum(axis=1)
+    forward = points[..., 0] * following[..., 1]
+    backward = following[..., 0] * points[..., 1]
+    terms = forward - backward
+    on_polygon = einx.less("vertex, pair -> pair vertex", vertex, counts)
+    terms = np.where(on_polygon, terms, 0.0)
+    # ∑ₖ (xₖ yₖ₊₁ − xₖ₊₁ yₖ)
+    twice_area = einx.sum("pair [vertex]", terms)
+    # A = ½ ∑ₖ (xₖ yₖ₊₁ − xₖ₊₁ yₖ)
+    return 0.5 * twice_area
 
 
-def _counter_clockwise(polygons: np.ndarray, areas: np.ndarray) -> np.ndarray:
+def _counter_clockwise(
+    polygons: Float[np.ndarray, "pair corner dim"], areas: Float[np.ndarray, " pair"]
+) -> Float[np.ndarray, "pair corner dim"]:
     """Reverse the corner order of each polygon with a negative signed area."""
     reversed_order = polygons[:, ::-1]
-    return np.where((areas < 0)[:, None, None], reversed_order, polygons)
+    clockwise = areas < 0
+    return einx.where(
+        "pair, pair corner dim, pair corner dim -> pair corner dim",
+        clockwise,
+        reversed_order,
+        polygons,
+    )
 
 
-def _check_convex(polygons: np.ndarray, name: str) -> None:
+def _check_convex(polygons: Float[np.ndarray, "pair corner dim"], name: str) -> None:
     """Raise unless each counter-clockwise polygon never turns right."""
-    following = np.roll(polygons, -1, axis=1)
-    after = np.roll(polygons, -2, axis=1)
+    following = einx.roll("pair [corner] dim", polygons, shift=-1)
+    after = einx.roll("pair [corner] dim", polygons, shift=-2)
+    # qₖ₊₁ − qₖ
     first = following - polygons
+    # qₖ₊₂ − qₖ₊₁
     second = after - following
-    turn = first[..., 0] * second[..., 1] - first[..., 1] * second[..., 0]
-    scale = np.max(np.abs(first), axis=(1, 2)) ** 2
-    concave = np.any(turn < -_CONVEX_RTOL * scale[:, None], axis=1)
+    # (qₖ₊₁ − qₖ) × (qₖ₊₂ − qₖ₊₁)
+    forward = first[..., 0] * second[..., 1]
+    backward = first[..., 1] * second[..., 0]
+    turn = forward - backward
+    # s = (maxₖ |qₖ₊₁ − qₖ|_∞)²
+    magnitude = np.abs(first)
+    longest = einx.max("pair [corner dim]", magnitude)
+    scale = longest**2
+    # a right turn below −tol s
+    threshold = -_CONVEX_RTOL * scale
+    turns_right = einx.less("pair corner, pair -> pair corner", turn, threshold)
+    concave = einx.any("pair [corner]", turns_right)
     if np.any(concave):
         cell = int(np.flatnonzero(concave)[0])
         msg = f"'{name}' cells must be convex to clip against, but cell {cell} is not"
@@ -154,77 +300,120 @@ def _check_convex(polygons: np.ndarray, name: str) -> None:
 
 
 def _tangent_frames(
-    centres: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
+    centres: Float[np.ndarray, "pair 3"],
+) -> tuple[Float[np.ndarray, "pair 3"], Float[np.ndarray, "pair 3"]]:
     """Two unit vectors e₁, e₂ spanning the tangent plane at each centre n̂."""
     # e₁ ∥ ẑ × n̂, or x̂ × n̂ near the poles
-    pole = np.abs(centres[:, 2]) > 0.9
-    reference = np.where(pole[:, None], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+    height = np.abs(centres[:, 2])
+    pole = height > 0.9
+    x_axis = np.array([1.0, 0.0, 0.0])
+    z_axis = np.array([0.0, 0.0, 1.0])
+    reference = einx.where("pair, dim, dim -> pair dim", pole, x_axis, z_axis)
     first = np.cross(reference, centres)
-    first = first / np.linalg.norm(first, axis=1, keepdims=True)
+    # ‖e₁‖
+    length = np.linalg.norm(first, axis=1)
+    # e₁ / ‖e₁‖
+    first = einx.divide("pair dim, pair -> pair dim", first, length)
+    # e₂ = n̂ × e₁
     second = np.cross(centres, first)
     return first, second
 
 
 def _gnomonic(
-    points: np.ndarray,
-    centre: np.ndarray,
-    first: np.ndarray,
-    second: np.ndarray,
-) -> np.ndarray:
+    points: Float[np.ndarray, "pair vertex 3"],
+    centre: Float[np.ndarray, "pair 3"],
+    first: Float[np.ndarray, "pair 3"],
+    second: Float[np.ndarray, "pair 3"],
+) -> Float[np.ndarray, "pair vertex 2"]:
     """(p · e₁, p · e₂) / (p · n̂), the gnomonic projection about n̂."""
-    height = np.einsum("pvc,pc->pv", points, centre)
+    # p · n̂
+    height = einx.dot("pair vertex dim, pair dim -> pair vertex", points, centre)
     if np.any(height <= 0):
         msg = (
             "cells must each lie within a hemisphere of the target cells they "
             "overlap, but a pair spans more"
         )
         raise GeometryError(msg)
-    along_first = np.einsum("pvc,pc->pv", points, first) / height
-    along_second = np.einsum("pvc,pc->pv", points, second) / height
-    return np.stack([along_first, along_second], axis=-1)
+    # p · e₁
+    first_component = einx.dot(
+        "pair vertex dim, pair dim -> pair vertex", points, first
+    )
+    # p · e₂
+    second_component = einx.dot(
+        "pair vertex dim, pair dim -> pair vertex", points, second
+    )
+    # u = (p · e₁) / (p · n̂)
+    along_first = first_component / height
+    # v = (p · e₂) / (p · n̂)
+    along_second = second_component / height
+    return einx.id(
+        "pair vertex, pair vertex -> pair vertex (1 + 1)", along_first, along_second
+    )
 
 
 def _spherical_areas(
-    polygons: np.ndarray, counts: np.ndarray | None = None
-) -> np.ndarray:
+    polygons: Float[np.ndarray, "pair vertex 3"],
+    counts: Int[np.ndarray, " pair"] | None = None,
+) -> Float[np.ndarray, " pair"]:
     """|A| of padded unit-vector polygons, zero where fewer than three vertices."""
     if counts is not None:
         # pad by repeating the last vertex, which adds zero-area triangles
         vertex = np.arange(polygons.shape[1])
-        last = np.maximum(counts - 1, 0)
-        index = np.minimum(vertex[None, :], last[:, None])
-        polygons = np.take_along_axis(polygons, index[..., None], axis=1)
+        # nₚ − 1
+        last_vertex = counts - 1
+        last = np.maximum(last_vertex, 0)
+        index = einx.minimum("vertex, pair -> pair vertex", vertex, last)
+        polygons = einx.get_at(
+            "pair [vertex] dim, pair slot -> pair slot dim", polygons, index
+        )
     if polygons.shape[1] < 3:
         return np.zeros(polygons.shape[0], polygons.dtype)
-    areas = np.abs(np.asarray(spherical_polygon_area(jnp.asarray(polygons))))
+    device_polygons = jnp.asarray(polygons)
+    signed_areas = spherical_polygon_area(device_polygons)
+    # |A|
+    areas = np.abs(np.asarray(signed_areas))
     if counts is not None:
-        areas = np.where(counts >= 3, areas, 0.0)
+        is_polygon = counts >= 3
+        areas = np.where(is_polygon, areas, 0.0)
     return areas
 
 
 def _bounding_circles(
-    polygons: np.ndarray, sphere: bool
-) -> tuple[np.ndarray, np.ndarray]:
+    polygons: Float[np.ndarray, "cell corner dim"], sphere: bool
+) -> tuple[Float[np.ndarray, "cell dim"], Float[np.ndarray, " cell"]]:
     """A centre and a radius whose ball holds each cell (chords on the sphere)."""
-    centres = polygons.mean(axis=1)
+    # c = (1/K) ∑ₖ qₖ
+    centres = einx.mean("cell [corner] dim", polygons)
     if sphere:
-        centres = centres / np.linalg.norm(centres, axis=1, keepdims=True)
+        # c / ‖c‖
+        length = np.linalg.norm(centres, axis=1)
+        centres = einx.divide("cell dim, cell -> cell dim", centres, length)
     # every point of a convex cell (a spherical cap's, on the sphere) is no
     # farther from the centre than its farthest corner
-    radii = np.linalg.norm(polygons - centres[:, None, :], axis=2).max(axis=1)
+    # qₖ − c
+    offsets = einx.subtract(
+        "cell corner dim, cell dim -> cell corner dim", polygons, centres
+    )
+    # ‖qₖ − c‖
+    distances = np.linalg.norm(offsets, axis=2)
+    # r = maxₖ ‖qₖ − c‖
+    radii = einx.max("cell [corner]", distances)
     return centres, radii
 
 
 def _candidate_pairs(
-    source: np.ndarray, target: np.ndarray, sphere: bool
-) -> tuple[np.ndarray, np.ndarray]:
+    source: Float[np.ndarray, "source corner dim"],
+    target: Float[np.ndarray, "target corner dim"],
+    sphere: bool,
+) -> tuple[Int[np.ndarray, " pair"], Int[np.ndarray, " pair"]]:
     """(target, source) pairs whose bounding balls meet, from a k-d tree."""
     spatial = import_scipy("spatial", needed_by="Conservative.plan")
     source_centres, source_radii = _bounding_circles(source, sphere)
     target_centres, target_radii = _bounding_circles(target, sphere)
     tree = spatial.cKDTree(source_centres)
-    reach = target_radii + source_radii.max()
+    # rᵢ + maxⱼ rⱼ
+    largest_source = einx.max("[source]", source_radii)
+    reach = target_radii + largest_source
     neighbours = tree.query_ball_point(target_centres, reach)
     counts = np.array([len(row) for row in neighbours], dtype=np.int64)
     target_index = np.repeat(np.arange(len(target)), counts)
@@ -232,10 +421,10 @@ def _candidate_pairs(
         (j for row in neighbours for j in row), dtype=np.int64, count=counts.sum()
     )
     # ‖nᵢ − nⱼ‖ ≤ rᵢ + rⱼ, the test the tree's single reach overestimates
-    gap = np.linalg.norm(
-        target_centres[target_index] - source_centres[source_index], axis=1
-    )
-    meets = gap <= target_radii[target_index] + source_radii[source_index]
+    separation = target_centres[target_index] - source_centres[source_index]
+    gap = np.linalg.norm(separation, axis=1)
+    pair_reach = target_radii[target_index] + source_radii[source_index]
+    meets = gap <= pair_reach
     return target_index[meets], source_index[meets]
 
 
@@ -246,6 +435,9 @@ def cell_overlaps(
     sphere: bool,
 ) -> CellOverlaps:
     """The overlap areas |cⱼ ∩ Cᵢ| of every pair of source and target cells.
+
+    |cⱼ ∩ Cᵢ| is the area of the source cell cⱼ clipped to the target cell
+    Cᵢ: the shoelace area in the plane, the spherical excess on the sphere.
 
     Algorithm:
         1. Find candidate pairs whose bounding balls meet, with a k-d tree on
@@ -270,19 +462,42 @@ def cell_overlaps(
         GeometryError: If a target cell is not convex, or a pair spans more
             than a hemisphere.
         MissingExtraError: If SciPy (``functax[scipy]``) is missing.
+
+    Examples:
+        A unit square half over a 2 × 2 target, the target clockwise:
+
+        >>> import numpy as np
+        >>> from functax._src.interp._clip import cell_overlaps
+        >>> square = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+        >>> target = (2.0 * square - [1.5, 0.0])[None, ::-1]
+        >>> overlaps = cell_overlaps(square[None], target, sphere=False)
+        >>> overlaps.areas.tolist(), overlaps.target_areas.tolist()
+        ([0.5], [4.0])
+
+        A concave target is rejected:
+
+        >>> dart = np.array([[[0.0, 0.0], [2.0, 0.0], [0.5, 0.5], [0.0, 2.0]]])
+        >>> cell_overlaps(
+        ...     square[None], dart, sphere=False
+        ... )  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        GeometryError: 'target' cells must be convex to clip against
     """
     dtype = np.result_type(source, target)
     if sphere:
         target_areas = _spherical_areas(target)
     else:
-        target_areas = np.abs(
-            planar_polygon_area(target, np.full(len(target), target.shape[1]))
-        )
+        n_target_corners = np.full(len(target), target.shape[1])
+        signed_target_areas = planar_polygon_area(target, n_target_corners)
+        # |Cᵢ|
+        target_areas = np.abs(signed_target_areas)
     target_index, source_index = _candidate_pairs(source, target, sphere)
-    pair_targets: list[np.ndarray] = []
-    pair_sources: list[np.ndarray] = []
-    pair_areas: list[np.ndarray] = []
+    pair_targets: list[Int[np.ndarray, " pair"]] = []
+    pair_sources: list[Int[np.ndarray, " pair"]] = []
+    pair_areas: list[Float[np.ndarray, " pair"]] = []
     for start in range(0, len(target_index), _CHUNK):
+        # --- project ---
         rows = target_index[start : start + _CHUNK]
         columns = source_index[start : start + _CHUNK]
         clips = target[rows]
@@ -294,25 +509,49 @@ def cell_overlaps(
             subjects = _gnomonic(subjects, centres, first, second)
         else:
             # shift to the target's centre, so the products below lose no digits
-            origin = clips.mean(axis=1, keepdims=True)
-            clips = clips - origin
-            subjects = subjects - origin
+            origin = einx.mean("pair [corner] dim", clips)
+            clips = einx.subtract(
+                "pair corner dim, pair dim -> pair corner dim", clips, origin
+            )
+            subjects = einx.subtract(
+                "pair vertex dim, pair dim -> pair vertex dim", subjects, origin
+            )
+
+        # --- clip ---
         n_corners = np.full(len(rows), clips.shape[1])
-        clips = _counter_clockwise(clips, planar_polygon_area(clips, n_corners))
+        clip_areas = planar_polygon_area(clips, n_corners)
+        clips = _counter_clockwise(clips, clip_areas)
         _check_convex(clips, "target")
         n_vertices = np.full(len(rows), subjects.shape[1])
         clipped, counts = clip_polygons(subjects, n_vertices, clips)
+
+        # --- measure ---
         if sphere:
-            # p = n̂ + u e₁ + v e₂, back on the sphere
-            lifted = (
-                centres[:, None, :]
-                + clipped[..., :1] * first[:, None, :]
-                + clipped[..., 1:] * second[:, None, :]
+            # u e₁
+            along_first = einx.multiply(
+                "pair out, pair dim -> pair out dim", clipped[..., 0], first
             )
-            lifted = lifted / np.linalg.norm(lifted, axis=2, keepdims=True)
+            # v e₂
+            along_second = einx.multiply(
+                "pair out, pair dim -> pair out dim", clipped[..., 1], second
+            )
+            # n̂ + u e₁
+            lifted = einx.add(
+                "pair dim, pair out dim -> pair out dim", centres, along_first
+            )
+            # p = n̂ + u e₁ + v e₂, back on the sphere
+            lifted = lifted + along_second
+            # ‖p‖
+            length = np.linalg.norm(lifted, axis=2)
+            # p / ‖p‖
+            lifted = einx.divide(
+                "pair out dim, pair out -> pair out dim", lifted, length
+            )
             areas = _spherical_areas(lifted, counts)
         else:
-            areas = np.abs(planar_polygon_area(clipped, counts))
+            signed_areas = planar_polygon_area(clipped, counts)
+            # |cⱼ ∩ Cᵢ|
+            areas = np.abs(signed_areas)
         overlapping = areas > 0
         pair_targets.append(rows[overlapping])
         pair_sources.append(columns[overlapping])

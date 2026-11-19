@@ -44,7 +44,49 @@ NEGATIVE_VARIANCE_RTOL = 1e-10
 
 
 class PosteriorCovariance(eqx.Module):
-    """Σ*, the (M, M) posterior covariance of the field at M targets."""
+    """Σ*, the (M, M) posterior covariance of the field at M targets.
+
+    Σ*ₖₗ = Cov[f(x*ₖ), f(x*ₗ) ∣ samples]; a subclass gives M, its diagonal,
+    the dense matrix and draws ε ~ 𝒩(0, Σ*).
+
+    Examples:
+        Linear interpolation's Brownian bridge is one:
+
+        >>> import jax
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis
+        >>> from functax.interp import BrownianBridge, PosteriorCovariance
+        >>> bridge = BrownianBridge.from_positions(
+        ...     Axis(jnp.array([0.0, 1.0])), jnp.array([0.5]), rate=1.0
+        ... )
+        >>> isinstance(bridge, PosteriorCovariance), bridge.n_target
+        (True, 1)
+
+        A subclass for independent targets, Σ* = diag(σ²):
+
+        >>> class Independent(PosteriorCovariance):
+        ...     variances: jax.Array
+        ...
+        ...     @property
+        ...     def n_target(self):
+        ...         return self.variances.shape[0]
+        ...
+        ...     def variance(self):
+        ...         return self.variances
+        ...
+        ...     def covariance(self):
+        ...         return jnp.diag(self.variances)
+        ...
+        ...     def sample(self, batch_shape, *, key):
+        ...         shape = (*batch_shape, self.n_target)
+        ...         noise = jax.random.normal(key, shape)
+        ...         return noise * jnp.sqrt(self.variances)
+        >>> independent = Independent(jnp.array([1.0, 4.0]))
+        >>> independent.covariance().tolist()
+        [[1.0, 0.0], [0.0, 4.0]]
+        >>> independent.sample((3,), key=jax.random.key(0)).shape
+        (3, 2)
+    """
 
     @property
     @abc.abstractmethod
@@ -66,12 +108,16 @@ class PosteriorCovariance(eqx.Module):
         """ε ~ 𝒩(0, Σ*), one independent draw per entry of ``batch_shape``."""
 
 
-def _safe_sqrt(value: jax.Array) -> jax.Array:
+def _safe_sqrt(value: Float[Array, "*shape"]) -> Float[Array, "*shape"]:
     """√v for v ≥ 0, with a zero (not infinite) gradient at v = 0."""
     positive = value > 0
+    one = jnp.ones((), value.dtype)
+    zero = jnp.zeros((), value.dtype)
     # the untaken branch reads 1, so √ never sees 0 and its gradient stays finite
-    root = jnp.sqrt(jnp.where(positive, value, jnp.ones((), value.dtype)))
-    return jnp.where(positive, root, jnp.zeros((), value.dtype))
+    safe_value = jnp.where(positive, value, one)
+    # √v
+    root = jnp.sqrt(safe_value)
+    return jnp.where(positive, root, zero)
 
 
 class BrownianBridge(PosteriorCovariance):
@@ -189,21 +235,33 @@ class BrownianBridge(PosteriorCovariance):
         positions = jnp.asarray(positions)
         values = axis.values
         n_nodes = values.shape[0]
+        # xᵢ₊₁ − xᵢ
+        spacing = jnp.diff(values)
         # Δᵢ = |xᵢ₊₁ − xᵢ|
-        widths = jnp.abs(jnp.diff(values))
+        widths = jnp.abs(spacing)
         finite = jnp.isfinite(positions)
-        positions = jnp.where(finite, positions, jnp.zeros((), positions.dtype))
+        zero = jnp.zeros((), positions.dtype)
+        positions = jnp.where(finite, positions, zero)
+        # ⌊u⌋
         lower = jnp.floor(positions)
         if axis.period is not None:
+            # x_{N−1} − x₀
+            span = values[-1] - values[0]
             # the wrap cell x_{N−1} → x₀ + P has width P − |x_{N−1} − x₀|
-            wrap = axis.period - jnp.abs(values[-1] - values[0])
+            wrap = axis.period - jnp.abs(span)
             widths = jnp.append(widths, wrap)
-            cell = jnp.mod(lower, n_nodes).astype(jnp.int32)
+            # i = ⌊u⌋ mod N
+            wrapped = jnp.mod(lower, n_nodes)
+            cell = wrapped.astype(jnp.int32)
+            # t = u − ⌊u⌋
             offset = positions - lower
         else:
             # i ∈ [0, N − 2], so the last knot is t = 1 of the last cell
-            cell = jnp.clip(lower, 0, n_nodes - 2).astype(jnp.int32)
-            offset = jnp.clip(positions - cell, 0.0, 1.0)
+            clipped = jnp.clip(lower, 0, n_nodes - 2)
+            cell = clipped.astype(jnp.int32)
+            # t = u − i, clipped to the cell
+            unclipped_offset = positions - cell
+            offset = jnp.clip(unclipped_offset, 0.0, 1.0)
         # σ² Δᵢ
         scale = rate * widths[cell]
         return cls(cell, offset, scale)
@@ -234,10 +292,10 @@ class BrownianBridge(PosteriorCovariance):
         same_cell = einx.equal("row, col -> row col", self.cell, self.cell)
         earlier = einx.minimum("row, col -> row col", self.offset, self.offset)
         later = einx.maximum("row, col -> row col", self.offset, self.offset)
-        # σ² Δᵢ t₁ (1 − t₂) for t₁ ≤ t₂
-        bridge = einx.multiply(
-            "row, row col -> row col", self.scale, earlier * (1.0 - later)
-        )
+        # t₁ (1 − t₂) for t₁ ≤ t₂
+        shape = earlier * (1.0 - later)
+        # σ² Δᵢ t₁ (1 − t₂)
+        bridge = einx.multiply("row, row col -> row col", self.scale, shape)
         zero = jnp.zeros((), bridge.dtype)
         return jnp.where(same_cell, bridge, zero)
 
@@ -266,20 +324,32 @@ class BrownianBridge(PosteriorCovariance):
         scales = self.scale[order]
         index = jnp.arange(self.n_target)
         changes = cells[1:] != cells[:-1]
-        first = jnp.concatenate([jnp.ones(1, dtype=bool), changes])
-        last = jnp.concatenate([changes, jnp.ones(1, dtype=bool)])
+        true = jnp.ones(1, dtype=bool)
+        first = einx.id("1, target -> (1 + target)", true, changes)
+        last = einx.id("target, 1 -> (target + 1)", changes, true)
         zero = jnp.zeros(1, offsets.dtype)
-        previous = jnp.where(first, 0.0, jnp.concatenate([zero, offsets[:-1]]))
+        # tₖ₋₁, from 0 at the first target of a cell
+        shifted = einx.id("1, target -> (1 + target)", zero, offsets[:-1])
+        previous = jnp.where(first, 0.0, shifted)
         # the index of the first and of the last target of each target's cell
-        start = jax.lax.cummax(jnp.where(first, index, 0))
-        stop = jax.lax.cummin(jnp.where(last, index, self.n_target - 1), reverse=True)
-        # √(tₖ − tₖ₋₁) and √(1 − t_last)
-        step_scale = _safe_sqrt(offsets - previous)
-        end_scale = _safe_sqrt(1.0 - offsets[stop])
+        first_index = jnp.where(first, index, 0)
+        start = jax.lax.cummax(first_index)
+        last_index = jnp.where(last, index, self.n_target - 1)
+        stop = jax.lax.cummin(last_index, reverse=True)
+        # tₖ − tₖ₋₁
+        increments = offsets - previous
+        # √(tₖ − tₖ₋₁)
+        step_scale = _safe_sqrt(increments)
+        # 1 − t_last
+        remainder = 1.0 - offsets[stop]
+        # √(1 − t_last)
+        end_scale = _safe_sqrt(remainder)
         # √(σ² Δᵢ)
         bridge_scale = _safe_sqrt(scales)
 
-        def draw(walk: jax.Array, end: jax.Array) -> jax.Array:
+        def draw(
+            walk: Float[Array, " target"], end: Float[Array, " target"]
+        ) -> Float[Array, " target"]:
             # W(tₖ) − W(tₖ₋₁) = √(tₖ − tₖ₋₁) zₖ
             steps = step_scale * walk
             total = jnp.cumsum(steps)
@@ -288,9 +358,12 @@ class BrownianBridge(PosteriorCovariance):
             brownian = total - before[start]
             # W(1) = W(t_last) + √(1 − t_last) ζ
             brownian_end = brownian[stop] + end_scale * end[stop]
+            # W(t) − t W(1)
+            pinned = brownian - offsets * brownian_end
             # ε = √(σ² Δᵢ) (W(t) − t W(1)), back in the targets' order
-            bridge = bridge_scale * (brownian - offsets * brownian_end)
-            return jnp.zeros_like(bridge).at[order].set(bridge)
+            bridge = bridge_scale * pinned
+            unsorted = jnp.zeros_like(bridge)
+            return unsorted.at[order].set(bridge)
 
         draw_batched = jnp.vectorize(draw, signature="(target),(target)->(target)")
         return draw_batched(walk_noise, end_noise)
@@ -382,11 +455,14 @@ class KernelCovariance(PosteriorCovariance):
     def _prior_variance(self) -> Float[Array, " target"]:
         """k(x*ₖ, x*ₖ) at each target."""
 
-        def at(target: jax.Array) -> jax.Array:
+        def at(target: Float[Array, " dim"]) -> Float[Array, ""]:
             point = einx.id("dim -> 1 dim", target)
-            return kernel_matrix(self.kernel, point, point)[0, 0]
+            # k(x*ₖ, x*ₖ)
+            gram = kernel_matrix(self.kernel, point, point)
+            return gram[0, 0]
 
-        return jax.vmap(at)(self.targets)
+        at_every_target = jax.vmap(at)
+        return at_every_target(self.targets)
 
     def variance(self) -> Float[Array, " target"]:
         """σ²(x*) = k** − hᵀ A⁻¹ h, clipped at 0 after the rounding check.
@@ -399,16 +475,20 @@ class KernelCovariance(PosteriorCovariance):
                 target (checked when run under ``jit``): the kernel is not
                 positive definite on the sources, or needs a nugget.
         """
+        # k**
         prior = self._prior_variance()
+        # W = A⁻¹ Hᵀ
+        weights = self._weights()
         # hᵀ A⁻¹ h, row by row
         explained = einx.dot(
-            "target coefficient, target coefficient -> target",
-            self.read,
-            self._weights(),
+            "target coefficient, target coefficient -> target", self.read, weights
         )
+        # σ² = k** − hᵀ A⁻¹ h
         variance = prior - explained
+        # tol |k**|
         tolerance = NEGATIVE_VARIANCE_RTOL * jnp.abs(prior)
-        too_negative = jnp.any(variance < -tolerance)
+        below = variance < -tolerance
+        too_negative = jnp.any(below)
         variance = check_values(
             variance,
             too_negative,
@@ -416,7 +496,9 @@ class KernelCovariance(PosteriorCovariance):
             f"{NEGATIVE_VARIANCE_RTOL:g} · k(x*, x*); is the kernel positive "
             "definite on the sources, or does it need a nugget",
         )
-        return jnp.maximum(variance, jnp.zeros((), variance.dtype))
+        zero = jnp.zeros((), variance.dtype)
+        # max(σ², 0)
+        return jnp.maximum(variance, zero)
 
     def covariance(self) -> Float[Array, "target target"]:
         """Σ* = K** − H A⁻¹ Hᵀ, dense (M, M) and symmetric.
@@ -424,14 +506,18 @@ class KernelCovariance(PosteriorCovariance):
         Returns:
             Σ*.
         """
+        # K**
         prior = kernel_matrix(self.kernel, self.targets, self.targets)
+        # W = A⁻¹ Hᵀ
+        weights = self._weights()
+        # H A⁻¹ Hᵀ
         explained = einx.dot(
-            "row coefficient, col coefficient -> row col",
-            self.read,
-            self._weights(),
+            "row coefficient, col coefficient -> row col", self.read, weights
         )
+        # Σ* = K** − H A⁻¹ Hᵀ
         covariance = prior - explained
         transposed = einx.id("row col -> col row", covariance)
+        # ½ (Σ* + Σ*ᵀ)
         return (covariance + transposed) / 2
 
     def sample(
@@ -447,11 +533,17 @@ class KernelCovariance(PosteriorCovariance):
             ε, of shape (*batch_shape, M), in the dtype of ``read``.
         """
         covariance = self.covariance()
+        # Σ* = V Λ Vᵀ
         eigenvalues, eigenvectors = jnp.linalg.eigh(covariance)
-        # √Λ₊: the negative eigenvalues are rounding on a singular Σ*
-        root = _safe_sqrt(jnp.maximum(eigenvalues, jnp.zeros((), eigenvalues.dtype)))
+        zero = jnp.zeros((), eigenvalues.dtype)
+        # Λ₊: the negative eigenvalues are rounding on a singular Σ*
+        clipped = jnp.maximum(eigenvalues, zero)
+        # √Λ₊
+        root = _safe_sqrt(clipped)
         shape = (*batch_shape, self.n_target)
+        # z ~ 𝒩(0, I)
         noise = jax.random.normal(key, shape, covariance.dtype)
+        # √Λ₊ z
         scaled = einx.multiply("... mode, mode -> ... mode", noise, root)
         # ε = V √Λ₊ z
         return einx.dot("... mode, target mode -> ... target", scaled, eigenvectors)

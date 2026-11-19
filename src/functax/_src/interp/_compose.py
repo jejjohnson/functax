@@ -87,10 +87,13 @@ def compose(outer: Stencil, inner: Stencil, *, merge: bool = False) -> Stencil:
             f"{inner.n_target} rows"
         )
         raise ValidationError(msg)
+    # --- gather ---
     # iⁱ_{iᵒₖₛ, r}: the indices of the inner rows each outer tap reads
     gathered_indices = inner.indices[outer.indices]
     # wⁱ_{iᵒₖₛ, r}
     gathered_weights = inner.weights[outer.indices]
+
+    # --- multiply ---
     indices = einx.id("target tap inner -> target (tap inner)", gathered_indices)
     # wᵒₖₛ wⁱ_{iᵒₖₛ, r}
     weights = einx.multiply(
@@ -98,10 +101,13 @@ def compose(outer: Stencil, inner: Stencil, *, merge: bool = False) -> Stencil:
         outer.weights,
         gathered_weights,
     )
+    # --- mask ---
     # a row is valid when it is and every inner row it reads is
-    reads_valid = einx.all("target [tap]", inner.valid[outer.indices])
+    gathered_valid = inner.valid[outer.indices]
+    reads_valid = einx.all("target [tap]", gathered_valid)
     valid = outer.valid & reads_valid
     zero = jnp.zeros((), weights.dtype)
+    # wₖₛ ← 0 on invalid rows
     weights = einx.where("target, target tap, -> target tap", valid, weights, zero)
     product = Stencil(indices, weights, n_source=inner.n_source, valid=valid)
     if merge:
@@ -123,6 +129,7 @@ def _merge_taps(stencil: Stencil) -> Stencil:
         # wₖⱼ = ∑ₛ [iₖₛ = j] wₖₛ
         np.add.at(sums, tap_to_column, row_weights)
         merged_rows.append((columns, sums))
+    # the fullest row sets the number of taps
     n_taps = max((columns.size for columns, _ in merged_rows), default=0)
     merged_indices = np.zeros((len(merged_rows), n_taps), dtype=indices.dtype)
     merged_weights = np.zeros((len(merged_rows), n_taps), dtype=weights.dtype)

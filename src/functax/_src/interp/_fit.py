@@ -33,7 +33,26 @@ __all__ = [
 
 
 class Fit(eqx.Module):
-    """c = 𝒮(y), applied once per field before the read-out."""
+    """c = 𝒮(y), applied once per field before the read-out.
+
+    A fit implements `apply` and its adjoint `apply_adjoint`; `data_size`
+    maps the number of coefficients back to the number of samples.
+
+    Examples:
+        A fit that doubles the samples, and its adjoint:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.interp import Fit
+        >>> class Double(Fit):
+        ...     def apply(self, data):
+        ...         return 2.0 * data
+        ...
+        ...     def apply_adjoint(self, coefficients):
+        ...         return 2.0 * coefficients
+        >>> fit = Double()
+        >>> fit.apply(jnp.array([1.0, 2.0])).tolist(), fit.data_size(2)
+        ([2.0, 4.0], 2)
+    """
 
     @abc.abstractmethod
     def apply(
@@ -63,6 +82,11 @@ class Identity(Fit):
         >>> from functax.interp import Identity
         >>> Identity().apply(jnp.array([1.0, 2.0])).tolist()
         [1.0, 2.0]
+
+        It is its own adjoint, over any batch dims:
+
+        >>> Identity().apply_adjoint(jnp.ones((2, 3))).shape
+        (2, 3)
     """
 
     def apply(
@@ -192,13 +216,15 @@ class KernelSolve(Fit):
             # P = Q R, complete: Q₂ = Q[:, P:] spans the null space of Pᵀ
             basis, triangular = jnp.linalg.qr(terms, mode="complete")
             null_basis = basis[:, n_terms:]
-            # M = Q₂ᵀ K̃ Q₂
+            # Q₂ᵀ K̃
             projected = einx.dot("row free, row col -> free col", null_basis, gram)
+            # M = Q₂ᵀ K̃ Q₂
             product = einx.dot(
                 "free col, col other -> free other", projected, null_basis
             )
             # symmetric to the last bit, so 𝒮ᵀ is the same solve as 𝒮
             transposed = einx.id("free other -> other free", product)
+            # M = (M + Mᵀ)/2
             inner_matrix = (product + transposed) / 2
             self.gram = gram
             self.basis = basis
@@ -230,7 +256,9 @@ class KernelSolve(Fit):
         operator = lx.MatrixLinearOperator(triangular, lx.upper_triangular_tag)
         if transpose:
             operator = operator.transpose()
-        return lx.linear_solve(operator, vector, lx.Triangular()).value
+        # R⁻¹ v or R⁻ᵀ v, by back or forward substitution
+        solution = lx.linear_solve(operator, vector, lx.Triangular())
+        return solution.value
 
     def _solve_one(
         self, rhs: Float[Array, " coefficient"]
@@ -244,24 +272,41 @@ class KernelSolve(Fit):
         constraints = rhs[-n_terms:]
         range_basis = basis[:, :n_terms]
         null_basis = basis[:, n_terms:]
-        # c₀ = Q₁ R⁻ᵀ h
+        # --- particular solution ---
+        # R⁻ᵀ h
         lifted = self._triangular_solve(triangular, constraints, transpose=True)
+        # c₀ = Q₁ R⁻ᵀ h
         particular = einx.dot("source term, term -> source", range_basis, lifted)
-        # α = M⁻¹ Q₂ᵀ (g − K̃ c₀)
+
+        # --- null-space solve ---
+        # K̃ c₀
         fitted = einx.dot("row col, col -> row", gram, particular)
-        projected = einx.dot("source free, source -> free", null_basis, values - fitted)
-        alpha = self._inner_solve(projected)
-        # c = c₀ + Q₂ α
-        weights = particular + einx.dot(
-            "source free, free -> source", null_basis, alpha
+        # g − K̃ c₀
+        misfit = values - fitted
+        # Q₂ᵀ (g − K̃ c₀)
+        projected = einx.dot("source free, source -> free", null_basis, misfit)
+        # α = M⁻¹ Q₂ᵀ (g − K̃ c₀)
+        null_coefficients = self._inner_solve(projected)
+        # Q₂ α
+        null_part = einx.dot(
+            "source free, free -> source", null_basis, null_coefficients
         )
-        # b = R⁻¹ Q₁ᵀ (g − K̃ c)
-        residual = values - einx.dot("row col, col -> row", gram, weights)
+        # c = c₀ + Q₂ α
+        weights = particular + null_part
+
+        # --- tail ---
+        # K̃ c
+        kernel_part = einx.dot("row col, col -> row", gram, weights)
+        # g − K̃ c
+        residual = values - kernel_part
+        # Q₁ᵀ (g − K̃ c)
         projected_residual = einx.dot(
             "source term, source -> term", range_basis, residual
         )
+        # b = R⁻¹ Q₁ᵀ (g − K̃ c)
         tail = self._triangular_solve(triangular, projected_residual, transpose=False)
-        return einx.id("a, b -> (a + b)", weights, tail)
+        # [c; b]
+        return einx.id("source, term -> (source + term)", weights, tail)
 
     def solve(
         self, rhs: Float[Array, "*batch coefficient"]
@@ -276,6 +321,20 @@ class KernelSolve(Fit):
 
         Raises:
             ValidationError: If the last axis of ``rhs`` is not N + P.
+
+        Examples:
+            A batch of right-hand sides, each solved on its own:
+
+            >>> import jax.numpy as jnp
+            >>> from functax.interp import KernelSolve
+            >>> gram = jnp.array([[2.0, 1.0], [1.0, 2.0]])
+            >>> fit = KernelSolve(gram)
+            >>> rhs = jnp.array([[3.0, 3.0], [1.0, -1.0]])
+            >>> solution = fit.solve(rhs)
+            >>> solution.shape
+            (2, 2)
+            >>> bool(jnp.allclose(solution @ gram, rhs))
+            True
         """
         rhs = jnp.asarray(rhs)
         n_coefficients = self.n_source + self.n_terms
@@ -285,6 +344,7 @@ class KernelSolve(Fit):
                 f"got shape {rhs.shape}"
             )
             raise ValidationError(msg)
+        # einx has no form for a solve over batch dims
         solve = jnp.vectorize(self._solve_one, signature="(n)->(n)")
         return solve(rhs)
 
@@ -296,16 +356,20 @@ class KernelSolve(Fit):
         if self.n_terms == 0:
             return self.solve(data)
         zeros = jnp.zeros((*data.shape[:-1], self.n_terms), data.dtype)
-        rhs = einx.id("... a, ... b -> ... (a + b)", data, zeros)
+        # [y; 0]
+        rhs = einx.id("... source, ... term -> ... (source + term)", data, zeros)
+        # [c; b] = A⁻¹ [y; 0]
         return self.solve(rhs)
 
     def apply_adjoint(
         self, coefficients: Float[Array, "*batch coefficient"]
     ) -> Float[Array, "*batch source"]:
         """𝒮ᵀ g = Eᵀ A⁻¹ g, the data block of the same symmetric solve."""
+        # A⁻¹ g
         solution = self.solve(coefficients)
         if self.n_terms == 0:
             return solution
+        # Eᵀ A⁻¹ g
         return solution[..., : -self.n_terms]
 
     def data_size(self, n_coefficients: int) -> int:

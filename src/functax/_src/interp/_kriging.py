@@ -18,7 +18,6 @@ from collections.abc import Callable
 from typing import Any
 
 import equinox as eqx
-import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
@@ -46,11 +45,15 @@ type Drift = str | int | Callable[[Float[Array, "obs dim"]], Float[Array, "obs t
 """``"constant"``, a polynomial degree, or a callable F(x) giving the (n, P) drift."""
 
 
-def _checked_drift(drift: Callable[[jax.Array], jax.Array]) -> Tail:
+def _checked_drift(
+    drift: Callable[[Float[Array, "obs dim"]], Float[Array, "obs term"]],
+) -> Tail:
     """F, raising unless it returns one row of drift terms per point."""
 
-    def terms(points: jax.Array) -> jax.Array:
-        values = jnp.asarray(drift(points))
+    def terms(points: Float[Array, "obs dim"]) -> Float[Array, "obs term"]:
+        # F(x)
+        drift_terms = drift(points)
+        values = jnp.asarray(drift_terms)
         if values.ndim != 2 or values.shape[0] != points.shape[0]:
             msg = (
                 f"'drift' must return ({points.shape[0]}, term) drift terms, "
@@ -145,7 +148,7 @@ class Kriging(Scheme):
             raise ValidationError(msg)
         _check_smoothing(self.nugget, "nugget")
 
-    def _tail_for(self, sources: jax.Array) -> Tail | None:
+    def _tail_for(self, sources: Float[Array, "source dim"]) -> Tail | None:
         """The drift F as a function of the points, or ``None`` for simple kriging."""
         drift = self.drift
         if drift is None:

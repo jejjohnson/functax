@@ -57,9 +57,42 @@ type Slopes = Callable[[jax.Array, jax.Array], jax.Array]
 def ascending_axis(axis: Axis) -> tuple[Axis, bool]:
     """The axis with increasing knots, and whether it had to be reversed.
 
+    Args:
+        axis: The source axis, increasing or decreasing, not periodic.
+
+    Returns:
+        ``(ascending, reversed)``: the axis with its knots increasing, and
+        whether they were reversed to get there.
+
     Raises:
         ValidationError: If the axis is periodic (the 1-D series schemes take
             the periodic condition from the spline, not from the axis).
+
+    Examples:
+        A decreasing axis is reversed:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis
+        >>> from functax._src.interp._hermite import ascending_axis
+        >>> ascending, flipped = ascending_axis(Axis(jnp.array([2.0, 1.0, 0.0])))
+        >>> ascending.values.tolist(), flipped
+        ([0.0, 1.0, 2.0], True)
+
+        An increasing one comes back as it is:
+
+        >>> axis = Axis(jnp.arange(3.0))
+        >>> same, flipped = ascending_axis(axis)
+        >>> same is axis, flipped
+        (True, False)
+
+        A periodic axis is rejected:
+
+        >>> ascending_axis(
+        ...     Axis(jnp.arange(3.0), period=3.0)
+        ... )  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        functax.exceptions.ValidationError: the 1-D series schemes need a ...
     """
     if axis.period is not None:
         msg = "the 1-D series schemes need a non-periodic Axis; use bc='periodic'"
@@ -77,12 +110,49 @@ def ascending_axis(axis: Axis) -> tuple[Axis, bool]:
 class HermiteFit(Fit):
     """[y; m] from y: the values in increasing-knot order and their slopes.
 
+    c = [y; 𝒮_m(y)], with m = 𝒮_m(y) the scheme's slopes at the knots.
+
     Args:
-        nodes: The increasing knots x (N,).
+        nodes: x, the N increasing knots.
         slopes: m = slopes(x, y) for one vector y; batch dims are vectorised.
         reversed: Whether the source axis decreases, so y is reversed first.
         linear: Whether the slopes are linear in y (the cubic spline), which
             makes `apply_adjoint` the linear transpose.
+
+    Raises:
+        NonlinearSchemeError: From `apply_adjoint`, when the slopes are
+            nonlinear in y.
+
+    Examples:
+        Values and their PCHIP slopes, 2N coefficients:
+
+        >>> import jax.numpy as jnp
+        >>> from functax._src.interp._monotone import pchip_slopes
+        >>> from functax.interp import HermiteFit
+        >>> fit = HermiteFit(jnp.arange(4.0), pchip_slopes, linear=False)
+        >>> coefficients = fit.apply(2.0 * jnp.arange(4.0))
+        >>> coefficients.shape
+        (8,)
+        >>> bool(jnp.allclose(coefficients[4:], 2.0))
+        True
+
+        A linear (cubic spline) fit has the adjoint of the dot-product test:
+
+        >>> from functax._src.interp._spline1d import SPLINE_SLOPES
+        >>> spline = HermiteFit(jnp.arange(4.0), SPLINE_SLOPES["natural"])
+        >>> data = jnp.array([1.0, -2.0, 0.5, 3.0])
+        >>> residual = jnp.arange(8.0)
+        >>> forward = jnp.dot(spline.apply(data), residual)
+        >>> backward = jnp.dot(data, spline.apply_adjoint(residual))
+        >>> bool(jnp.allclose(forward, backward))
+        True
+
+        A nonlinear fit has no adjoint:
+
+        >>> fit.apply_adjoint(jnp.ones(8))  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        functax.exceptions.NonlinearSchemeError: a nonlinear slope fit has ...
     """
 
     nodes: Float[Array, " node"]
@@ -94,13 +164,19 @@ class HermiteFit(Fit):
         """c = [y; m] with the values in increasing-knot order."""
         values = data[..., ::-1] if self.reversed else data
         vectorised = jnp.vectorize(self.slopes, signature="(n),(n)->(n)")
+        # m = 𝒮_m(y)
         slopes = vectorised(self.nodes, values)
-        return einx.id("... n, ... n -> ... (n + n)", values, slopes)
+        # c = [y; m]
+        return einx.id("... node, ... node -> ... (node + node)", values, slopes)
 
     def apply_adjoint(
         self, coefficients: Float[Array, "*batch source"]
     ) -> Float[Array, "*batch node"]:
-        """𝒮ᵀ g, the linear transpose of the slope fit (linear fits only)."""
+        """𝒮ᵀ g, the linear transpose of the slope fit (linear fits only).
+
+        Raises:
+            NonlinearSchemeError: If the slopes are nonlinear in y.
+        """
         if not self.linear:
             msg = "a nonlinear slope fit has no adjoint; use plan.linearize(y)"
             raise NonlinearSchemeError(msg)
@@ -108,10 +184,13 @@ class HermiteFit(Fit):
         structure = jax.ShapeDtypeStruct(
             (*coefficients.shape[:-1], n_data), coefficients.dtype
         )
-        (transposed,) = jax.linear_transpose(self.apply, structure)(coefficients)
+        # 𝒮ᵀ g, by transposing the linear map y ↦ [y; m]
+        transpose = jax.linear_transpose(self.apply, structure)
+        (transposed,) = transpose(coefficients)
         return transposed
 
     def data_size(self, n_coefficients: int) -> int:
+        """N, half the 2N coefficients [y; m]."""
         return n_coefficients // 2
 
 
@@ -128,6 +207,29 @@ class HermiteGeometry(ReadGeometry):
         coordinates: x, the (M, 1) target coordinates, before any wrap.
         periodic: Whether the spline is periodic, so the targets wrap into
             one period P = x_{N−1} − x₀.
+
+    Examples:
+        The weights at a cell's midpoint, on [y; m]:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis
+        >>> from functax.interp import HermiteGeometry, Policies
+        >>> targets = jnp.array([[0.5], [1.25]])
+        >>> geometry = HermiteGeometry(Axis(jnp.arange(3.0)), targets)
+        >>> weights = geometry.weights(targets, Policies())
+        >>> weights.shape
+        (2, 4)
+        >>> bool(jnp.allclose(weights[0], jnp.array([0.5, 0.5, 0.125, -0.125])))
+        True
+
+        A periodic geometry wraps its targets into one period first:
+
+        >>> periodic = HermiteGeometry(
+        ...     Axis(jnp.arange(3.0)), targets, periodic=True
+        ... )
+        >>> shifted = periodic.weights(targets + 2.0, Policies())
+        >>> bool(jnp.allclose(shifted, weights))
+        True
     """
 
     axis: Axis
@@ -138,13 +240,16 @@ class HermiteGeometry(ReadGeometry):
         self, coordinates: Float[Array, "target 1"], policies: Policies
     ) -> Float[Array, "target tap"]:
         """The four Hermite weights of each target, on [y; m]."""
-        positions = coordinates[:, 0]
+        positions = einx.id("target 1 -> target", coordinates)
         if self.periodic:
-            # x ↦ x₀ + ((x − x₀) mod P), as the plan wraps its targets
             first = self.axis.values[0]
+            # P = x_{N−1} − x₀
             period = self.axis.values[-1] - first
-            positions = first + jnp.mod(positions - first, period)
-        return hermite_stencil(self.axis, positions, policies).weights
+            # x ↦ x₀ + ((x − x₀) mod P), as the plan wraps its targets
+            wrapped = jnp.mod(positions - first, period)
+            positions = first + wrapped
+        stencil = hermite_stencil(self.axis, positions, policies)
+        return stencil.weights
 
 
 def hermite_stencil(
@@ -153,6 +258,16 @@ def hermite_stencil(
     policies: Policies,
 ) -> Stencil:
     """The 4-tap stencil of the Hermite read-out on [y; m], at the targets.
+
+    f̂ = h₀₀(t) yᵢ + h₁₀(t) hᵢ mᵢ + h₀₁(t) yᵢ₊₁ + h₁₁(t) hᵢ mᵢ₊₁ on cell i,
+    at offset t.
+
+    Algorithm:
+        1. Locate each target: its index position, after the outside rule.
+        2. Split it into a cell i (a real cell, with both knots) and an
+           offset t.
+        3. Weight the two values by h₀₀, h₀₁ and the two slopes by h₁₀ hᵢ,
+           h₁₁ hᵢ, zeroing the rows that are not read.
 
     Args:
         axis: The increasing source axis.
@@ -166,7 +281,32 @@ def hermite_stencil(
     Returns:
         The `Stencil` on 2N coefficients: taps i, i + 1 (values) and N + i,
         N + i + 1 (slopes).
+
+    Raises:
+        OutsideDomainError: Under ``outside="raise"`` when a target is
+            outside.
+
+    Examples:
+        At a cell's midpoint the values weigh ½ each:
+
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis
+        >>> from functax.interp import Policies
+        >>> from functax._src.interp._hermite import hermite_stencil
+        >>> axis = Axis(jnp.arange(4.0))
+        >>> stencil = hermite_stencil(axis, jnp.array([1.5, 3.0]), Policies())
+        >>> stencil.indices.tolist()
+        [[1, 2, 5, 6], [2, 3, 6, 7]]
+        >>> bool(jnp.allclose(stencil.weights[0, :2], 0.5))
+        True
+
+        A target outside the knots reads nothing under the default rule:
+
+        >>> outside = hermite_stencil(axis, jnp.array([5.0]), Policies())
+        >>> outside.valid.tolist()
+        [False]
     """
+    # --- locate ---
     nodes = axis.values
     n_nodes = nodes.shape[0]
     lower, upper = domain_bounds(n_nodes, policies.extent)
@@ -177,31 +317,47 @@ def hermite_stencil(
     position = jnp.where(finite, position, 0.0)
     if policies.outside == "clamp":
         position = clamp_positions(position, lower, upper)
-    # a real cell, so both knots and both slopes exist
-    cell = jnp.clip(jnp.floor(position), 0, n_nodes - 2)
+
+    # --- cell and offset ---
+    # i = ⌊u⌋, a real cell, so both knots and both slopes exist
+    floor = jnp.floor(position)
+    cell = jnp.clip(floor, 0, n_nodes - 2)
+    # t = u − i
     offset = position - cell
     cell = cell.astype(jnp.int32)
+    next_cell = cell + 1
     # hᵢ = xᵢ₊₁ − xᵢ
-    width = nodes[cell + 1] - nodes[cell]
+    width = nodes[next_cell] - nodes[cell]
     if axis.repeats == "allow":
         # a cell of zero width is only reached past a repeated end: hold its knot
-        offset = jnp.where(width > 0, offset, jnp.clip(offset, 0.0, 1.0))
-    t2 = offset * offset
-    t3 = t2 * offset
-    # h₀₀, h₀₁ on the values; h₁₀ hᵢ, h₁₁ hᵢ on the slopes
-    h00 = 2.0 * t3 - 3.0 * t2 + 1.0
-    h01 = -2.0 * t3 + 3.0 * t2
-    h10 = (t3 - 2.0 * t2 + offset) * width
-    h11 = (t3 - t2) * width
+        held = jnp.clip(offset, 0.0, 1.0)
+        offset = jnp.where(width > 0, offset, held)
+
+    # --- weights ---
+    # t² and t³
+    offset_squared = offset * offset
+    offset_cubed = offset_squared * offset
+    # h₀₀ = 2t³ − 3t² + 1
+    left_value = 2.0 * offset_cubed - 3.0 * offset_squared + 1.0
+    # h₀₁ = −2t³ + 3t²
+    right_value = -2.0 * offset_cubed + 3.0 * offset_squared
+    # h₁₀ hᵢ = (t³ − 2t² + t) hᵢ
+    left_slope = (offset_cubed - 2.0 * offset_squared + offset) * width
+    # h₁₁ hᵢ = (t³ − t²) hᵢ
+    right_slope = (offset_cubed - offset_squared) * width
     indices = einx.id(
         "target, target, target, target -> target (1 + 1 + 1 + 1)",
         cell,
-        cell + 1,
+        next_cell,
         cell + n_nodes,
-        cell + 1 + n_nodes,
+        next_cell + n_nodes,
     )
     weights = einx.id(
-        "target, target, target, target -> target (1 + 1 + 1 + 1)", h00, h01, h10, h11
+        "target, target, target, target -> target (1 + 1 + 1 + 1)",
+        left_value,
+        right_value,
+        left_slope,
+        right_slope,
     )
     row_ok = finite if policies.outside in ("clamp", "extrapolate") else inside
     zero = jnp.zeros((), weights.dtype)
