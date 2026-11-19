@@ -2,7 +2,7 @@
 
 A field of cell means integrates as ∑ₖ |Cₖ| yₖ. The cells of an affine or a
 rectilinear grid are in the plane, or are lon/lat cells on a sphere of a given
-radius.
+radius. The weights keep the grid's shape, so they meet a field cell by cell.
 """
 
 from __future__ import annotations
@@ -42,14 +42,20 @@ def cell_area(
     """The cell-area rule of a grid: ∫ g dA ≈ ∑ₖ |Cₖ| g(xₖ) over its cells Cₖ.
 
     The nodes xₖ are the cell centres and the weights the cell areas |Cₖ|,
-    one per cell, in the order of the field's flattened (row-major) values:
+    one per cell, in the grid's shape:
 
-    - `AffineGrid` (a, b, c, d, e, f): every pixel has area |ae − bd|, and
-      the nodes are the pixel centres (x, y), rows outer.
-    - `RectilinearGrid` with D axes: cell k has the volume ∏_d |x_{d,k+½} −
-      x_{d,k−½}| from each axis's `Axis.cell_edges` (its ``edges``, or the
-      midpoints between nodes), and the nodes are the axis values, the
-      first axis outer. Two axes give areas, one lengths.
+    - `AffineGrid` (a, b, c, d, e, f) of shape (rows, cols): every pixel has
+      area |ae − bd|, the weights are (rows, cols) like the image, and the
+      nodes are the pixel centres (x, y), (rows, cols, 2).
+    - `RectilinearGrid` with D axes of N₀, …, N_{D−1} nodes: cell k has the
+      volume ∏_d |x_{d,k+½} − x_{d,k−½}| from each axis's `Axis.cell_edges`
+      (its ``edges``, or the midpoints between nodes), the weights are
+      (N₀, …, N_{D−1}), one axis per grid axis, and the nodes are the axis
+      values, (N₀, …, N_{D−1}, D). Two axes give areas, one lengths.
+
+    A field stored with its axes in another order (a (lat, lon) field
+    against a (λ, φ) grid) then fails integrix's shape check rather than
+    pairing each value with another cell's area.
 
     With ``sphere_radius`` R the coordinates are longitude λ and latitude φ
     in ``unit``, and a lon/lat cell has the area
@@ -66,7 +72,8 @@ def cell_area(
         1. The edges of each axis (from the transform, or `Axis.cell_edges`).
         2. The width of each cell along each axis (on the sphere, |Δλ| in
            radians and |Δ sin φ|).
-        3. The outer product of the widths, flattened; the cell centres.
+        3. The outer product of the widths, one axis per grid axis; the cell
+           centres with a trailing coordinate axis.
 
     Args:
         grid: The grid of cells.
@@ -76,9 +83,10 @@ def cell_area(
             with ``sphere_radius`` and ``None`` without it.
 
     Returns:
-        A `Rule` of nodes (cells, D) and weights (cells,): the grid's units
-        squared in the plane, R²'s units on the sphere. An `AffineGrid` gives
-        float64; a `RectilinearGrid` keeps the dtype of its axes.
+        A `Rule` of weights in the grid's shape and nodes in that shape with
+        a trailing axis of D coordinates: the grid's units squared in the
+        plane, R²'s units on the sphere. An `AffineGrid` gives float64; a
+        `RectilinearGrid` keeps the dtype of its axes.
 
     Raises:
         ValidationError: If ``unit`` is given without ``sphere_radius`` or is
@@ -96,8 +104,8 @@ def cell_area(
         >>> # 20 m pixels: every cell is 400 m²
         >>> grid = AffineGrid([20.0, 0.0, 0.0, 0.0, -20.0, 0.0], (3, 4))
         >>> rule = cell_area(grid)
-        >>> rule.nodes.shape, rule.weights[:2].tolist()
-        ((12, 2), [400.0, 400.0])
+        >>> rule.weights.shape, rule.nodes.shape, rule.weights[0, :2].tolist()
+        ((3, 4), (3, 4, 2), [400.0, 400.0])
         >>> # uneven cells: the areas sum to the domain's
         >>> axes = (
         ...     Axis(jnp.array([0.5, 2.0]), edges=jnp.array([0.0, 1.0, 3.0])),
@@ -107,7 +115,7 @@ def cell_area(
         ...     ),
         ... )
         >>> cell_area(RectilinearGrid(axes)).weights.tolist()
-        [2.0, 2.0, 1.0, 4.0, 4.0, 2.0]
+        [[2.0, 2.0, 1.0], [4.0, 4.0, 2.0]]
         >>> # a global 1° grid on the unit sphere sums to 4π
         >>> globe = AffineGrid([1.0, 0.0, -180.0, 0.0, -1.0, 90.0], (180, 360))
         >>> areas = cell_area(globe, sphere_radius=1.0, unit="degrees").weights
@@ -125,10 +133,12 @@ def cell_area(
             f"{type(grid).__name__}"
         )
         raise GeometryError(msg)
-    # |Cₖ| = ∏_d w_{d,k}, the first axis outer
+    # |Cₖ| = ∏_d w_{d,k}, one axis per grid axis
     weights = widths[0]
-    for width in widths[1:]:
-        weights = einx.multiply("outer, inner -> (outer inner)", weights, width)
+    for axis, width in enumerate(widths[1:], start=1):
+        outer = " ".join(f"axis{index}" for index in range(axis))
+        pattern = f"{outer}, axis{axis} -> {outer} axis{axis}"
+        weights = einx.multiply(pattern, weights, width)
     if sphere_radius is not None:
         # R²
         squared_radius = sphere_radius**2
@@ -158,8 +168,8 @@ def _check_sphere(sphere_radius: Any, unit: Any) -> None:
 
 def _affine_cells(
     grid: AffineGrid, *, unit: str | None
-) -> tuple[list[Float[Array, " _node"]], Float[Array, "cell dim"]]:
-    """The widths along rows, then columns, and the (cells, 2) pixel centres.
+) -> tuple[list[Float[Array, " _node"]], Float[Array, "row col dim"]]:
+    """The widths along rows, then columns, and the (rows, cols, 2) pixel centres.
 
     In the plane every pixel has area |ae − bd|, carried as one width per row
     and ones along the columns. On the sphere (north-up) the rows are the
@@ -169,9 +179,9 @@ def _affine_cells(
     host_transform = np.asarray(grid.transform)
     a, b, c, d, e, f = as_transform(host_transform).tolist()
     rows, cols = grid.shape
-    # (x, y) of every pixel centre, rows outer
+    # (x, y) of every pixel centre
     x, y = pixel_centres(grid)
-    nodes = einx.id("row col, row col -> (row col) (1 + 1)", x, y)
+    nodes = einx.id("row col, row col -> row col (1 + 1)", x, y)
     if unit is None:
         # |ae − bd|, the area of the parallelogram each pixel maps to
         pixel_area = abs(a * e - b * d)
@@ -196,18 +206,18 @@ def _affine_cells(
 
 def _rectilinear_cells(
     grid: RectilinearGrid, *, unit: str | None
-) -> tuple[list[Float[Array, " _node"]], Float[Array, "cell dim"]]:
-    """The widths along each axis and the (cells, D) node coordinates."""
+) -> tuple[list[Float[Array, " _node"]], Float[Array, "*grid dim"]]:
+    """The widths along each axis and the (N₀, …, N_{D−1}, D) node coordinates."""
     if unit is not None and len(grid.axes) != 2:
         msg = f"'grid' must have two axes (λ, φ) on the sphere, got {len(grid.axes)}"
         raise GeometryError(msg)
     edges = [axis.cell_edges() for axis in grid.axes]
-    # the node coordinates of every cell, the first axis outer
+    # the node coordinates of every cell, one axis per grid axis
     names = " ".join(f"axis{index}" for index in range(len(grid.axes)))
     axis_values = [axis.values for axis in grid.axes]
     meshes = jnp.meshgrid(*axis_values, indexing="ij")
     stacked = jnp.stack(meshes)
-    nodes = einx.id(f"dim {names} -> ({names}) dim", stacked)
+    nodes = einx.id(f"dim {names} -> {names} dim", stacked)
     if unit is not None:
         lon_widths, band_heights = _lonlat_widths(*edges, unit=unit)
         return [lon_widths, band_heights], nodes

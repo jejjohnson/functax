@@ -102,3 +102,8 @@ def test_curve_rule_rejects_misshapen_normals() -> None:
         CurveRule(jnp.zeros((3, 2)), jnp.ones(3), jnp.zeros((2, 2)))
     with pytest.raises(ValidationError, match="'normals' are defined for 2-D"):
         CurveRule(jnp.zeros((3, 3)), jnp.ones(3), jnp.zeros((3, 3)))
+
+
+def test_curve_rule_rejects_weights_that_are_not_a_vector() -> None:
+    with pytest.raises(ValidationError, match=r"'weights' must be \(K,\)"):
+        CurveRule(jnp.zeros((2, 3, 2)), jnp.ones((2, 3)))

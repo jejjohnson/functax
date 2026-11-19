@@ -114,3 +114,8 @@ def test_rejects_nodes_that_are_not_three_dimensional() -> None:
 def test_rejects_a_bad_degree(degree) -> None:
     with pytest.raises(ValidationError, match="'degree' must be an integer"):
         SphereRule(jnp.zeros((4, 3)), jnp.ones(4), radius=1.0, degree=degree)
+
+
+def test_rejects_weights_that_are_not_a_vector() -> None:
+    with pytest.raises(ValidationError, match=r"'weights' must be \(Q,\)"):
+        SphereRule(jnp.zeros((4, 3)), jnp.ones((4, 3)), radius=1.0, degree=0)

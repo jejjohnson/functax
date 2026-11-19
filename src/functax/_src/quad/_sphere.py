@@ -51,8 +51,8 @@ class SphereRule(Rule):
         degree: L, the exactness degree (0 when only constants are exact).
 
     Raises:
-        ValidationError: As `Rule`, or if ``nodes`` is not (Q, 3) or
-            ``degree`` is not an integer of at least 0.
+        ValidationError: As `Rule`, or if ``weights`` is not (Q,), ``nodes``
+            is not (Q, 3) or ``degree`` is not an integer of at least 0.
 
     Examples:
         >>> import math
@@ -79,6 +79,9 @@ class SphereRule(Rule):
     degree: int = eqx.field(static=True, kw_only=True)
 
     def __check_init__(self) -> None:
+        if self.weights.ndim != 1:
+            msg = f"'weights' must be (Q,), got shape {self.weights.shape}"
+            raise ValidationError(msg)
         if self.nodes.ndim != 2 or self.nodes.shape[1] != 3:
             msg = (
                 f"'nodes' must be (Q, 3) unit vectors on the sphere, "

@@ -488,7 +488,7 @@ current).
 | `CurveRule` | class | A rule on a curve L: ∫_L c dℓ ≈ ∑ₖ Δsₖ c(xₖ), with the unit normal nₖ. |
 | `polyline` | function | A rule along a polyline: n nodes per segment, arc-length weights and normals. |
 
-### One-dimensional quadrature rules as data: `Rule` and its four constructors. (`functax._src.quad._rules`)
+### Quadrature rules as data: `Rule` and its four one-dimensional constructors. (`functax._src.quad._rules`)
 
 | Name | Kind | What it does |
 |---|---|---|

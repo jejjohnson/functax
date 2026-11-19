@@ -190,21 +190,25 @@ where the weight $w_n$ is the area of cell $n$ on a sphere of radius 6,371 km. A
 ```python
 # today (functax)
 # wₙ = |Cₙ|, the area of cell n on a sphere of radius 6,371 km
-area = cell_area(                                      # (N_Ωx, 2), (N_Ωx,)  m²
+area = cell_area(                                      # (100, 100, 2), (100, 100)  m²
     grid, sphere_radius=6.371e6, unit="degrees"
+)
+# the weights in the state vector's (lon lat) order
+cell_weights = einx.id(                                # (100, 100) → (N_Ωx,)  m²
+    "lon lat -> (lon lat)", area.weights
 )
 # ∫ x̃ ds ≈ ∑ₙ wₙ x̃ₙ, for the truth and the map
 truth_enhancement = truth - background                 # → (N_Ωx,)  ppb
 map_enhancement = xch4_map - background                # → (N_Ωx,)  ppb
 truth_integral = einx.dot(                             # → ()  ppb m²
-    "cell, cell ->", area.weights, truth_enhancement
+    "cell, cell ->", cell_weights, truth_enhancement
 )
 map_integral = einx.dot(                               # → ()  ppb m²
-    "cell, cell ->", area.weights, map_enhancement
+    "cell, cell ->", cell_weights, map_enhancement
 )
 # the same sum over the cloud-free pixels only
 pixel_enhancement = observations - background          # → (N_Ωy,)  ppb
-pixel_area = area.weights[cloud_free]                  # → (N_Ωy,)  m²
+pixel_area = cell_weights[cloud_free]                  # → (N_Ωy,)  m²
 pixel_integral = einx.dot(                             # → ()  ppb m²
     "obs, obs ->", pixel_area, pixel_enhancement
 )
