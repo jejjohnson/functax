@@ -37,7 +37,7 @@ targets = Points(jnp.array([[0.25, 0.5], [0.75, 1.5], [0.4, 1.1]]))
 # build once, outside jit; apply to many fields
 plan = Linear().plan(grid, targets)
 frames = jnp.stack([field, 2.0 * field])  # (2, 231)
-values = jax.jit(plan)(frames)  # (2, 3)
+values = jax.jit(lambda fields: plan(fields))(frames)  # (2, 3)
 assert values.shape == (2, 3)
 
 # the adjoint is exact: ⟨H x, r⟩ = ⟨x, Hᵀ r⟩
@@ -71,6 +71,7 @@ assert len(key) == 64 and jnp.allclose(again(field), plan(field))
 
 ## Rules
 
+- A plan is an Equinox module with array leaves: close over it in the function you `jit`, or use `equinox.filter_jit`; `jax.jit(plan)` itself fails because the plan is not hashable.
 - Build the plan on the host, outside `jit`, `vmap` and `grad`. Locating the targets and checking the policies happen there once.
 - Call `plan.adjoint` for the transpose. It is written by hand and exact; do not take `jax.vjp` of the plan for it.
 - A field is one flat vector `(..., N)` in the source's row-major order, and the output is `(..., M)`. Reshape with `einx.id("t y x -> t (y x)", field)` or `.reshape`.
