@@ -223,3 +223,17 @@ class TestSerialize:
             deserialize(Plan, "not bytes", like=plan)
         with pytest.raises(ValidationError, match="'like' must be a Plan"):
             deserialize(Plan, plan.serialize(), like=plan.read)
+
+    def test_rejects_a_template_of_another_shape(self) -> None:
+        data = Linear().plan(GRID, self.targets).serialize()
+        other = Linear().plan(GRID, Points(jnp.zeros((2, 2))))
+        with pytest.raises(ValidationError, match="'data' does not match 'like'"):
+            Plan.deserialize(data, like=other)
+
+    def test_rejects_truncated_and_padded_data(self) -> None:
+        plan = Linear().plan(GRID, self.targets)
+        data = plan.serialize()
+        with pytest.raises(ValidationError, match="'data' does not match 'like'"):
+            Plan.deserialize(data[: len(data) // 2], like=plan)
+        with pytest.raises(ValidationError, match="holds more leaves than 'like'"):
+            Plan.deserialize(data + data, like=plan)

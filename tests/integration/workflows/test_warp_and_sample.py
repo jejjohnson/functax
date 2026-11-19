@@ -32,7 +32,7 @@ def _spectral_and_srf() -> tuple[Plan, Plan]:
 
 
 class TestWarpThenSample:
-    def test_a_warp_then_a_sample(self) -> None:
+    def test_a_composed_warp_and_sample_equal_applying_them_in_turn(self) -> None:
         source = RectilinearGrid((Axis(jnp.arange(6.0)), Axis(jnp.arange(7.0))))
         destination = RectilinearGrid(
             (Axis(jnp.linspace(0.2, 4.8, 4)), Axis(jnp.linspace(0.3, 5.7, 5)))
@@ -44,7 +44,7 @@ class TestWarpThenSample:
         observed = (sample @ warp)(field)
         assert_matches_oracle(observed, sample(warp(field)), rtol=1e-12, atol=1e-14)
 
-    def test_three_plans(self) -> None:
+    def test_three_composed_plans_equal_applying_them_in_turn(self) -> None:
         srf, spectral = _spectral_and_srf()
         binning = Linear().plan(
             Axis(jnp.arange(7.0)), Points(jnp.array([[1.5], [4.5]]))

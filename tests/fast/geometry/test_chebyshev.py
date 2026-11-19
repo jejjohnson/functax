@@ -53,7 +53,9 @@ def test_clenshaw_curtis_pairs_with_the_reversed_nodes() -> None:
     nodes = chebyshev_nodes(6, interval=(0.0, 2.0))
     rule = clenshaw_curtis(7, interval=(0.0, 2.0))
     assert_matches_oracle(rule.nodes, nodes[::-1], rtol=0.0, atol=1e-15)
-    assert abs(float(rule.weights @ nodes[::-1] ** 5) - 32.0 / 3.0) < 1e-13
+    assert_matches_oracle(
+        rule.weights @ nodes[::-1] ** 5, 32.0 / 3.0, rtol=0, atol=1e-13
+    )
 
 
 @pytest.mark.parametrize("n", [0, -1, 2.0, True])

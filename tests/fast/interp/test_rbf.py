@@ -1,6 +1,6 @@
-"""Tests for `RBF`, `KernelSolve` and `KernelReadout`. The fast tier: exact
-interpolation, kernels given as callables and lineax operators, policies,
-validation and configs.
+"""Tests for `RBF`, `KernelSolve` and `KernelReadout`. The fast tier: the
+policies and geometries a plan rejects, validation of the fields and inputs,
+and configs.
 """
 
 from __future__ import annotations
@@ -82,6 +82,12 @@ class TestValidationAndConfig:
         with pytest.raises(ValidationError, match="'terms'"):
             build(fit, jnp.eye(3), jnp.ones((2, 1)))
 
+    def test_kernel_solve_checks_the_right_hand_side(self) -> None:
+        fit = KernelSolve(jnp.eye(3), jnp.ones((3, 1)))
+        assert fit.data_size(4) == 3
+        with pytest.raises(ValidationError, match="'rhs'"):
+            inspect.unwrap(fit.solve)(fit, jnp.ones(3))
+
     def test_readout_checks_its_inputs(self) -> None:
         build = inspect.unwrap(KernelReadout.__init__)
         read = object.__new__(KernelReadout)
@@ -117,3 +123,11 @@ class TestValidationAndConfig:
 def test_rbf_rejects_bad_neighbors(neighbors) -> None:  # type: ignore[no-untyped-def]
     with pytest.raises(ValidationError, match="'neighbors' must be None or a positive"):
         RBF(Polyharmonic(2), neighbors=neighbors)
+
+
+def test_rbf_needs_more_neighbours_than_tail_terms() -> None:
+    sources, targets, _ = _scattered(seed=34)
+    with pytest.raises(ValidationError, match="needs more than 3 neighbours"):
+        RBF(Polyharmonic(2), neighbors=3).plan(
+            Points(jnp.asarray(sources)), Points(jnp.asarray(targets))
+        )

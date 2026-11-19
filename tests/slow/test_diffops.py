@@ -13,6 +13,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 import pytest
+from _harness import assert_matches_oracle
 
 from functax import diffops
 from functax.basis.sphere import real_spherical_harmonics
@@ -59,9 +60,9 @@ def test_divfree_and_curlfree_columns():
     # Analytically zero; float32 round-off on Jacobian entries of O(10) is ~1e-6.
     for j in range(4):
         u = col(divfree_basis, j)
-        assert abs(float(diffops.divergence(u)(xy))) < 1e-5
+        assert_matches_oracle(diffops.divergence(u)(xy), 0.0, rtol=0, atol=1e-5)
         w = col(curlfree_basis, j)
-        assert abs(float(diffops.curl2d(w)(xy))) < 1e-5
+        assert_matches_oracle(diffops.curl2d(w)(xy), 0.0, rtol=0, atol=1e-5)
 
 
 @pytest.mark.parametrize("l_max", [10])
@@ -82,9 +83,10 @@ def test_laplace_beltrami_spherical_harmonic_eigenvalues(l_max):
     lb = jax.jit(jax.vmap(jax.vmap(lb_j, (None, 0)), (0, None)))(eye, pts)  # (M, N)
     y = real_spherical_harmonics(pts, l_max).T  # (M, N)
     lam = -degrees * (degrees + 1)
-    # gate of #22: 1e-10 in float64 (geonnax allowed 1e-5·|λ| for float32)
-    atol = 1e-10 * jnp.maximum(1.0, -lam)[:, None]
-    assert bool(jnp.all(jnp.abs(lb - lam[:, None] * y) <= atol))
+    # gate of #22: 1e-10 · max(1, |λ|) in float64 (geonnax allowed 1e-5·|λ| for
+    # float32); dividing both sides by max(1, |λ|) makes that one absolute bound
+    scale = jnp.maximum(1.0, -lam)[:, None]
+    assert_matches_oracle(lb / scale, lam[:, None] * y / scale, rtol=0, atol=1e-10)
 
 
 def test_laplace_beltrami_general_extension_identity():

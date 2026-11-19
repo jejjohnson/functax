@@ -1,8 +1,12 @@
-"""Tests for the EOFs of `functax.basis.eigen`, copied from geonnax be5537d with
-functax imports. The slow tier: a second or more each (mostly compiling the SVD).
+"""Tests for `functax.basis.eigen`. The slow tier, a second or more each: geonnax's
+EOF tests, copied from be5537d with functax imports (mostly compiling the SVD), and
+the cotangent Laplacian on a tetrahedron, on the level-3 icosphere, against an
+independent assembly and on the flat square.
 """
 
 from __future__ import annotations
+
+import math
 
 import jax
 import jax.numpy as jnp
@@ -14,7 +18,7 @@ from functax.basis.eigen import (
     cotangent_laplacian_eigpairs,
     eof_basis,
 )
-from functax.geometry import icosphere
+from functax.geometry import icosphere, mesh_vertex_areas
 
 
 @pytest.fixture(scope="module")
@@ -33,6 +37,12 @@ def _square_mesh(n: int) -> tuple[np.ndarray, np.ndarray]:
     a, b = index[:-1, :-1].ravel(), index[1:, :-1].ravel()
     c, d = index[1:, 1:].ravel(), index[:-1, 1:].ravel()
     triangles = np.concatenate([np.stack([a, b, c], 1), np.stack([a, c, d], 1)])
+    return vertices, triangles
+
+
+def _tetrahedron() -> tuple[np.ndarray, np.ndarray]:
+    vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float)
+    triangles = np.array([[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]])
     return vertices, triangles
 
 
@@ -100,6 +110,32 @@ class TestIcosphereSpectrum:
         gaps = np.flatnonzero(np.diff(eigvals) > 0.1 * np.maximum(eigvals[1:], 1.0))
         sizes = np.diff(np.concatenate([[0], gaps + 1, [eigvals.size]]))
         assert sizes.tolist() == [1, 3, 5, 7]
+
+    def test_eigvecs_are_mass_orthonormal(
+        self, sphere3: tuple[np.ndarray, ...]
+    ) -> None:
+        eigvecs, areas = sphere3[3], sphere3[4]
+        gram = eigvecs.T @ (areas[:, None] * eigvecs)
+        assert_matches_oracle(gram, np.eye(16), rtol=0, atol=1e-10)
+
+    def test_the_constant_is_in_the_null_space(
+        self, sphere3: tuple[np.ndarray, ...]
+    ) -> None:
+        eigvecs, areas = sphere3[3], sphere3[4]
+        expected = np.full(len(areas), 1.0 / math.sqrt(areas.sum()))
+        assert_matches_oracle(np.abs(eigvecs[:, 0]), expected, rtol=1e-10)
+
+    def test_areas_are_the_vertex_areas(self, sphere3: tuple[np.ndarray, ...]) -> None:
+        vertices, triangles, *_, areas = sphere3
+        assert_matches_oracle(mesh_vertex_areas(vertices, triangles), areas, rtol=1e-14)
+
+
+def test_a_tetrahedron_runs() -> None:
+    vertices, triangles = _tetrahedron()
+    eigvals, eigvecs, _ = cotangent_laplacian_eigpairs(vertices, triangles, 4)
+    assert eigvals.shape == (4,)
+    assert eigvecs.shape == (4, 4)
+    assert abs(float(eigvals[0])) < 1e-10
 
 
 def test_solves_the_generalised_problem_of_an_independent_assembly() -> None:

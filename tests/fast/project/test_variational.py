@@ -1,5 +1,6 @@
-"""Tests for `Variational`: H = I with λ = 0 returns y, and validation. The solves
-against dense references, the adjoint and the gradients are in tests/slow.
+"""Tests for `Variational`. The fast tier: validation, the float32 path and the
+smoothing weight as a leaf, on small dense operators. The solves against dense
+references, the adjoint and the gradients are in tests/slow.
 """
 
 from __future__ import annotations
@@ -11,8 +12,6 @@ import numpy as np
 import pytest
 
 from functax import ValidationError
-from functax.geometry import Axis, Points
-from functax.interp import Linear, Plan
 from functax.project import Variational
 
 
@@ -24,23 +23,17 @@ def _first_differences(n_cell: int) -> jax.Array:
     return jnp.asarray(np.diff(np.eye(n_cell), axis=0))
 
 
-def _problem() -> tuple[Plan, jax.Array, jax.Array]:
-    """A linear plan from 12 grid nodes to 7 points, a diagonal R⁻¹ and y."""
-    grid = Axis(jnp.linspace(0.0, 1.0, 12))
-    rng = np.random.default_rng(0)
-    sites = Points(jnp.asarray(rng.uniform(0.0, 1.0, (7, 1))))
-    plan = Linear().plan(grid, sites)
-    precision = jnp.asarray(rng.uniform(0.5, 2.0, 7))
-    y = jnp.asarray(rng.normal(size=7))
-    return plan, precision, y
+def _observation() -> lx.MatrixLinearOperator:
+    """H, (7, 12): the checks read only its shape, so no plan is built."""
+    return lx.MatrixLinearOperator(jnp.ones((7, 12)))
 
 
-def _fit(plan: Plan, precision: jax.Array, weight: float = 0.7) -> Variational:
+def _fit(weight: float = 0.7) -> Variational:
     roughness = lx.MatrixLinearOperator(_first_differences(12))
     return Variational(
-        plan.operator(),
+        _observation(),
         roughness,
-        observation_precision=lx.DiagonalLinearOperator(precision),
+        observation_precision=lx.DiagonalLinearOperator(jnp.ones(7)),
         smoothing_weight=weight,
         solver=TIGHT,
     )
@@ -59,9 +52,8 @@ def _fit(plan: Plan, precision: jax.Array, weight: float = 0.7) -> Variational:
     ],
 )
 def test_variational_validates(kwargs, match) -> None:
-    plan, _, _ = _problem()
     arguments = {
-        "observation": plan.operator(),
+        "observation": _observation(),
         "roughness": lx.MatrixLinearOperator(_first_differences(12)),
     }
     with pytest.raises(ValidationError, match=match):
@@ -69,11 +61,10 @@ def test_variational_validates(kwargs, match) -> None:
 
 
 def test_apply_checks_the_data_length() -> None:
-    plan, precision, _ = _problem()
     with pytest.raises(ValidationError, match="'data'"):
-        _fit(plan, precision).apply(jnp.ones(5))
+        _fit().apply(jnp.ones(5))
     with pytest.raises(ValidationError, match="'coefficients'"):
-        _fit(plan, precision).apply_adjoint(jnp.ones(5))
+        _fit().apply_adjoint(jnp.ones(5))
 
 
 def test_float32_is_kept() -> None:
@@ -81,3 +72,7 @@ def test_float32_is_kept() -> None:
     identity = lx.IdentityLinearOperator(structure)
     fit = Variational(identity, identity, smoothing_weight=0.5)
     assert fit(jnp.ones(4, dtype=jnp.float32)).dtype == jnp.float32
+
+
+def test_the_smoothing_weight_is_a_leaf() -> None:
+    assert isinstance(_fit().smoothing_weight, jax.Array)

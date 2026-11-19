@@ -70,7 +70,7 @@ def test_batches_and_dtypes(kind: str) -> None:
     assert a.shape == u.shape
     rows = jnp.stack([transform.to_spectral(u[0, i]) for i in range(3)])
     assert jnp.allclose(a[0], rows, atol=1e-14)
-    assert jnp.allclose(transform(a, inverse=True), u)
+    assert jnp.allclose(transform(a, inverse=True), u, rtol=0.0, atol=1e-14)
     assert transform(u.astype(jnp.float32)).dtype == jnp.float32
     # integers become float32
     assert transform(jnp.arange(transform.n_nodes)).dtype == jnp.float32

@@ -13,6 +13,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 import pytest
+from _harness import assert_traces
 
 from functax._src.transform._nufft import _corner_slices
 from functax.transform import nonuniform_irfft, nonuniform_rfft
@@ -178,19 +179,15 @@ def test_nonuniform_jit_vmap_grad():
     w = einx.multiply("n, b -> b n", w, jnp.ones((b,)))
     query = jr.uniform(k3, (b, 30, 2))
 
-    @jax.jit
     def roundtrip(u, xi, w, q):
         return nonuniform_irfft(nonuniform_rfft(u, xi, w, n_modes), q, n_modes)
 
-    out = jax.vmap(roundtrip)(u, xi, w, query)
-    assert out.shape == (b, 2, 30)
-    eager = nonuniform_irfft(
-        nonuniform_rfft(u[0], xi[0], w[0], n_modes), query[0], n_modes
-    )
-    np.testing.assert_allclose(out[0], eager, atol=1e-5)
+    assert jax.vmap(roundtrip)(u, xi, w, query).shape == (b, 2, 30)
+    # jit, vmap and jit(vmap) against an eager loop over the four clouds
+    assert_traces(roundtrip, u, xi, w, query, rtol=1e-12)
 
     def loss(xi_, q_):
-        return jnp.sum(roundtrip(u[0], xi_, w[0], q_) ** 2)
+        return jnp.sum(jax.jit(roundtrip)(u[0], xi_, w[0], q_) ** 2)
 
     g_xi, g_q = jax.grad(loss, argnums=(0, 1))(xi[0], query[0])
     assert bool(jnp.all(jnp.isfinite(g_xi))) and bool(jnp.all(jnp.isfinite(g_q)))

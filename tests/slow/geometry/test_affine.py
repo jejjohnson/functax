@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 from _harness import assert_grad_matches_fd, assert_traces
 
-from functax.geometry import from_pixel, to_pixel
+from functax.geometry import from_pixel, slice_transform, to_pixel
 
 
 NORTH_UP = np.array([20.0, 0.0, 600000.0, 0.0, -20.0, 3550000.0])
@@ -51,6 +51,15 @@ class TestTraces:
             np.random.default_rng(9).uniform(0.0, 100.0, size=(4, 5, 2))
         )
         assert_traces(from_pixel, transforms, rowcol)
+
+    def test_slice_transform_traces_with_traced_offsets(self) -> None:
+        transforms = jnp.asarray(_random_transforms(3, seed=25))
+        offsets = jnp.array([[0.0, 1.0], [4.0, 2.0], [9.0, 5.0]])
+
+        def chip(transform: jax.Array, offset: jax.Array) -> jax.Array:
+            return slice_transform(transform, offset[0], offset[1], col_step=2)
+
+        assert_traces(chip, transforms, offsets)
 
     def test_grad_matches_the_inverse_matrix(self) -> None:
         transform = jnp.asarray(NORTH_UP)

@@ -5,6 +5,7 @@ concentrations, eigenproblems and frames, each a second or more.
 
 from __future__ import annotations
 
+import inspect
 import math
 
 import jax
@@ -12,6 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from functax import ValidationError
 from functax.basis.slepian import (
     slepian_cap_basis,
     slepian_polar_gap_basis,
@@ -154,23 +156,18 @@ def test_rotation_uses_the_frame_of_rotation_to_pole():
     )
 
 
-def test_cap_validation():
-    from functax import ValidationError
-
-    with pytest.raises(ValidationError, match="'cap_radius' must lie in"):
-        slepian_cap_basis(3, 4.0)
-    with pytest.raises(ValidationError, match="'n_modes' must be at least 1"):
-        slepian_cap_basis(3, 0.5, n_modes=0)
+def test_cap_basis_rejects_a_threshold_that_keeps_too_few_modes():
+    # the check needs the concentrations, so it runs after the eigenproblem;
+    # degree 0 is the smallest one (the other argument checks are fast tests)
     with pytest.raises(ValidationError, match="keeps only"):
-        slepian_cap_basis(3, 0.2, n_modes=10, eig_threshold=0.9)
-    import inspect
+        slepian_cap_basis(0, 0.2, n_modes=1, eig_threshold=0.9)
 
-    from functax.basis.slepian import SlepianCapBasis
 
-    # unwrapped: the type hook would reject the shape first
-    rotate_to = inspect.unwrap(SlepianCapBasis.rotate_to)
+def test_cap_basis_rejects_a_lonlat_centre_of_the_wrong_shape():
+    # the centre is checked after the eigenproblem too; degree 0 again, and
+    # unwrapped, as the type hook would reject the shape first
     with pytest.raises(ValidationError, match="'lonlat_centre' must have shape"):
-        rotate_to(slepian_cap_basis(3, 0.5), jnp.zeros(3))
+        inspect.unwrap(slepian_cap_basis)(0, 0.5, lonlat_centre=jnp.zeros(3))
 
 
 @pytest.mark.parametrize(
@@ -205,31 +202,14 @@ def test_polygon_mask_on_rectangles(lon_range, lat_range):
     np.testing.assert_array_equal(mask[~near_edge], expected[~near_edge])
 
 
-def test_remaining_validation() -> None:
-    import inspect
-
-    from functax import ValidationError
-    from functax.basis.slepian import (
-        SlepianCapBasis,
-        slepian_cap_basis,
-        slepian_concentration_matrix,
-        slepian_polar_gap_basis,
-    )
-
-    with pytest.raises(ValidationError, match="'num_quadrature' must be at least 1"):
-        slepian_concentration_matrix(2, 0.5, num_quadrature=-1)
-    with pytest.raises(ValidationError, match="'lonlat_centre' must have shape"):
-        inspect.unwrap(slepian_cap_basis)(2, 0.5, lonlat_centre=jnp.zeros(3))
-    basis = slepian_cap_basis(2, 0.5)
-    with pytest.raises(ValidationError, match=r"'unit_xyz' must have shape \(N, 3\)"):
-        inspect.unwrap(SlepianCapBasis.centred_coordinates)(basis, jnp.zeros((2, 2)))
+def test_polar_gap_basis_rejects_zero_modes() -> None:
+    # the check runs after the concentration matrix is built; degree 0 is the
+    # smallest one (the other argument checks are fast tests)
     with pytest.raises(ValidationError, match="'n_modes' must be at least 1"):
-        slepian_polar_gap_basis(3, 0.3, n_modes=0)
+        slepian_polar_gap_basis(0, 0.3, n_modes=0)
 
 
 def test_integer_polygon_vertices_are_accepted() -> None:
-    import inspect
-
     square = jnp.array([[-10, -10], [10, -10], [10, 10], [-10, 10]])
     points = jnp.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]])
     mask = inspect.unwrap(spherical_polygon_mask)(points, square, unit="degrees")

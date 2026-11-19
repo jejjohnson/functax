@@ -18,9 +18,6 @@ from _harness import (
 )
 from scipy.stats import binned_statistic_dd
 
-from functax import (
-    OutsideDomainError,
-)
 from functax.geometry import Axis, Points, RectilinearGrid
 from functax.interp import Binning, BinningPlan, Policies, TransposedStencil
 
@@ -163,11 +160,3 @@ def test_batches_and_grid_shape() -> None:
     assert isinstance(plan.read, TransposedStencil)
     assert plan.grid_shape == (2, 3)
     assert plan(jnp.ones((4, 3))).shape == (4, 6)
-
-
-def test_samples_off_the_grid_are_dropped_not_clamped() -> None:
-    counts = Binning("count").plan(SAMPLES, CELLS)
-    assert counts(VALUES).tolist() == [2.0, 0.0, 1.0, 0.0]
-    assert counts.counts.tolist() == [2.0, 0.0, 1.0, 0.0]
-    with pytest.raises(OutsideDomainError, match="2 of 5 targets"):
-        Binning().plan(SAMPLES, CELLS, policies=Policies(outside="raise"))

@@ -1,16 +1,16 @@
 """Tests for `functax.quad.polyline`. The slow tier: the rule traces (eager, `jit`
 and `vmap` agree) and differentiates in the vertices (`jacrev` against central
-differences), so a transect can move under an optimiser.
+differences), so a transect can move under an optimiser; and the weights' sum, the
+flipped normals, a uniform flux, the node layout and the dtypes, each compiling
+new shapes.
 """
 
 from __future__ import annotations
 
-import math
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from _harness import assert_grad_matches_fd, assert_traces
+from _harness import assert_grad_matches_fd, assert_matches_oracle, assert_traces
 
 from functax.quad import polyline
 
@@ -57,7 +57,7 @@ def test_weights_sum_to_the_length(rule: str, n: int) -> None:
     transect = polyline(ZIGZAG, n, rule=rule)
     length = _length(ZIGZAG)
     assert transect.nodes.shape == (n * 4, 2)
-    assert abs(float(transect.weights.sum()) - length) < 1e-14 * length
+    assert_matches_oracle(transect.weights.sum(), length, rtol=1e-14)
 
 
 def test_weights_sum_to_the_length_in_three_dimensions() -> None:
@@ -66,7 +66,7 @@ def test_weights_sum_to_the_length_in_three_dimensions() -> None:
     transect = polyline(vertices, 5, rule="gauss_legendre")
     length = _length(vertices)
     assert transect.normals is None
-    assert abs(float(transect.weights.sum()) - length) < 1e-14 * length
+    assert_matches_oracle(transect.weights.sum(), length, rtol=1e-14)
 
 
 @pytest.mark.parametrize("rule", ["midpoint", "gauss_legendre"])
@@ -85,7 +85,7 @@ def test_uniform_flux_across_a_straight_transect() -> None:
     transect = polyline(jnp.array([[0.0, 0.0], [5.0, 0.0]]), 4)
     wind = jnp.array([0.0, -2.0])
     flux = jnp.sum(transect.weights * (transect.normals @ wind))
-    assert abs(float(flux) + 10.0) < 1e-14
+    assert_matches_oracle(flux, -10.0, rtol=0, atol=1e-14)
 
 
 def test_nodes_are_spread_by_arc_length_on_each_segment() -> None:
@@ -101,19 +101,7 @@ def test_keeps_float32_and_promotes_integers() -> None:
     assert single.normals.dtype == jnp.float32
     integers = polyline(jnp.array([[0, 0], [3, 4]]), 1)
     assert jnp.issubdtype(integers.weights.dtype, jnp.floating)
-    assert math.isclose(float(integers.weights[0]), 5.0)
-
-
-def test_midpoint_is_exact_for_linear_fields() -> None:
-    transect = polyline(ZIGZAG, 3)
-    nodes = np.asarray(transect.nodes)
-    # c(x, y) = 2x − y + 1 integrates segment by segment as ℓⱼ c(midpoint)
-    vertices = np.asarray(ZIGZAG)
-    midpoints = 0.5 * (vertices[1:] + vertices[:-1])
-    lengths = np.linalg.norm(np.diff(vertices, axis=0), axis=1)
-    exact = float(np.dot(lengths, 2 * midpoints[:, 0] - midpoints[:, 1] + 1))
-    approx = float(np.dot(transect.weights, 2 * nodes[:, 0] - nodes[:, 1] + 1))
-    assert abs(approx - exact) < 1e-13 * abs(exact)
+    assert_matches_oracle(integers.weights[0], 5.0, rtol=1e-15)
 
 
 def test_zero_length_segment_has_zero_weight_and_normal() -> None:

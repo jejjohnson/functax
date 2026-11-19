@@ -283,10 +283,11 @@ class TestOutside:
         assert nodes.tolist() == [False, False]
         assert cells.tolist() == [True, True]
 
-    def test_raise(self) -> None:
+    def test_raise_counts_the_targets_outside(self) -> None:
         targets = Points(
             from_pixel(AFFINE.transform, jnp.array([[2.0, 2.0], [9.0, 1.0]]))
         )
+        # outside="raise" acts after the Newton locate, so it costs a whole plan
         with pytest.raises(OutsideDomainError, match="1 of 2 targets"):
             Linear().plan(
                 _affine_in_disguise(), targets, policies=Policies(outside="raise")

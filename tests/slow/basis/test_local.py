@@ -41,7 +41,7 @@ def test_rbf_narrow_atom_peaks_at_center(kernel):
     out = rbf_basis(
         jnp.zeros((1, 2)), jnp.zeros((1, 2)), jnp.array([width]), kernel=kernel
     )
-    assert float(out[0, 0]) == pytest.approx(1.0)
+    assert float(out[0, 0]) == pytest.approx(1.0, rel=1e-12)
 
     def loss(centers):
         return jnp.sum(
@@ -123,7 +123,7 @@ class TestSphericalRBFBasis:
 
 @pytest.mark.parametrize("kernel", [wendland_c2, wendland_c4])
 def test_wendland_peak_and_compact_support(kernel):
-    assert float(kernel(jnp.array(0.0))) == pytest.approx(1.0)
+    assert float(kernel(jnp.array(0.0))) == pytest.approx(1.0, rel=1e-12)
     # Exactly zero at and beyond the support radius r = 1.
     assert float(kernel(jnp.array(1.0))) == 0.0
     assert float(kernel(jnp.array(1.5))) == 0.0
@@ -145,7 +145,7 @@ def test_rbf_wendland_is_locally_supported():
     out = rbf_basis(
         jnp.array([[0.0, 0.0]]), centers, jnp.array([1.0, 1.0]), kernel="wendland_c2"
     )
-    assert float(out[0, 0]) == pytest.approx(1.0)  # on its own centre
+    assert float(out[0, 0]) == pytest.approx(1.0, rel=1e-12)  # on its own centre
     assert float(out[0, 1]) == 0.0  # 5 units away, width 1 -> exactly zero
 
 
@@ -176,7 +176,7 @@ def test_gabor_frame_grid_is_overcomplete_with_geometry():
     assert m > n  # overcomplete frame
     # Dyadic scales and matching wavenumbers k = 2 pi / L.
     assert len(np.unique(np.asarray(scales))) == 3
-    assert jnp.allclose(wavenumbers, 2.0 * jnp.pi / scales)
+    assert jnp.allclose(wavenumbers, 2.0 * jnp.pi / scales, rtol=1e-12, atol=0.0)
 
 
 def test_gabor_frame_grid_centers_stay_within_bounds():
@@ -212,3 +212,15 @@ def test_gabor_radial_matches_analytic():
     )
     want = float(jnp.exp(-0.5 * (1.0 / 2.0) ** 2) * jnp.cos(3.0))
     assert float(out[0, 0]) == pytest.approx(want, abs=1e-6)
+
+
+def test_gabor_directional_reduces_to_radial_when_aligned():
+    x, c, L, k = (
+        jnp.array([[1.0, 0.0]]),
+        jnp.array([[0.0, 0.0]]),
+        jnp.array([2.0]),
+        jnp.array([3.0]),
+    )
+    radial = gabor_frame(x, c, L, k)
+    directional = gabor_frame(x, c, L, k, orientations=jnp.array([[1.0, 0.0]]))
+    assert float(directional[0, 0]) == pytest.approx(float(radial[0, 0]), abs=1e-6)

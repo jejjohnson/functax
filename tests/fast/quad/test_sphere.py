@@ -10,6 +10,7 @@ import math
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from _harness import assert_matches_oracle
 
 from functax import GeometryError, ValidationError
 from functax.geometry import gauss_legendre_grid
@@ -49,7 +50,7 @@ def test_gauss_legendre_degree_is_min_of_both_limits(
 
 @pytest.mark.parametrize("make", RULES)
 def test_unit_weights_sum_to_four_pi(make) -> None:
-    assert abs(float(make().weights.sum()) - 4.0 * math.pi) < 1e-13
+    assert_matches_oracle(make().weights.sum(), 4.0 * math.pi, rtol=0, atol=1e-13)
 
 
 @pytest.mark.parametrize(
@@ -68,7 +69,7 @@ def test_radius_scales_the_weights_by_its_square(build) -> None:
     np.testing.assert_allclose(scaled.weights, unit.weights * radius**2, rtol=1e-15)
     np.testing.assert_array_equal(scaled.nodes, unit.nodes)
     expected = 4.0 * math.pi * radius**2
-    assert abs(float(scaled.weights.sum()) - expected) < 1e-13 * expected
+    assert_matches_oracle(scaled.weights.sum(), expected, rtol=1e-13)
 
 
 def test_is_a_rule_that_unpacks_to_unit_vector_nodes() -> None:
@@ -89,7 +90,7 @@ def test_gauss_legendre_wraps_the_geometry_grid() -> None:
     z = np.asarray(rule.nodes[::6, 2])
     assert np.all(np.diff(z) > 0)
     first_longitude = math.atan2(float(rule.nodes[0, 1]), float(rule.nodes[0, 0]))
-    assert abs(abs(first_longitude) - math.pi) < 1e-15
+    assert_matches_oracle(abs(first_longitude), math.pi, rtol=0, atol=1e-15)
 
 
 @pytest.mark.parametrize("radius", [0.0, -1.0, math.inf, math.nan])

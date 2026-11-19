@@ -11,6 +11,7 @@ import math
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from _harness import assert_matches_oracle
 
 from functax import GeometryError, ValidationError
 from functax.geometry import AffineGrid, Axis, RectilinearGrid, pixel_centres
@@ -23,7 +24,7 @@ def test_lonlat_cell_has_the_band_area() -> None:
     rule = cell_area(grid, sphere_radius=2.0, unit="degrees")
     # a² Δλ (sin φ_top − sin φ_bottom)
     expected = 4.0 * math.radians(10.0) * (math.sin(math.radians(40.0)) - 0.5)
-    assert abs(float(rule.weights[0, 0]) - expected) < 1e-15 * expected
+    assert_matches_oracle(rule.weights[0, 0], expected, rtol=1e-15)
 
 
 def test_latitude_edges_past_the_poles_are_clipped() -> None:
@@ -32,7 +33,7 @@ def test_latitude_edges_past_the_poles_are_clipped() -> None:
         (Axis(jnp.array([0.0, 180.0]), period=360.0), Axis(jnp.array([-60.0, 60.0])))
     )
     rule = cell_area(grid, sphere_radius=1.0, unit="degrees")
-    assert abs(float(rule.weights.sum()) - 4.0 * math.pi) < 1e-14
+    assert_matches_oracle(rule.weights.sum(), 4.0 * math.pi, rtol=0, atol=1e-14)
 
 
 @pytest.mark.parametrize(
@@ -64,9 +65,11 @@ def test_rectilinear_midpoint_edges_and_a_descending_axis() -> None:
     # without edges, the cells end half a spacing past the end nodes
     axes = (Axis(jnp.array([3.0, 2.0, 0.0])), Axis(jnp.array([0.0, 1.0])))
     rule = cell_area(RectilinearGrid(axes))
-    np.testing.assert_allclose(rule.weights, [[1.0, 1.0], [1.5, 1.5], [2.0, 2.0]])
+    assert_matches_oracle(
+        rule.weights, [[1.0, 1.0], [1.5, 1.5], [2.0, 2.0]], rtol=1e-15
+    )
     # the domain is [−1, 3.5] × [−0.5, 1.5]
-    assert abs(float(rule.weights.sum()) - 4.5 * 2.0) < 1e-14
+    assert_matches_oracle(rule.weights.sum(), 4.5 * 2.0, rtol=0, atol=1e-14)
 
 
 def test_rectilinear_nodes_follow_the_axes() -> None:

@@ -10,6 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from _harness import assert_matches_oracle
 from scipy.ndimage import map_coordinates
 
 from functax import GeometryError, OutsideDomainError, PolicyError
@@ -88,7 +89,7 @@ class TestRepeats:
     def test_without_repeats_it_equals_a_strict_axis(self) -> None:
         values = jnp.array([0.0, 0.5, 2.0, 2.5])
         targets = jnp.linspace(-1.0, 3.5, 19)
-        np.testing.assert_allclose(
+        assert_matches_oracle(
             index_positions(Axis(values, repeats="allow"), targets),
             index_positions(Axis(values), targets),
             rtol=1e-15,

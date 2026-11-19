@@ -9,6 +9,7 @@ import itertools
 import math
 
 import numpy as np
+from _harness import assert_matches_oracle
 
 from functax.basis.sphere import real_spherical_harmonics
 from functax.geometry import fibonacci_sphere, gauss_legendre_grid, healpix_grid
@@ -29,7 +30,7 @@ def test_fibonacci_quadrature_error_is_small() -> None:
     harmonics = np.asarray(real_spherical_harmonics(points, 4))
     # ∫ Y_lm for l ≥ 1
     means = (np.asarray(weights)[:, None] * harmonics).sum(axis=0)[1:]
-    assert np.max(np.abs(means)) < 5e-3
+    assert_matches_oracle(means, np.zeros_like(means), rtol=0, atol=5e-3)
 
 
 def _healpix_harmonic_integrals(

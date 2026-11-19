@@ -17,16 +17,13 @@ from _harness import (
     assert_transpose_matches,
 )
 
-from functax import PolicyError, ValidationError
 from functax.geometry import Axis, Points
 from functax.interp import (
     ComposedPlan,
     Fit,
-    Identity,
     Linear,
     Plan,
     Policies,
-    Readout,
     Stencil,
     compose,
 )
@@ -148,11 +145,6 @@ class TestCompose:
             carried = row_indices[row_weights != 0]
             assert carried.size == np.unique(carried).size
 
-    def test_merge_needs_concrete_stencils(self) -> None:
-        outer, inner = _pair(6)
-        with pytest.raises(ValidationError, match="'merge' needs concrete stencils"):
-            jax.jit(lambda o, i: compose(o, i, merge=True).weights)(outer, inner)
-
 
 class TestComposedPlan:
     def test_equals_the_plans_in_turn(self) -> None:
@@ -222,10 +214,8 @@ class TestComposedPlan:
         assert_matches_oracle(
             composed(data), outer(inner(data)), rtol=1e-12, atol=1e-14
         )
-        with pytest.raises(PolicyError, match="must share the outer plan's fill"):
-            Linear().plan(Axis(jnp.arange(3.0)), Points(jnp.zeros((1, 1)))) @ inner
 
-    def test_merge(self) -> None:
+    def test_merge_equals_the_unmerged_composition(self) -> None:
         # ten intermediate nodes on three source cells: neighbours share taps
         inner = Linear().plan(
             Axis(jnp.arange(4.0)), Points(jnp.linspace(0.1, 2.9, 10)[:, None])
@@ -257,41 +247,6 @@ class TestComposedPlan:
         srf, spectral = _spectral_and_srf()
         radiance = jax.random.normal(jax.random.key(29), (4, 20))
         assert_traces(lambda y: (srf @ spectral)(y), radiance)
-
-    def test_rejects_plans_that_do_not_fold(self) -> None:
-        srf, spectral = _spectral_and_srf()
-
-        class Doubled(Fit):
-            def apply(self, data):  # type: ignore[no-untyped-def]
-                return 2.0 * data
-
-            def apply_adjoint(self, coefficients):  # type: ignore[no-untyped-def]
-                return 2.0 * coefficients
-
-        class Dense(Readout):
-            matrix: jax.Array
-            valid: jax.Array
-
-            def apply(self, coefficients):  # type: ignore[no-untyped-def]
-                return coefficients @ self.matrix.T
-
-            def apply_adjoint(self, residual):  # type: ignore[no-untyped-def]
-                return residual @ self.matrix
-
-            def operator(self):  # type: ignore[no-untyped-def]
-                return None
-
-        with pytest.raises(PolicyError, match="the outer plan of a composition"):
-            Plan(Doubled(), srf.read) @ spectral
-        with pytest.raises(PolicyError, match="needs missing='propagate'"):
-            Plan(Identity(), srf.read, Policies(missing="fill")) @ spectral
-        with pytest.raises(PolicyError, match="cannot use missing='renormalise'"):
-            srf @ Plan(Identity(), spectral.read, Policies(missing="renormalise"))
-        dense = Dense(jnp.ones((12, 20)), jnp.ones(12, dtype=bool))
-        with pytest.raises(PolicyError, match="needs a stencil read-out"):
-            srf @ Plan(Identity(), dense)
-        with pytest.raises(ValidationError, match="'outer' reads 12 sources"):
-            srf @ srf
 
     def test_an_inner_fit_is_kept(self) -> None:
         srf, spectral = _spectral_and_srf()

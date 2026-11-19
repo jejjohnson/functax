@@ -1,10 +1,10 @@
-"""Tests for `Kriging` and `KernelCovariance`. The fast tier: the weights of
-ordinary kriging, zero variance at the sources, the linear trend of universal
-kriging, padding, validation and configs.
+"""Tests for `Kriging` and `KernelCovariance`. The fast tier: validation of the
+fields, the drift and the posterior's inputs, and configs.
 """
 
 from __future__ import annotations
 
+import inspect
 import json
 
 import jax
@@ -15,6 +15,8 @@ import pytest
 from functax import ValidationError
 from functax.geometry import Points
 from functax.interp import (
+    KernelCovariance,
+    KernelSolve,
     Kriging,
     Scheme,
     Wendland,
@@ -56,6 +58,24 @@ class TestValidationAndConfig:
             Kriging(_gaussian, drift=lambda x: jnp.ones(x.shape[0])).plan(
                 Points(sources), Points(targets)
             )
+
+    def test_covariance_checks_its_inputs(self) -> None:
+        # the check reads only the fit's sizes: 3 sources and a one-term drift,
+        # so 4 coefficients per read-out row, with no factorisation to build
+        fit = KernelSolve.__new__(KernelSolve)
+        object.__setattr__(fit, "n_source", 3)
+        object.__setattr__(fit, "n_terms", 1)
+        check = inspect.unwrap(KernelCovariance.__check_init__)
+        wrong = KernelCovariance.__new__(KernelCovariance)
+        object.__setattr__(wrong, "fit", fit)
+        object.__setattr__(wrong, "read", jnp.zeros((2, 4)))
+        object.__setattr__(wrong, "targets", jnp.zeros((1, 2)))
+        with pytest.raises(ValidationError, match="'targets'"):
+            check(wrong)
+        object.__setattr__(wrong, "targets", jnp.zeros((2, 2)))
+        object.__setattr__(wrong, "read", jnp.zeros((2, 3)))
+        with pytest.raises(ValidationError, match="'read'"):
+            check(wrong)
 
     @pytest.mark.parametrize(
         "scheme",

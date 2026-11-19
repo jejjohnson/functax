@@ -9,7 +9,6 @@ import numpy as np
 import pytest
 
 from functax.basis.local import (
-    gabor_frame,
     gabor_frame_grid,
     rbf_basis,
     spherical_rbf_basis,
@@ -21,18 +20,6 @@ from functax.basis.local import (
 def test_rbf_rejects_unknown_kernel():
     with pytest.raises(ValueError, match="'kernel' must be one of"):
         rbf_basis(jnp.zeros((2, 2)), jnp.zeros((1, 2)), jnp.ones(1), kernel="bogus")
-
-
-def test_gabor_directional_reduces_to_radial_when_aligned():
-    x, c, L, k = (
-        jnp.array([[1.0, 0.0]]),
-        jnp.array([[0.0, 0.0]]),
-        jnp.array([2.0]),
-        jnp.array([3.0]),
-    )
-    radial = gabor_frame(x, c, L, k)
-    directional = gabor_frame(x, c, L, k, orientations=jnp.array([[1.0, 0.0]]))
-    assert float(directional[0, 0]) == pytest.approx(float(radial[0, 0]), abs=1e-6)
 
 
 def test_gabor_frame_grid_rejects_bad_args():
@@ -54,18 +41,20 @@ class TestSphericalRBFBasis:
 
 
 class TestWaveletBasis:
+    # the bases are built in NumPy, so the Grams are too: a JAX matmul here
+    # would compile a kernel per shape and cost more than the basis
     def test_levels_capped_and_partial(self):
         # one level is still orthonormal; more levels than log2(n) is capped.
-        phi1 = wavelet_basis_1d(16, wavelet="haar", levels=1)
-        np.testing.assert_allclose(phi1.T @ phi1, jnp.eye(16), atol=1e-6)
+        phi1 = np.asarray(wavelet_basis_1d(16, wavelet="haar", levels=1))
+        np.testing.assert_allclose(phi1.T @ phi1, np.eye(16), atol=1e-6)
         full = wavelet_basis_1d(16, wavelet="haar")
         capped = wavelet_basis_1d(16, wavelet="haar", levels=99)
         np.testing.assert_allclose(full, capped, atol=1e-6)
 
     def test_2d_orthonormal(self):
-        phi = wavelet_basis_2d(4, 8, wavelet="db2")
+        phi = np.asarray(wavelet_basis_2d(4, 8, wavelet="db2"))
         assert phi.shape == (32, 32)
-        np.testing.assert_allclose(phi.T @ phi, jnp.eye(32), atol=1e-6)
+        np.testing.assert_allclose(phi.T @ phi, np.eye(32), atol=1e-6)
 
     def test_rejects_non_power_of_two_and_unknown(self):
         with pytest.raises(ValueError):

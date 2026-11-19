@@ -4,6 +4,8 @@ behaviour, validation and small closed-form checks, each well under a second.
 
 from __future__ import annotations
 
+import inspect
+
 import jax
 import jax.numpy as jnp
 import pytest
@@ -18,6 +20,7 @@ from functax.interp import (
     Policies,
     Readout,
     Stencil,
+    WindowedPlan,
 )
 
 
@@ -49,8 +52,25 @@ class TestWindow:
         with pytest.raises(PolicyError, match="needs a plan with a stencil read-out"):
             plan[0:2]
 
+    def test_rejects_bad_windows(self) -> None:
+        stencil = Stencil(
+            jnp.zeros((6, 1), dtype=jnp.int32), jnp.ones((6, 1)), n_source=2
+        )
+        plan = Plan(Identity(), stencil, target_shape=(2, 3))
+        with pytest.raises(ValidationError, match=r"one slice per target axis \(2\)"):
+            plan[0:2]
+        with pytest.raises(ValidationError, match="selects no targets"):
+            plan[1:1, :]
+        # the type hook would reject a non-slice first, so skip it
+        init = inspect.unwrap(WindowedPlan.__init__)
+        with pytest.raises(ValidationError, match="one slice per target axis"):
+            init(object.__new__(WindowedPlan), plan, (0, slice(None)))
+
 
 class TestTargetShape:
+    def test_grid_targets_keep_their_shape(self) -> None:
+        assert _warp().target_shape == (8, 9)
+
     def test_rejects_a_shape_that_does_not_hold_the_rows(self) -> None:
         stencil = Stencil(
             jnp.zeros((6, 1), dtype=jnp.int32), jnp.ones((6, 1)), n_source=2

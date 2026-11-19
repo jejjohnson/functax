@@ -61,7 +61,10 @@ def test_the_holes_satisfy_their_equation(method: str) -> None:
     residual = mirror_laplacian(filled)
     if method == "biharmonic":
         residual = mirror_laplacian(residual)
-    assert float(jnp.max(jnp.where(mask, 0.0, jnp.abs(residual)))) < 1e-11
+    holes = ~mask
+    assert_matches_oracle(
+        residual, jnp.zeros_like(residual), rtol=0, atol=1e-11, where=holes
+    )
 
 
 @pytest.mark.parametrize("method", ["laplace", "biharmonic"])
