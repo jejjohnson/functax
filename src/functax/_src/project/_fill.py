@@ -15,6 +15,7 @@ from functax._src._backend import require_jax
 
 require_jax(__name__)
 
+import einx
 import jax
 import jax.numpy as jnp
 import lineax as lx
@@ -45,13 +46,42 @@ def mirror_laplacian(image: Float[Array, "row col"]) -> Float[Array, "row col"]:
     differences D, symmetric negative semi-definite with the constants as its
     null space. It is functax's only difference operator, there for
     `fill_gaps`; richer ones arrive as arguments (finitevolX, spectraldiffx).
+
+    Args:
+        image: x, the image.
+
+    Returns:
+        Δx, the shape of ``image``.
+
+    Examples:
+        An impulse: −4 at its pixel, 1 at each neighbour, and a zero sum, since
+        the constants span the null space of the symmetric Δ:
+
+        >>> import einx
+        >>> import jax.numpy as jnp
+        >>> from functax._src.project._fill import mirror_laplacian
+        >>> impulse = jnp.zeros((3, 3)).at[1, 1].set(1.0)
+        >>> laplacian = mirror_laplacian(impulse)
+        >>> total = einx.sum("[row col]", laplacian)
+        >>> bool(laplacian[1, 1] == -4.0), bool(jnp.allclose(total, 0.0))
+        (True, True)
+
+        A constant image, even a single pixel, has Δx = 0:
+
+        >>> pixel = jnp.full((1, 1), 2.0)
+        >>> bool(jnp.allclose(mirror_laplacian(pixel), 0.0))
+        True
     """
+    # x with a ghost ring that repeats the edge, x₋₁ⱼ = x₀ⱼ
     padded = jnp.pad(image, 1, mode="edge")
+    # xᵢ₋₁ⱼ, xᵢ₊₁ⱼ, xᵢⱼ₋₁ and xᵢⱼ₊₁
     up = padded[:-2, 1:-1]
     down = padded[2:, 1:-1]
     left = padded[1:-1, :-2]
     right = padded[1:-1, 2:]
-    return up + down + left + right - 4 * image
+    # (Δx)ᵢⱼ = xᵢ₋₁ⱼ + xᵢ₊₁ⱼ + xᵢⱼ₋₁ + xᵢⱼ₊₁ − 4xᵢⱼ
+    laplacian = up + down + left + right - 4 * image
+    return laplacian
 
 
 def periodic_laplacian(
@@ -73,17 +103,43 @@ def periodic_laplacian(
 
     Returns:
         Δx, the shape of ``image``.
+
+    Examples:
+        One row [1, 0, 0, 0] with periodic columns: the impulse reaches the
+        last column across the seam:
+
+        >>> import jax.numpy as jnp
+        >>> from functax._src.project._fill import (
+        ...     mirror_laplacian,
+        ...     periodic_laplacian,
+        ... )
+        >>> row = jnp.array([[1.0, 0.0, 0.0, 0.0]])
+        >>> laplacian = periodic_laplacian(row, periodic=(False, True))
+        >>> bool(jnp.allclose(laplacian, jnp.array([[-2.0, 1.0, 0.0, 1.0]])))
+        True
+
+        With no axis periodic it is `mirror_laplacian`:
+
+        >>> image = jnp.array([[0.0, 1.0, 4.0], [2.0, -1.0, 3.0]])
+        >>> mirrored = periodic_laplacian(image, periodic=(False, False))
+        >>> bool(jnp.allclose(mirrored, mirror_laplacian(image)))
+        True
     """
+    # x with a ghost ring: x₋₁ = xₙ₋₁ on a periodic axis, x₋₁ = x₀ otherwise
     padded = image
-    for axis, wraps in enumerate(periodic):
+    for axis_index, wraps in enumerate(periodic):
         widths = [(0, 0), (0, 0)]
-        widths[axis] = (1, 1)
-        padded = jnp.pad(padded, widths, mode="wrap" if wraps else "edge")
+        widths[axis_index] = (1, 1)
+        mode = "wrap" if wraps else "edge"
+        padded = jnp.pad(padded, widths, mode=mode)
+    # xᵢ₋₁ⱼ, xᵢ₊₁ⱼ, xᵢⱼ₋₁ and xᵢⱼ₊₁, each index mod n on a periodic axis
     up = padded[:-2, 1:-1]
     down = padded[2:, 1:-1]
     left = padded[1:-1, :-2]
     right = padded[1:-1, 2:]
-    return up + down + left + right - 4 * image
+    # (Δx)ᵢⱼ = xᵢ₋₁ⱼ + xᵢ₊₁ⱼ + xᵢⱼ₋₁ + xᵢⱼ₊₁ − 4xᵢⱼ
+    laplacian = up + down + left + right - 4 * image
+    return laplacian
 
 
 def fill_gaps(
@@ -173,42 +229,65 @@ def fill_gaps(
     if len(periodic) != 2 or not all(isinstance(wraps, bool) for wraps in periodic):
         msg = f"'periodic' must be two booleans (row, col), got {periodic!r}"
         raise ValidationError(msg)
+    # P = 0: no observed pixel to fill from
+    any_observed = einx.any("[row col]", mask)
+    none_observed = ~any_observed
     mask = check_values(
-        mask, ~jnp.any(mask), "'mask' must mark at least one observed pixel"
+        mask, none_observed, "'mask' must mark at least one observed pixel"
     )
     zero = jnp.zeros((), image.dtype)
 
-    def five_point(field: jax.Array) -> jax.Array:
+    def five_point(field: Float[Array, "row col"]) -> Float[Array, "row col"]:
         """Δx with the edges ``periodic`` asks for."""
         if any(periodic):
             return periodic_laplacian(field, periodic=periodic)
         return mirror_laplacian(field)
 
-    def roughness(field: jax.Array) -> jax.Array:
+    def roughness(field: Float[Array, "row col"]) -> Float[Array, "row col"]:
         """K x: −Δx for the Laplace fill, Δ²x for the biharmonic one."""
+        # Δx
         laplacian = five_point(field)
         if method == "laplace":
+            # Kx = −Δx
             return -laplacian
+        # Kx = Δ²x
         return five_point(laplacian)
 
-    def holes_only(field: jax.Array) -> jax.Array:
+    def holes_only(field: Float[Array, "row col"]) -> Float[Array, "row col"]:
         """Q x, the field zeroed at the observed pixels."""
         return jnp.where(mask, zero, field)
 
-    def system(hole_values: jax.Array) -> jax.Array:
-        # (QKQ + P) z
-        hole_rows = holes_only(roughness(holes_only(hole_values)))
+    def system(hole_values: Float[Array, "row col"]) -> Float[Array, "row col"]:
+        # Qz
+        hole_part = holes_only(hole_values)
+        # KQz
+        hole_roughness = roughness(hole_part)
+        # QKQz
+        hole_rows = holes_only(hole_roughness)
+        # Pz
         observed_rows = jnp.where(mask, hole_values, zero)
+        # (QKQ + P) z
         return hole_rows + observed_rows
 
+    # --- right-hand side ---
     # y₀ = Py, with the holes' values (NaN or not) never read
     observed = jnp.where(mask, image, zero)
+    # K y₀
+    observed_roughness = roughness(observed)
+    # Q K y₀
+    hole_roughness = holes_only(observed_roughness)
     # b = −QKPy
-    rhs = -holes_only(roughness(observed))
+    rhs = -hole_roughness
+
+    # --- solve over the holes ---
     structure = jax.ShapeDtypeStruct(image.shape, image.dtype)
     operator = lx.FunctionLinearOperator(
         system, structure, (lx.symmetric_tag, lx.positive_semidefinite_tag)
     )
     solver = default_solver(image.dtype) if solver is None else solver
-    hole_values = lx.linear_solve(operator, rhs, solver).value
-    return observed + hole_values
+    # z = (QKQ + P)⁻¹ b
+    solution = lx.linear_solve(operator, rhs, solver)
+    hole_values = solution.value
+    # x = y₀ + z
+    filled = observed + hole_values
+    return filled

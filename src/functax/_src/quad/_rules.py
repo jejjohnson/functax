@@ -52,6 +52,15 @@ class Rule(eqx.Module):
         >>> nodes, weights = rule
         >>> weights.shape
         (2,)
+        >>> # a rule sums: ∫₀¹ x dx ≈ ∑ₙ wₙ xₙ
+        >>> bool(jnp.allclose(weights @ nodes, 0.5))
+        True
+
+        Nodes in D dimensions keep one row per weight, a cubature rule:
+
+        >>> square = Rule(jnp.zeros((4, 2)), jnp.full(4, 0.25))
+        >>> square.nodes.shape, square.weights.shape
+        ((4, 2), (4,))
     """
 
     nodes: Float[Array | np.ndarray, " node *dim"]
@@ -162,21 +171,29 @@ def clenshaw_curtis(n: int, interval: tuple[float, float] = (-1.0, 1.0)) -> Rule
     lower, upper = _interval(interval)
     degree = count - 1
     index = np.arange(count, dtype=np.float64)
+    # kπ/N
+    node_angles = np.pi * index / degree
     # ξₖ = −cos(kπ/N), ascending
-    reference_nodes = -np.cos(np.pi * index / degree)
+    reference_nodes = -np.cos(node_angles)
     # j = 1, …, ⌊(N − 1)/2⌋, empty when N ≤ 2
     frequencies = np.arange(1, (degree - 1) // 2 + 1, dtype=np.float64)
     series = np.zeros(count)
     if frequencies.size:
         # 2 / (4j² − 1)
         coefficients = 2.0 / (4.0 * frequencies**2 - 1.0)
+        # 2jπ/N
+        angular_frequencies = 2.0 * np.pi * frequencies / degree
         # 2jkπ/N, one row per node k
-        angles = einx.multiply("k, j -> k j", index, 2.0 * np.pi * frequencies / degree)
+        angles = einx.multiply("node, mode -> node mode", index, angular_frequencies)
+        # cos(2jkπ/N)
+        cosines = np.cos(angles)
         # ∑ⱼ 2 cos(2jkπ/N) / (4j² − 1)
-        series = einx.dot("k j, j -> k", np.cos(angles), coefficients)
+        series = einx.dot("node mode, mode -> node", cosines, coefficients)
     if degree % 2 == 0:
+        # cos(kπ)
+        alternating = np.cos(np.pi * index)
         # the j = N/2 term: cos(kπ) / (N² − 1)
-        series = series + np.cos(np.pi * index) / (degree**2 - 1.0)
+        series = series + alternating / (degree**2 - 1.0)
     # cₖ = 1 at the ends, 2 inside
     end_factors = np.full(count, 2.0)
     end_factors[[0, -1]] = 1.0
@@ -288,12 +305,14 @@ def simpson(nodes: ArrayLike) -> Rule:
     # (h₀ + h₁)/6
     scale = (first + second) / 6.0
     # left node: (h₀ + h₁)/6 · (2 − h₁/h₀)
-    weights = weights.at[starts].add(scale * (2.0 - second / first))
+    left = scale * (2.0 - second / first)
+    weights = weights.at[starts].add(left)
     # middle node: (h₀ + h₁)/6 · (h₀ + h₁)²/(h₀h₁)
     middle = scale * (first + second) ** 2 / (first * second)
     weights = weights.at[starts + 1].add(middle)
     # right node: (h₀ + h₁)/6 · (2 − h₀/h₁)
-    weights = weights.at[starts + 2].add(scale * (2.0 - first / second))
+    right = scale * (2.0 - first / second)
+    weights = weights.at[starts + 2].add(right)
     if count % 2 == 0:
         # Cartwright's correction for the last interval, on its two widths
         before, last = widths[-2], widths[-1]
@@ -303,6 +322,7 @@ def simpson(nodes: ArrayLike) -> Rule:
         beta = (last**2 + 3.0 * before * last) / (6.0 * before)
         # η = h₁³ / (6h₀(h₀ + h₁))
         eta = last**3 / (6.0 * before * (before + last))
+        # w_N += α, w_{N−1} += β, w_{N−2} −= η
         weights = weights.at[-1].add(alpha)
         weights = weights.at[-2].add(beta)
         weights = weights.at[-3].add(-eta)
@@ -337,8 +357,8 @@ def _interval(interval: Any) -> tuple[float, float]:
 
 
 def _mapped(
-    reference_nodes: np.ndarray,
-    reference_weights: np.ndarray,
+    reference_nodes: Float[np.ndarray, " node"],
+    reference_weights: Float[np.ndarray, " node"],
     lower: float,
     upper: float,
 ) -> Rule:
@@ -346,14 +366,17 @@ def _mapped(
     # c = (a + b)/2, h = (b − a)/2
     centre = 0.5 * (lower + upper)
     half_width = 0.5 * (upper - lower)
+    # xₙ = c + hξₙ
     nodes = centre + half_width * reference_nodes
+    # wₙ = hωₙ
     weights = half_width * reference_weights
     return Rule(nodes, weights)
 
 
 def _node_vector(nodes: ArrayLike) -> Float[Array, " node"]:
     """Nodes as a non-empty 1-D floating JAX array."""
-    array = promote_integers(jnp.asarray(nodes))
+    array = jnp.asarray(nodes)
+    array = promote_integers(array)
     if array.ndim != 1 or array.shape[0] == 0:
         msg = f"'nodes' must be a non-empty 1-D array, got shape {array.shape}"
         raise ValidationError(msg)

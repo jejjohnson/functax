@@ -94,10 +94,13 @@ def chebyshev_nodes(
     if not lower < upper:
         msg = f"'interval' must have a < b, got {interval!r}"
         raise GeometryError(msg)
-    return jnp.asarray(_mapped_nodes(degree, kind, lower, upper))
+    nodes = _mapped_nodes(degree, kind, lower, upper)
+    return jnp.asarray(nodes)
 
 
-def _mapped_nodes(degree: int, kind: str, lower: float, upper: float) -> np.ndarray:
+def _mapped_nodes(
+    degree: int, kind: str, lower: float, upper: float
+) -> Float[np.ndarray, " node"]:
     """The nodes xⱼ = c + h ξⱼ of `chebyshev_nodes` as a float64 NumPy array.
 
     The host-side constant, for callers that check an axis inside a trace

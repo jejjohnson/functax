@@ -12,7 +12,7 @@ from collections.abc import Callable
 import einx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from jaxtyping import Array, Bool, Float, Shaped
 
 from functax._src.geometry._sphere import (
     _check_radius,
@@ -40,30 +40,44 @@ def _euclidean_distance(
     u: Float[Array, "source dim"], v: Float[Array, "target dim"]
 ) -> Float[Array, "source target"]:
     """‖u − v‖ for every pair, guarded at u = v."""
-    difference = einx.subtract("source c, target c -> source target c", u, v)
-    squared = einx.sum("source target [c]", difference**2)
+    # u − v for every pair
+    difference = einx.subtract("source dim, target dim -> source target dim", u, v)
+    # (u − v)²
+    squared_difference = difference**2
+    # ‖u − v‖² = ∑_d (u_d − v_d)²
+    squared = einx.sum("source target [dim]", squared_difference)
+    # ‖u − v‖, with a finite gradient at u = v
     return _safe_norm(squared)
 
 
 def _chunked(
-    distance: Callable[[jax.Array, jax.Array], jax.Array],
-    sources: jax.Array,
-    targets: jax.Array,
+    distance: Callable[
+        [Shaped[Array, "source dim"], Shaped[Array, "block dim"]],
+        Shaped[Array, "row block"],
+    ],
+    sources: Shaped[Array, "source dim"],
+    targets: Shaped[Array, "target dim"],
     max_pairs: int,
-) -> jax.Array:
-    """``distance(sources, targets)``, over chunks of targets when M · N > max_pairs."""
+) -> Shaped[Array, "row target"]:
+    """``distance(sources, targets)``, over chunks of targets when M · N > max_pairs.
+
+    The leading dim of ``distance``'s output is the sources for a distance
+    matrix, or the taps of a nearest-neighbour search.
+    """
     n_sources = sources.shape[0]
     n_targets = targets.shape[0]
     if n_sources * n_targets <= max_pairs:
         return distance(sources, targets)
-    chunk = max(1, max_pairs // max(n_sources, 1))
-    n_chunks = -(-n_targets // chunk)
+    chunk_size = max(1, max_pairs // max(n_sources, 1))
+    # ⌈N / chunk⌉
+    n_chunks = -(-n_targets // chunk_size)
     # pad the targets with copies of the last one, so every chunk is full
-    padding = n_chunks * chunk - n_targets
+    padding = n_chunks * chunk_size - n_targets
     padded = jnp.pad(targets, ((0, padding), (0, 0)), mode="edge")
-    chunks = einx.id("(k t) c -> k t c", padded, k=n_chunks)
+    chunks = einx.id("(chunk block) dim -> chunk block dim", padded, chunk=n_chunks)
     blocks = jax.lax.map(lambda block: distance(sources, block), chunks)
-    distances = einx.id("k source t -> source (k t)", blocks)
+    distances = einx.id("chunk row block -> row (chunk block)", blocks)
+    # drop the padded targets
     return distances[:, :n_targets]
 
 
@@ -111,6 +125,14 @@ def pairwise_distance(
         >>> d = pairwise_distance(poles, poles, unit="degrees", radius=6371.0)
         >>> bool(jnp.allclose(d[0, 1], jnp.pi * 6371.0))
         True
+
+        A padding point is nobody's neighbour:
+
+        >>> padded = Points(
+        ...     jnp.array([[0.0, 0.0], [3.0, 4.0]]), valid=jnp.array([True, False])
+        ... )
+        >>> pairwise_distance(grid, padded).tolist()
+        [[0.0, inf], [5.0, inf]]
     """
     if sources.metric != targets.metric:
         msg = (
@@ -135,7 +157,9 @@ def pairwise_distance(
         target_units = lonlat_to_unit(targets.xy, unit=unit)
         on_sphere = chord_distance if metric == "chord" else geodesic_distance
 
-        def distance(u: jax.Array, v: jax.Array) -> jax.Array:
+        def distance(
+            u: Float[Array, "source dim"], v: Float[Array, "target dim"]
+        ) -> Float[Array, "source target"]:
             return on_sphere(u, v, radius=radius)
 
         distances = _chunked(distance, source_units, target_units, max_pairs)
@@ -143,10 +167,11 @@ def pairwise_distance(
     valid = _pair_mask(sources, targets)
     if valid is None:
         return distances
+    # d = +∞ wherever either point is padding
     return jnp.where(valid, distances, jnp.inf)
 
 
-def _pair_mask(sources: Points, targets: Points) -> jax.Array | None:
+def _pair_mask(sources: Points, targets: Points) -> Bool[Array, "source target"] | None:
     """True where both points of a pair are real, or None when none is padding."""
     if sources.valid is None and targets.valid is None:
         return None
@@ -160,6 +185,7 @@ def _pair_mask(sources: Points, targets: Points) -> jax.Array | None:
         if targets.valid is None
         else targets.valid
     )
+    # v_st = v_s ∧ v_t
     return einx.logical_and(
         "source, target -> source target", source_valid, target_valid
     )

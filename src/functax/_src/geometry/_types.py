@@ -16,12 +16,11 @@ require_jax(__name__)
 from collections.abc import Sequence
 from typing import Any, Literal
 
+import einx
 import equinox as eqx
-import jax
-import jax.core
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array, ArrayLike, Bool, Float
+from jaxtyping import Array, ArrayLike, Bool, Float, Shaped
 
 from functax._src._backend import is_tracer
 from functax._src._checks import check_values, require_floating
@@ -58,12 +57,14 @@ _UNITS_PER_SECOND: dict[str, int] = {
 _REGULAR_RTOL = 1e-12
 
 
-def _check_values(array: jax.Array, bad: jax.Array, message: str) -> jax.Array:
+def _check_values(
+    array: Shaped[Array, "*shape"], bad: Bool[Array, ""], message: str
+) -> Shaped[Array, "*shape"]:
     """`check_values` raising `GeometryError`."""
     return check_values(array, bad, message, error=GeometryError)
 
 
-def _require_floating(array: jax.Array, name: str) -> None:
+def _require_floating(array: Shaped[Array, "*shape"], name: str) -> None:
     """`require_floating` raising `GeometryError`."""
     require_floating(array, name, error=GeometryError)
 
@@ -195,18 +196,22 @@ class Axis(eqx.Module):
         # Δₖ = xₖ₊₁ − xₖ, all of one sign
         spacing = jnp.diff(values)
         if repeats == "forbid":
+            # Δₖ > 0 for every k, or Δₖ < 0 for every k
             increasing = jnp.all(spacing > 0)
             decreasing = jnp.all(spacing < 0)
             message = "'values' must be strictly monotone"
         else:
             # Δₖ ≥ 0 (or ≤ 0) for every k, and the span x_last − x_first ≠ 0
             positive_span = values[-1] != values[0]
-            increasing = jnp.all(spacing >= 0) & positive_span
-            decreasing = jnp.all(spacing <= 0) & positive_span
+            non_decreasing = jnp.all(spacing >= 0)
+            non_increasing = jnp.all(spacing <= 0)
+            increasing = non_decreasing & positive_span
+            decreasing = non_increasing & positive_span
             message = "'values' must be monotone with a positive span"
             if values.shape[0] == 1:
                 increasing = jnp.ones((), dtype=bool)
-        values = _check_values(values, ~(increasing | decreasing), message)
+        monotone = increasing | decreasing
+        values = _check_values(values, ~monotone, message)
         if period is not None:
             # |x_last − x_first| < P, or two nodes would be the same point
             span = jnp.abs(values[-1] - values[0])
@@ -238,7 +243,8 @@ class Axis(eqx.Module):
         edges = np.asarray(self.edges)
         values = np.asarray(self.values)
         # eₖ₊₁ − eₖ, all of the sign of xₖ₊₁ − xₖ (either sign for one node)
-        steps = np.sign(np.diff(edges))
+        widths = np.diff(edges)
+        steps = np.sign(widths)
         if values.shape[0] == 1:
             direction = steps[0] if steps[0] != 0 else 1.0
         else:
@@ -288,16 +294,19 @@ class Axis(eqx.Module):
         # ½ (xₖ₋₁ + xₖ) between nodes
         midpoints = 0.5 * (values[:-1] + values[1:])
         if self.period is None:
-            # x₀ − ½ (x₁ − x₀) and x_{n−1} + ½ (x_{n−1} − x_{n−2})
+            # e₀ = x₀ − ½ (x₁ − x₀)
             first = values[0] - 0.5 * (values[1] - values[0])
+            # e_n = x_{n−1} + ½ (x_{n−1} − x_{n−2})
             last = values[-1] + 0.5 * (values[-1] - values[-2])
         else:
             # the wrap gap runs from x_{n−1} to x₀ ± P, the sign of the axis
             period = jnp.where(values[-1] > values[0], self.period, -self.period)
             period = period.astype(values.dtype)
+            # e_n = m = ½ (x_{n−1} + x₀ ± P)
             last = 0.5 * (values[-1] + values[0] + period)
+            # e₀ = m ∓ P
             first = last - period
-        return jnp.concatenate([jnp.atleast_1d(first), midpoints, jnp.atleast_1d(last)])
+        return einx.id(", edge, -> (1 + edge + 1)", first, midpoints, last)
 
     @classmethod
     def from_datetimes(
@@ -335,6 +344,12 @@ class Axis(eqx.Module):
             ([0.0, 3600.0, 7200.0, 10800.0], '2026-01-01T00:00:00.000000000')
             >>> bool((axis.to_datetimes() == hours).all())
             True
+
+            An explicit epoch shifts the seconds:
+
+            >>> axis = Axis.from_datetimes(hours, epoch="2025-12-31T23")
+            >>> axis.values[:2].tolist()
+            [3600.0, 7200.0]
         """
         moments = np.asarray(times).astype("datetime64[ns]")
         if moments.ndim != 1 or moments.shape[0] < 1:
@@ -343,8 +358,11 @@ class Axis(eqx.Module):
         if np.isnat(moments).any():
             msg = f"'times' must not contain NaT, got {moments!r}"
             raise GeometryError(msg)
-        origin = np.datetime64(_as_epoch(moments[0] if epoch is None else epoch))
-        offsets = (moments - origin).astype(np.int64)
+        origin_string = _as_epoch(moments[0] if epoch is None else epoch)
+        origin = np.datetime64(origin_string)
+        # Δt in integer nanoseconds
+        elapsed = moments - origin
+        offsets = elapsed.astype(np.int64)
         # t = s + n / 10⁹: whole seconds and the nanosecond remainder, so the
         # integer part is exact and only the sum rounds
         whole_seconds, nanoseconds = np.divmod(offsets, 1_000_000_000)
@@ -352,7 +370,7 @@ class Axis(eqx.Module):
         values = jnp.asarray(seconds, dtype=jnp.float64)
         return cls(values, epoch=origin)
 
-    def to_datetimes(self, *, unit: str = "ns") -> Any:
+    def to_datetimes(self, *, unit: str = "ns") -> Shaped[np.ndarray, " node"]:
         """The node times as ``datetime64[ns]``, rounded to ``unit``.
 
         Args:
@@ -371,6 +389,13 @@ class Axis(eqx.Module):
             >>> axis = Axis(jnp.array([0.0, 1.5]), epoch="2026-01-01")
             >>> axis.to_datetimes(unit="s").astype(str).tolist()
             ['2026-01-01T00:00:00.000000000', '2026-01-01T00:00:02.000000000']
+
+            An axis that is not time has no datetimes:
+
+            >>> Axis(jnp.array([0.0, 1.0])).to_datetimes()
+            ... # doctest: +IGNORE_EXCEPTION_DETAIL
+            Traceback (most recent call last):
+            functax.exceptions.GeometryError: 'epoch' is None, ...
         """
         if self.epoch is None:
             msg = "'epoch' is None, so the axis has no times to return"
@@ -384,12 +409,16 @@ class Axis(eqx.Module):
         # t = ⌊t⌋ + (t − ⌊t⌋): both parts exact in float64
         whole_seconds = np.floor(seconds)
         fraction = seconds - whole_seconds
-        # round half up, so 1.5 s is 2 s at unit="s"
-        fraction_units = np.floor(fraction * units_per_second + 0.5).astype(np.int64)
+        # ⌊(t − ⌊t⌋) u + ½⌋: round half up, so 1.5 s is 2 s at unit="s"
+        rounded = np.floor(fraction * units_per_second + 0.5)
+        fraction_units = rounded.astype(np.int64)
+        # ⌊t⌋ u + the rounded fraction, in whole units
         total_units = whole_seconds.astype(np.int64) * units_per_second
         total_units = total_units + fraction_units
-        offsets = (total_units * nanoseconds_per_unit).astype("timedelta64[ns]")
-        return np.datetime64(self.epoch, "ns") + offsets
+        total_nanoseconds = total_units * nanoseconds_per_unit
+        offsets = total_nanoseconds.astype("timedelta64[ns]")
+        origin = np.datetime64(self.epoch, "ns")
+        return origin + offsets
 
     @property
     def is_regular(self) -> bool:
@@ -401,9 +430,15 @@ class Axis(eqx.Module):
         """
         if self.values.shape[0] == 1:
             return False
-        spacing = np.diff(np.asarray(self.values))
+        values = np.asarray(self.values)
+        # Δₖ = xₖ₊₁ − xₖ
+        spacing = np.diff(values)
+        # Δ̄ = (1/(n − 1)) ∑ₖ Δₖ
         mean_spacing = spacing.mean()
-        deviation = np.max(np.abs(spacing - mean_spacing))
+        # max |Δₖ − Δ̄|
+        absolute_deviation = np.abs(spacing - mean_spacing)
+        deviation = np.max(absolute_deviation)
+        # max |Δₖ − Δ̄| ≤ 10⁻¹² |Δ̄|
         return bool(deviation <= _REGULAR_RTOL * abs(mean_spacing))
 
     @property
@@ -473,9 +508,8 @@ class AffineGrid(eqx.Module):
         a, b, _, d, e, _ = (transform[k] for k in range(6))
         # det = a·e − b·d ≠ 0, or the grid has no inverse
         determinant = a * e - b * d
-        transform = _check_values(
-            transform, ~jnp.all(jnp.isfinite(transform)), "'transform' must be finite"
-        )
+        finite = jnp.all(jnp.isfinite(transform))
+        transform = _check_values(transform, ~finite, "'transform' must be finite")
         transform = _check_values(
             transform,
             determinant == 0,
@@ -542,6 +576,14 @@ class RectilinearGrid(eqx.Module):
         >>> longitude = Axis(jnp.linspace(0.0, 357.5, 144), period=360.0)
         >>> RectilinearGrid((latitude, longitude)).shape
         (73, 144)
+
+        One axis is a 1-D grid; no axis is an error:
+
+        >>> RectilinearGrid([latitude]).shape
+        (73,)
+        >>> RectilinearGrid(())  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        functax.exceptions.GeometryError: 'axes' must hold at least one Axis, ...
     """
 
     axes: tuple[Axis, ...] = eqx.field(converter=tuple)
@@ -580,6 +622,14 @@ class CurvilinearGrid(eqx.Module):
         ... )
         >>> CurvilinearGrid(x=cols + 0.1 * rows, y=rows).shape
         (3, 4)
+
+        A single row is too thin to be a grid:
+
+        >>> CurvilinearGrid(
+        ...     x=jnp.zeros((1, 4)), y=jnp.zeros((1, 4))
+        ... )  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        functax.exceptions.GeometryError: 'x' must be at least 2 × 2, ...
     """
 
     x: Float[Array, "row col"] = eqx.field(converter=jnp.asarray)
@@ -608,7 +658,7 @@ class CurvilinearGrid(eqx.Module):
         return (rows, cols)
 
 
-def _optional_array(value: ArrayLike | None) -> jax.Array | None:
+def _optional_array(value: ArrayLike | None) -> Shaped[Array, "*shape"] | None:
     """``jnp.asarray`` that passes ``None`` through."""
     return None if value is None else jnp.asarray(value)
 

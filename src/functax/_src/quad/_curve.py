@@ -10,8 +10,6 @@ from functax._src._backend import require_jax
 
 require_jax(__name__)
 
-from typing import Any
-
 import einx
 import jax.numpy as jnp
 import numpy as np
@@ -59,6 +57,21 @@ class CurveRule(Rule):
         >>> nodes, weights = rule
         >>> weights.tolist(), rule.normals.tolist()
         ([1.0, 1.0], [[-1.0, 0.0], [-1.0, 0.0]])
+
+        Reversing the vertices flips the normals, so a flux changes sign:
+
+        >>> reverse = polyline(jnp.array([[0.0, 2.0], [0.0, 0.0]]), 2)
+        >>> bool(jnp.allclose(reverse.normals, -rule.normals))
+        True
+
+        Normals need 2-D nodes:
+
+        >>> CurveRule(  # doctest: +IGNORE_EXCEPTION_DETAIL
+        ...     jnp.zeros((2, 3)), jnp.ones(2), jnp.zeros((2, 3))
+        ... )
+        Traceback (most recent call last):
+        ...
+        ValidationError: 'normals' are defined for 2-D nodes only
     """
 
     normals: Float[Array, " node dim"] | None = None
@@ -144,7 +157,8 @@ def polyline(
     if rule not in _SEGMENT_RULES:
         msg = f"'rule' must be one of {list(_SEGMENT_RULES)}, got {rule!r}"
         raise ValidationError(msg)
-    points = promote_integers(jnp.asarray(vertices))
+    points = jnp.asarray(vertices)
+    points = promote_integers(points)
     if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] < 1:
         msg = (
             "'vertices' must be (V, D) with at least two vertices and one "
@@ -161,18 +175,23 @@ def polyline(
     # --- segments ---
     # vⱼ₊₁ − vⱼ
     edges = points[1:] - points[:-1]
+    # (vⱼ₊₁ − vⱼ)², coordinate by coordinate
+    squared_edges = edges**2
+    # ℓⱼ² = ∑_d (vⱼ₊₁ − vⱼ)_d²
+    squared_lengths = einx.sum("segment [dim]", squared_edges)
     # ℓⱼ = ‖vⱼ₊₁ − vⱼ‖, with a zero gradient at a zero-length segment
-    squared_lengths = einx.sum("segment [dim]", edges**2)
     lengths = _safe_norm(squared_lengths)
     # tⱼ = (vⱼ₊₁ − vⱼ)/ℓⱼ, and 0 on a zero-length segment
     safe_lengths = jnp.where(lengths > 0, lengths, 1.0)
     tangents = einx.divide("segment dim, segment -> segment dim", edges, safe_lengths)
 
     # --- nodes and weights, segments outer ---
-    # xₖ = vⱼ + τᵢ (vⱼ₊₁ − vⱼ)
+    # τᵢ (vⱼ₊₁ − vⱼ)
     steps = einx.multiply("segment dim, node -> segment node dim", edges, offsets)
+    # xₖ = vⱼ + τᵢ (vⱼ₊₁ − vⱼ)
+    starts = points[:-1]
     nodes = einx.add(
-        "segment dim, segment node dim -> (segment node) dim", points[:-1], steps
+        "segment dim, segment node dim -> (segment node) dim", starts, steps
     )
     # Δsₖ = ℓⱼ ωᵢ
     weights = einx.multiply("segment, node -> (segment node)", lengths, fractions)
@@ -182,21 +201,28 @@ def polyline(
         # nⱼ = R₉₀ tⱼ = (−t_y, t_x)
         tangent_x = tangents[:, 0]
         tangent_y = tangents[:, 1]
+        # −t_y
+        minus_tangent_y = -tangent_y
         segment_normals = einx.id(
-            "segment, segment -> segment (1 + 1)", -tangent_y, tangent_x
+            "segment, segment -> segment (1 + 1)", minus_tangent_y, tangent_x
         )
+        # every node of segment j carries nⱼ
         normals = einx.id(
             "segment dim -> (segment node) dim", segment_normals, node=count
         )
     return CurveRule(nodes, weights, normals)
 
 
-def _unit_rule(count: int, rule: Any) -> tuple[np.ndarray, np.ndarray]:
+def _unit_rule(
+    count: int, rule: str
+) -> tuple[Float[np.ndarray, " node"], Float[np.ndarray, " node"]]:
     """The nodes τᵢ and weights ωᵢ of a segment rule on [0, 1], float64."""
     if rule == "gauss_legendre":
         reference = gauss_legendre(count, interval=(0.0, 1.0))
         return np.asarray(reference.nodes), np.asarray(reference.weights)
-    # τᵢ = (i + ½)/n, ωᵢ = 1/n
-    offsets = (np.arange(count, dtype=np.float64) + 0.5) / count
+    index = np.arange(count, dtype=np.float64)
+    # τᵢ = (i + ½)/n
+    offsets = (index + 0.5) / count
+    # ωᵢ = 1/n
     fractions = np.full(count, 1.0 / count)
     return offsets, fractions

@@ -18,8 +18,8 @@ from functax._src._backend import require_jax
 require_jax(__name__)
 
 from collections.abc import Callable
-from typing import Any
 
+import einx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, ArrayLike, Float, Real
@@ -41,7 +41,7 @@ ScalarField = Callable[[Float[Array, " dim"]], Float[Array, ""]]
 VectorField = Callable[[Float[Array, " dim"]], Float[Array, " component"]]
 
 
-def _check_point(x: Any, name: str = "x") -> jax.Array:
+def _check_point(x: Real[ArrayLike, "*shape"], name: str = "x") -> Float[Array, " dim"]:
     """One point of shape (D,), with integer coordinates made float32."""
     x = jnp.asarray(x)
     if x.ndim != 1:
@@ -56,6 +56,8 @@ def _check_point(x: Any, name: str = "x") -> jax.Array:
 def gradient(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, " dim"]]:
     """The gradient ∇f of a scalar field.
 
+    (∇f)_d = ∂f/∂x_d, by reverse mode (``jax.grad``).
+
     Args:
         f: A scalar field of one point, (D,) → ().
 
@@ -66,11 +68,17 @@ def gradient(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, " 
         ValidationError: When the callable gets more than one point.
 
     Examples:
+        ∇‖x‖² = 2x:
+
+        >>> import einx
         >>> import jax.numpy as jnp
         >>> from functax.diffops import gradient
-        >>> gradient(lambda x: jnp.sum(x**2))(jnp.array([1.0, 2.0])).tolist()
-        [2.0, 4.0]
-        >>> # batch with vmap
+        >>> grad_f = gradient(lambda x: einx.sum("[dim]", x**2))
+        >>> bool(jnp.allclose(grad_f(jnp.array([1.0, 2.0])), jnp.array([2.0, 4.0])))
+        True
+
+        Batch over points with ``vmap``:
+
         >>> import jax
         >>> jax.vmap(gradient(lambda x: x[0] * x[1]))(jnp.ones((3, 2))).shape
         (3, 2)
@@ -78,7 +86,9 @@ def gradient(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, " 
 
     def _gradient(x: Real[ArrayLike, "*shape"]) -> Float[Array, " dim"]:
         x = _check_point(x)
-        return jax.grad(f)(x)
+        grad_f = jax.grad(f)
+        # ∇f(x)
+        return grad_f(x)
 
     return _gradient
 
@@ -101,16 +111,27 @@ def jacobian_field(
         ValidationError: When the callable gets more than one point.
 
     Examples:
+        u = (x₀x₁, x₁) at (2, 3):
+
         >>> import jax.numpy as jnp
         >>> from functax.diffops import jacobian_field
-        >>> J = jacobian_field(lambda x: jnp.array([x[0] * x[1], x[1]]))
-        >>> J(jnp.array([2.0, 3.0])).tolist()
-        [[3.0, 2.0], [0.0, 1.0]]
+        >>> jac = jacobian_field(lambda x: jnp.array([x[0] * x[1], x[1]]))
+        >>> expected = jnp.array([[3.0, 2.0], [0.0, 1.0]])
+        >>> bool(jnp.allclose(jac(jnp.array([2.0, 3.0])), expected))
+        True
+
+        K need not equal D: a field of three components of two coordinates:
+
+        >>> tall = jacobian_field(lambda x: jnp.array([x[0], x[1], x[0] + x[1]]))
+        >>> tall(jnp.ones(2)).shape
+        (3, 2)
     """
 
     def _jacobian(x: Real[ArrayLike, "*shape"]) -> Float[Array, "component dim"]:
         x = _check_point(x)
-        return jax.jacfwd(u)(x)
+        jacobian_u = jax.jacfwd(u)
+        # J_kd = ∂u_k/∂x_d
+        return jacobian_u(x)
 
     return _jacobian
 
@@ -129,16 +150,29 @@ def divergence(u: VectorField) -> Callable[[Float[Array, " dim"]], Float[Array, 
             does not map (D,) to (D,).
 
     Examples:
+        u = (x₀, 2x₁, 3x₂) has ∇ · u = 6 everywhere:
+
         >>> import jax.numpy as jnp
         >>> from functax.diffops import divergence
         >>> div = divergence(lambda x: x * jnp.array([1.0, 2.0, 3.0]))
-        >>> float(div(jnp.zeros(3)))
-        6.0
+        >>> bool(jnp.allclose(div(jnp.zeros(3)), 6.0))
+        True
+
+        ∇ · ∇f is the Laplacian:
+
+        >>> from functax.diffops import gradient, laplacian
+        >>> def f(x):
+        ...     return x[0] ** 2 * x[1]
+        >>> x = jnp.array([0.5, -1.0])
+        >>> bool(jnp.allclose(divergence(gradient(f))(x), laplacian(f)(x)))
+        True
     """
 
     def _divergence(x: Real[ArrayLike, "*shape"]) -> Float[Array, ""]:
         x = _check_point(x)
-        jac = jax.jacfwd(u)(x)
+        jacobian_u = jax.jacfwd(u)
+        # J_kd = ∂u_k/∂x_d
+        jac = jacobian_u(x)
         if jac.shape != (x.shape[0], x.shape[0]):
             msg = (
                 f"divergence needs u: (D,) → (D,), got a Jacobian of shape {jac.shape}"
@@ -165,18 +199,27 @@ def curl2d(u: VectorField) -> Callable[[Float[Array, " 2"]], Float[Array, ""]]:
             does not map (2,) to (2,).
 
     Examples:
+        Solid-body rotation u = (−y, x) has vorticity 2:
+
         >>> import jax.numpy as jnp
         >>> from functax.diffops import curl2d
-        >>> # solid-body rotation has vorticity 2
-        >>> float(
-        ...     curl2d(lambda x: jnp.array([-x[1], x[0]]))(jnp.array([0.3, -0.2]))
-        ... )
-        2.0
+        >>> curl = curl2d(lambda x: jnp.array([-x[1], x[0]]))
+        >>> bool(jnp.allclose(curl(jnp.array([0.3, -0.2])), 2.0))
+        True
+
+        A gradient field is irrotational, ∇ × ∇f = 0:
+
+        >>> from functax.diffops import gradient
+        >>> potential = gradient(lambda x: x[0] ** 2 * x[1])
+        >>> bool(jnp.allclose(curl2d(potential)(jnp.array([0.5, 2.0])), 0.0))
+        True
     """
 
     def _curl(x: Real[ArrayLike, "*shape"]) -> Float[Array, ""]:
         x = _check_point(x)
-        jac = jax.jacfwd(u)(x)
+        jacobian_u = jax.jacfwd(u)
+        # J_kd = ∂u_k/∂x_d
+        jac = jacobian_u(x)
         if jac.shape != (2, 2):
             msg = f"curl2d needs u: (2,) → (2,), got a Jacobian of shape {jac.shape}"
             raise ValidationError(msg)
@@ -193,6 +236,12 @@ def laplacian(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, "
     products (``jax.jvp`` of ``jax.grad``) along the D unit vectors, so the
     dense Hessian is never formed.
 
+    Algorithm:
+        1. Build the reverse-mode gradient ∇f.
+        2. For each unit vector e_d, push it forward through ∇f (``jax.jvp``)
+           to get ∇²f e_d, and take e_dᵀ ∇²f e_d.
+        3. Sum the D curvatures.
+
     Args:
         f: A scalar field of one point, (D,) → ().
 
@@ -203,21 +252,38 @@ def laplacian(f: ScalarField) -> Callable[[Float[Array, " dim"]], Float[Array, "
         ValidationError: When the callable gets more than one point.
 
     Examples:
+        Δ‖x‖² = 2D:
+
+        >>> import einx
         >>> import jax.numpy as jnp
         >>> from functax.diffops import laplacian
-        >>> float(laplacian(lambda x: jnp.sum(x**2))(jnp.array([0.5, -1.0, 2.0])))
-        6.0
+        >>> lap = laplacian(lambda x: einx.sum("[dim]", x**2))
+        >>> bool(jnp.allclose(lap(jnp.array([0.5, -1.0, 2.0])), 6.0))
+        True
+
+        A harmonic function, x₀² − x₁², has Δf = 0:
+
+        >>> harmonic = laplacian(lambda x: x[0] ** 2 - x[1] ** 2)
+        >>> bool(jnp.allclose(harmonic(jnp.array([0.3, 1.2])), 0.0))
+        True
     """
 
     def _laplacian(x: Real[ArrayLike, "*shape"]) -> Float[Array, ""]:
         x = _check_point(x)
         grad_f = jax.grad(f)
 
-        def second(direction: Float[Array, " dim"]) -> Float[Array, ""]:
+        def curvature_along(direction: Float[Array, " dim"]) -> Float[Array, ""]:
+            # ∇²f e_d, a Hessian-vector product, forward over reverse
+            _, hessian_direction = jax.jvp(grad_f, (x,), (direction,))
             # e_dᵀ ∇²f e_d
-            return jnp.vdot(jax.jvp(grad_f, (x,), (direction,))[1], direction)
+            return einx.dot("dim, dim ->", hessian_direction, direction)
 
+        # e_d, the D unit vectors as rows
         directions = jnp.eye(x.shape[0], dtype=x.dtype)
-        return jnp.sum(jax.vmap(second)(directions))
+        curvature_batch = jax.vmap(curvature_along)
+        # ∂²f/∂x_d² for each d
+        curvatures = curvature_batch(directions)
+        # Δf = ∑_d ∂²f/∂x_d²
+        return einx.sum("[dim]", curvatures)
 
     return _laplacian

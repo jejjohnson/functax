@@ -197,7 +197,8 @@ def slice_transform(
     pixel the slice samples. This is geoarray's ``shift_scale_transform``,
     with the same arithmetic, so the two agree bit for bit. Every operation is
     elementwise, so a batch of transforms takes a batch of offsets and steps,
-    and the offsets may be traced.
+    and the offsets may be traced. Integer arrays of offsets or steps are cast
+    to the transform's dtype first, so a float32 transform stays float32.
 
     Args:
         transform: T = (a, b, c, d, e, f), shape ``(*batch, 6)``, NumPy or
@@ -212,9 +213,6 @@ def slice_transform(
 
     Raises:
         GeometryError: If ``transform`` does not end in six.
-
-    Integer arrays of offsets or steps are cast to the transform's dtype
-    first, so a float32 transform stays float32.
 
     Examples:
         >>> import numpy as np
@@ -245,6 +243,7 @@ def slice_transform(
         for value in (row0, col0, row_step, col_step)
     )
     a, b, c, d, e, f = (transform[..., k] for k in range(6))
+    # T′ = (a s_c, b sᵣ, c + a c₀ + b r₀, d s_c, e sᵣ, f + d c₀ + e r₀)
     coefficients = (
         a * col_step,
         b * row_step,
@@ -279,6 +278,15 @@ def pixel_centres(grid: Any) -> tuple[Any, Any]:
         [[5.0, 15.0, 25.0], [5.0, 15.0, 25.0]]
         >>> y.tolist()
         [[95.0, 95.0, 95.0], [85.0, 85.0, 85.0]]
+
+        A centre is `from_pixel` at the integer (row, col) of its pixel:
+
+        >>> import numpy as np
+        >>> from functax.geometry import from_pixel
+        >>> transform = np.asarray(grid.transform)
+        >>> centre = from_pixel(transform, np.array([1.0, 2.0]))
+        >>> bool(np.array_equal(centre, np.array([x[1, 2], y[1, 2]])))
+        True
     """
     transform = grid.transform
     xp = namespace(transform)
@@ -340,6 +348,18 @@ def window(
         ... )
         >>> window(grid, (600100, 3549000, 600400, 3549900))
         (slice(5, 50, None), slice(5, 20, None))
+
+        A corner within ``atol`` pixels of a pixel edge snaps to it:
+
+        >>> window(grid, (600099.99999, 3549000, 600400, 3549900))
+        (slice(5, 50, None), slice(5, 20, None))
+
+        Bounds with min > max are rejected:
+
+        >>> window(grid, (1.0, 0.0, 0.0, 1.0))  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        ...
+        GeometryError: 'bounds' must be (x_min, y_min, x_max, y_max) with min ≤ max
     """
     values = tuple(float(v) for v in bounds)
     if len(values) != 4 or values[0] > values[2] or values[1] > values[3]:
@@ -363,8 +383,10 @@ def window(
     inverse_d = -d / determinant
     inverse_e = a / determinant
     inverse_f = (c * d - a * f) / determinant
+    # j = a⁻ x + b⁻ y + c⁻ and i = d⁻ x + e⁻ y + f⁻ at each corner
     cols = [inverse_a * x + inverse_b * y + inverse_c for x, y in corners]
     rows = [inverse_d * x + inverse_e * y + inverse_f for x, y in corners]
+    # round outward to whole pixels, after snapping near-edges
     row_start = math.floor(_snap(min(rows), atol))
     row_stop = math.ceil(_snap(max(rows), atol))
     col_start = math.floor(_snap(min(cols), atol))

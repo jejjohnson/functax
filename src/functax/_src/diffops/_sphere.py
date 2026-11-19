@@ -15,7 +15,6 @@ from functax._src._backend import require_jax
 require_jax(__name__)
 
 from collections.abc import Callable
-from typing import Any
 
 import einx
 import jax
@@ -37,20 +36,31 @@ __all__ = [
 
 def _unit(x: Float[Array, " 3"]) -> Float[Array, " 3"]:
     """x/‖x‖; the origin has no direction and maps to itself, with finite gradients."""
-    squared = jnp.sum(x**2)
-    return x / jnp.where(squared > 0.0, _safe_norm(squared), 1.0)
+    squares = x**2
+    # ‖x‖² = ∑_d x_d²
+    squared = einx.sum("[dim]", squares)
+    has_direction = squared > 0.0
+    # ‖x‖
+    norm = _safe_norm(squared)
+    # ‖x‖, or 1 at the origin, so that 0/1 = 0 keeps the gradient finite
+    divisor = jnp.where(has_direction, norm, 1.0)
+    # x/‖x‖
+    return x / divisor
 
 
 def _radial_extension(f: ScalarField) -> ScalarField:
     """g(x) = f(x/‖x‖), constant along rays."""
 
     def extension(x: Float[Array, " 3"]) -> Float[Array, ""]:
-        return f(_unit(x))
+        # x/‖x‖
+        direction = _unit(x)
+        # g(x) = f(x/‖x‖)
+        return f(direction)
 
     return extension
 
 
-def _check_sphere_point(n: Any) -> jax.Array:
+def _check_sphere_point(n: Real[ArrayLike, "*shape"]) -> Float[Array, " 3"]:
     """One 3-D point, projected onto the unit sphere."""
     n = _check_point(n, "n")
     if n.shape[0] != 3:
@@ -69,6 +79,12 @@ def surface_grad(f: ScalarField) -> Callable[[Float[Array, " 3"]], Float[Array, 
     returns a finite but meaningless value (with finite gradients, so masked
     padding is safe).
 
+    Algorithm:
+        1. Extend f radially, g(x) = f(x/‖x‖).
+        2. Project the input onto the sphere, n = x/‖x‖.
+        3. Take ∇g(n) by reverse mode.
+        4. Remove its normal part: ∇_S f = ∇g − n (nᵀ∇g).
+
     Args:
         f: A field of a unit vector, (3,) → ().
 
@@ -80,19 +96,33 @@ def surface_grad(f: ScalarField) -> Callable[[Float[Array, " 3"]], Float[Array, 
         ValidationError: When the callable gets anything but one 3-D point.
 
     Examples:
+        f = sin(latitude): at the equator its gradient points due north:
+
         >>> import jax.numpy as jnp
         >>> from functax.diffops import surface_grad
-        >>> # f = sin(latitude): at the equator its gradient points due north
-        >>> surface_grad(lambda n: n[2])(jnp.array([1.0, 0.0, 0.0])).tolist()
-        [0.0, 0.0, 1.0]
+        >>> grad_s = surface_grad(lambda n: n[2])
+        >>> equator = jnp.array([1.0, 0.0, 0.0])
+        >>> bool(jnp.allclose(grad_s(equator), jnp.array([0.0, 0.0, 1.0])))
+        True
+
+        Any non-zero vector stands for its direction:
+
+        >>> bool(jnp.allclose(grad_s(3.0 * equator), grad_s(equator)))
+        True
     """
     extension = _radial_extension(f)
+    grad_extension = jax.grad(extension)
 
     def _surface_grad(n: Real[ArrayLike, "*shape"]) -> Float[Array, " 3"]:
         n = _check_sphere_point(n)
-        ambient = jax.grad(extension)(n)
-        # (I − n nᵀ) ∇g
-        return ambient - n * jnp.vdot(n, ambient)
+        # ∇g(n)
+        ambient = grad_extension(n)
+        # nᵀ∇g
+        radial = einx.dot("dim, dim ->", n, ambient)
+        # n nᵀ∇g
+        normal_part = n * radial
+        # ∇_S f = (I − n nᵀ) ∇g
+        return ambient - normal_part
 
     return _surface_grad
 
@@ -123,12 +153,20 @@ def surface_grad_enu(
         ValidationError: When the callable gets anything but one (λ, φ).
 
     Examples:
+        f = sin(latitude) at (30°, 0°): due north, with unit length:
+
         >>> import jax.numpy as jnp
         >>> from functax.diffops import surface_grad_enu
-        >>> # f = sin(latitude) at (30°, 0°): due north, with unit length
+        >>> north = jnp.array([0.0, 1.0])
         >>> d = surface_grad_enu(lambda n: n[2], unit="degrees")
-        >>> [round(float(v), 12) + 0.0 for v in d(jnp.array([30.0, 0.0]))]
-        [0.0, 1.0]
+        >>> bool(jnp.allclose(d(jnp.array([30.0, 0.0])), north))
+        True
+
+        The same point in radians:
+
+        >>> d_rad = surface_grad_enu(lambda n: n[2], unit="radians")
+        >>> bool(jnp.allclose(d_rad(jnp.array([jnp.pi / 6, 0.0])), north))
+        True
     """
     _check_unit(unit)
     gradient_on_sphere = surface_grad(f)
@@ -138,11 +176,20 @@ def surface_grad_enu(
         if lonlat.shape[0] != 2:
             msg = f"'lonlat' must have shape (2,), got {lonlat.shape}"
             raise ValidationError(msg)
-        points = einx.id("coordinate -> 1 coordinate", lonlat)
-        n = lonlat_to_unit(points, unit=unit)[0]
+        points = einx.id("dim -> 1 dim", lonlat)
+        # n(λ, φ)
+        units = lonlat_to_unit(points, unit=unit)
+        n = units[0]
         # the rows ê, n̂, û at the point
-        frame = enu_basis(points, unit=unit)[0]
-        return einx.dot("axis dim, dim -> axis", frame[:2], gradient_on_sphere(n))
+        frames = enu_basis(points, unit=unit)
+        frame = frames[0]
+        tangent_frame = frame[:2]
+        # ∇_S f(n)
+        surface_gradient = gradient_on_sphere(n)
+        # (êᵀ ∇_S f, n̂ᵀ ∇_S f)
+        return einx.dot(
+            "component dim, dim -> component", tangent_frame, surface_gradient
+        )
 
     return _surface_grad_enu
 
@@ -157,6 +204,11 @@ def laplace_beltrami(
     Δ_S f(n) = Δg(n) at ‖n‖ = 1. The spherical harmonics are its
     eigenfunctions, Δ_S Y_l^m = −l(l + 1) Y_l^m.
 
+    Algorithm:
+        1. Extend f radially, g(x) = f(x/‖x‖).
+        2. Project the input onto the sphere, n = x/‖x‖.
+        3. Δ_S f(n) = Δg(n), by `laplacian`.
+
     Args:
         f: A field of a unit vector, (3,) → ().
 
@@ -168,17 +220,27 @@ def laplace_beltrami(
         ValidationError: When the callable gets anything but one 3-D point.
 
     Examples:
+        f = z is Y_1^0 up to a constant: the eigenvalue is −l(l + 1) = −2:
+
         >>> import jax.numpy as jnp
         >>> from functax.diffops import laplace_beltrami
-        >>> # f = z is Y_1^0 up to a constant: the eigenvalue is −l(l + 1) = −2
         >>> n = jnp.array([0.6, 0.0, 0.8])
-        >>> round(float(laplace_beltrami(lambda m: m[2])(n)) / float(n[2]), 12)
-        -2.0
+        >>> degree_one = laplace_beltrami(lambda m: m[2])
+        >>> bool(jnp.allclose(degree_one(n), -2.0 * n[2]))
+        True
+
+        f = 3z² − 1 is Y_2^0 up to a constant, with eigenvalue −6:
+
+        >>> degree_two = laplace_beltrami(lambda m: 3.0 * m[2] ** 2 - 1.0)
+        >>> bool(jnp.allclose(degree_two(n), -6.0 * (3.0 * n[2] ** 2 - 1.0)))
+        True
     """
-    lap = laplacian(_radial_extension(f))
+    extension = _radial_extension(f)
+    lap = laplacian(extension)
 
     def _laplace_beltrami(n: Real[ArrayLike, "*shape"]) -> Float[Array, ""]:
         n = _check_sphere_point(n)
+        # Δ_S f(n) = Δg(n)
         return lap(n)
 
     return _laplace_beltrami
