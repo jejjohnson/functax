@@ -1,0 +1,7 @@
+- **Provides.** Basis functions evaluated at points, as a design matrix Φ of shape `(N, D)`: f̂(x) = ∑ⱼ cⱼ φⱼ(x).
+- **Nouns.** On a box: `functax.basis.fourier.fourier_basis`, `functax.basis.local.rbf_basis`, `functax.basis.local.wavelet_basis_1d`, `functax.basis.features.fourier_features`. On the sphere: `functax.basis.sphere.real_spherical_harmonics`, `functax.basis.sphere.needlet_basis`, `functax.basis.slepian.slepian_cap_basis`. From data: `functax.basis.eigen.eof_basis`.
+- **Verbs.** Call the function with the points to get Φ; fit with `functax.project.least_squares(Φ, y)`; evaluate with `Φ @ c`.
+- **Adverbs.** `boundary=` on the box eigenfunctions (`"dirichlet"` by default); `l_max=` sets the degree on the sphere, and `(l_max + 1)²` columns.
+- **Keep.** Points on the sphere go in as unit vectors `(N, 3)`, from `functax.geometry.lonlat_to_unit`; several constructors return the eigenvalues or the degrees with Φ, so unpack the tuple.
+- **Never.** Import a family from `functax.basis` itself: each lives in its submodule, `functax.basis.fourier`, `functax.basis.sphere` and so on.
+- **One rung down.** Open `functax:bases-quadrature-and-transforms` to choose a family or to build a Slepian basis for a region.

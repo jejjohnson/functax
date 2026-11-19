@@ -1,0 +1,7 @@
+- **Provides.** Transforms between nodal values and spectral coefficients, built once and applied many times.
+- **Nouns.** `functax.transform.ChebyshevTransform1D`, `functax.transform.ChebyshevTransform2D`, `functax.transform.SphericalHarmonicTransform`, `functax.transform.SphericalWaveletTransform`.
+- **Verbs.** `to_spectral` and `from_spectral` on the Chebyshev transforms; `forward` and `inverse` on the spherical ones; `functax.transform.nonuniform_rfft` and `functax.transform.nonuniform_irfft` between scattered points and a truncated spectrum.
+- **Adverbs.** `kind="lobatto"` or `"gauss"` chooses the Chebyshev nodes, which must match `functax.geometry.chebyshev_nodes`.
+- **Keep.** Build the spherical transforms with their `init` constructor, not with the dataclass fields; the nodal values live on the grid the transform was built for.
+- **Never.** Hand-roll a DCT for Chebyshev coefficients or a quadrature loop for spherical-harmonic analysis.
+- **One rung down.** Open `functax:bases-quadrature-and-transforms` for the grids each transform expects and for the non-uniform transforms.

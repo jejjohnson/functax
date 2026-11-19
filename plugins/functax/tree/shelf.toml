@@ -1,0 +1,335 @@
+# functax's shelf: its modules, its listed skills, its units and its entries.
+#
+# Every public name of every module below belongs to exactly one entry (gate
+# SH-1), and the entry's file names it. scripts/skill_shelf.py writes the
+# generated parts of the three SKILL.md files from this file and checks the gates.
+
+# Where the public names are read from: module = its file, from the root.
+[modules]
+"functax" = "src/functax/__init__.py"
+"functax.exceptions" = "src/functax/exceptions.py"
+"functax.geometry" = "src/functax/geometry/__init__.py"
+"functax.geometry.affine" = "src/functax/geometry/affine.py"
+"functax.interp" = "src/functax/interp.py"
+"functax.basis" = "src/functax/basis/__init__.py"
+"functax.basis.eigen" = "src/functax/basis/eigen.py"
+"functax.basis.features" = "src/functax/basis/features.py"
+"functax.basis.fourier" = "src/functax/basis/fourier.py"
+"functax.basis.local" = "src/functax/basis/local.py"
+"functax.basis.polynomial" = "src/functax/basis/polynomial.py"
+"functax.basis.slepian" = "src/functax/basis/slepian.py"
+"functax.basis.sphere" = "src/functax/basis/sphere.py"
+"functax.basis.vector" = "src/functax/basis/vector.py"
+"functax.quad" = "src/functax/quad.py"
+"functax.diffops" = "src/functax/diffops.py"
+"functax.project" = "src/functax/project.py"
+"functax.transform" = "src/functax/transform.py"
+
+[skills.function-approximation-with-functax]
+builds_on_units = []
+
+[skills.interpolation-with-functax]
+builds_on_units = ["geometry"]
+
+[skills.bases-quadrature-and-transforms]
+builds_on_units = ["geometry"]
+
+[units.geometry]
+title = "Geometry"
+rungs = "⓪"
+skill = "function-approximation-with-functax"
+
+[units.errors]
+title = "Errors and installs"
+rungs = "⓪"
+skill = "function-approximation-with-functax"
+
+[units.interp]
+title = "Interpolation"
+rungs = "① ②, setup"
+skill = "interpolation-with-functax"
+
+[units.basis]
+title = "Bases"
+rungs = "①"
+skill = "bases-quadrature-and-transforms"
+
+[units.quad]
+title = "Quadrature"
+rungs = "⓪ ①"
+skill = "bases-quadrature-and-transforms"
+
+[units.diffops]
+title = "Differential operators"
+rungs = "①"
+skill = "bases-quadrature-and-transforms"
+
+[units.project]
+title = "Projection"
+rungs = "① ④"
+skill = "bases-quadrature-and-transforms"
+
+[units.transform]
+title = "Transforms"
+rungs = "setup"
+skill = "bases-quadrature-and-transforms"
+
+[[entries]]
+file = "grids-and-points"
+title = "Axes, grids and point sets"
+role = "structure"
+unit = "geometry"
+skill = "function-approximation-with-functax"
+covers = "the axis, the three grids, scattered points with their metric, pairwise distances and Chebyshev nodes"
+names = [
+    "functax.geometry.AffineGrid", "functax.geometry.Axis",
+    "functax.geometry.CurvilinearGrid", "functax.geometry.Metric",
+    "functax.geometry.Points", "functax.geometry.RectilinearGrid",
+    "functax.geometry.chebyshev_nodes", "functax.geometry.pairwise_distance",
+]
+
+[[entries]]
+file = "sphere-points-and-frames"
+title = "Points and frames on the sphere"
+role = "primitive"
+unit = "geometry"
+skill = "function-approximation-with-functax"
+covers = "lon/lat to unit vectors and ECEF, local east/north/up frames, great-circle distances, sphere point sets with weights, the icosphere"
+names = [
+    "functax.geometry.cartesian_to_tangent", "functax.geometry.chord_distance",
+    "functax.geometry.ecef_to_lonlat", "functax.geometry.enu_basis",
+    "functax.geometry.fibonacci_sphere", "functax.geometry.gauss_legendre_grid",
+    "functax.geometry.geodesic_distance", "functax.geometry.healpix_grid",
+    "functax.geometry.icosphere", "functax.geometry.latlon_grid",
+    "functax.geometry.local_tangent_plane", "functax.geometry.lonlat_to_ecef",
+    "functax.geometry.lonlat_to_unit", "functax.geometry.mesh_vertex_areas",
+    "functax.geometry.rotation_to_pole", "functax.geometry.spherical_polygon_area",
+    "functax.geometry.tangent_to_cartesian", "functax.geometry.unit_to_lonlat",
+]
+
+[[entries]]
+file = "affine-rasters"
+title = "Affine raster maths"
+role = "primitive"
+unit = "geometry"
+skill = "function-approximation-with-functax"
+covers = "pixel to coordinate and back, pixel centres, windows and slices of a raster, on NumPy alone"
+names = [
+    "functax.geometry.affine.from_pixel", "functax.geometry.affine.pixel_centres",
+    "functax.geometry.affine.slice_transform", "functax.geometry.affine.to_pixel",
+    "functax.geometry.affine.window", "functax.geometry.from_pixel",
+    "functax.geometry.pixel_centres", "functax.geometry.slice_transform",
+    "functax.geometry.to_pixel", "functax.geometry.window",
+]
+
+[[entries]]
+file = "errors-and-installs"
+title = "Errors and the two installs"
+role = "structure"
+unit = "errors"
+skill = "function-approximation-with-functax"
+covers = "the exception hierarchy, the NumPy-only base install and the jax extra"
+names = [
+    "functax.FunctaxError", "functax.GeometryError", "functax.MissingExtraError",
+    "functax.NonlinearSchemeError", "functax.OutsideDomainError", "functax.PolicyError",
+    "functax.ValidationError", "functax.__version__", "functax.exceptions.FunctaxError",
+    "functax.exceptions.GeometryError", "functax.exceptions.MissingExtraError",
+    "functax.exceptions.NonlinearSchemeError", "functax.exceptions.OutsideDomainError",
+    "functax.exceptions.PolicyError", "functax.exceptions.ValidationError",
+]
+
+[[entries]]
+file = "schemes"
+title = "Schemes and policies"
+role = "strategy"
+unit = "interp"
+skill = "interpolation-with-functax"
+covers = "which interpolation to use on a grid, an axis or scattered points, and what happens off the domain, at NaN and at the edges"
+names = [
+    "functax.interp.Akima", "functax.interp.BSpline", "functax.interp.Chebyshev",
+    "functax.interp.Cubic", "functax.interp.CubicSpline", "functax.interp.Delaunay",
+    "functax.interp.Fourier", "functax.interp.InverseDistance", "functax.interp.Linear",
+    "functax.interp.LocalScheme", "functax.interp.Nearest", "functax.interp.Pchip",
+    "functax.interp.Policies", "functax.interp.Scheme", "functax.interp.SeriesScheme",
+    "functax.interp.Steffen", "functax.interp.Tensor",
+]
+
+[[entries]]
+file = "plans-and-adjoints"
+title = "Plans, adjoints and interpolants"
+role = "setup"
+unit = "interp"
+skill = "interpolation-with-functax"
+covers = "a scheme frozen for one source and one target, its adjoint, derivative, window and composition, and fields read at targets chosen in the trace"
+names = [
+    "functax.interp.ChebyshevInterpolant", "functax.interp.ComposedPlan",
+    "functax.interp.DerivativePlan", "functax.interp.Interpolant",
+    "functax.interp.NonlinearDerivativePlan", "functax.interp.NonlinearPlan",
+    "functax.interp.Plan", "functax.interp.SeriesInterpolant",
+    "functax.interp.WindowedPlan", "functax.interp.plan_key",
+]
+
+[[entries]]
+file = "gridding-and-remapping"
+title = "Gridding and conservative remapping"
+role = "strategy"
+unit = "interp"
+skill = "interpolation-with-functax"
+covers = "binning scattered samples into cells and area-weighted remapping between grids"
+names = [
+    "functax.interp.Binning", "functax.interp.BinningPlan",
+    "functax.interp.Conservative", "functax.interp.TransposedStencil",
+    "functax.interp.overlap_weights_1d",
+]
+
+[[entries]]
+file = "kernels-and-kriging"
+title = "Kernel interpolation and kriging"
+role = "strategy"
+unit = "interp"
+skill = "interpolation-with-functax"
+covers = "radial basis functions with a polynomial tail, kriging with a posterior covariance, and the kernels they take"
+names = [
+    "functax.interp.BrownianBridge", "functax.interp.GaussianPlan",
+    "functax.interp.Kernel", "functax.interp.KernelCovariance",
+    "functax.interp.KernelReadout", "functax.interp.KernelSolve",
+    "functax.interp.Kriging", "functax.interp.Polyharmonic",
+    "functax.interp.PosteriorCovariance", "functax.interp.RBF",
+    "functax.interp.RadialKernel", "functax.interp.Wendland",
+]
+
+[[entries]]
+file = "stencils-and-extension-points"
+title = "Stencils and extension points"
+role = "primitive"
+unit = "interp"
+skill = "interpolation-with-functax"
+covers = "the sparse read-out, the per-axis bases, fits, prefilters and locate functions a new scheme is built from"
+names = [
+    "functax.interp.BSplineBasis", "functax.interp.BandedPrefilter",
+    "functax.interp.Basis", "functax.interp.ChebyshevFit", "functax.interp.CubicBasis",
+    "functax.interp.Fit", "functax.interp.FourierReadout", "functax.interp.HermiteFit",
+    "functax.interp.HermiteGeometry", "functax.interp.Identity",
+    "functax.interp.LinearBasis", "functax.interp.LocalGeometry",
+    "functax.interp.NearestBasis", "functax.interp.ReadGeometry",
+    "functax.interp.Readout", "functax.interp.Stencil", "functax.interp.bspline",
+    "functax.interp.check_outside", "functax.interp.clenshaw", "functax.interp.compose",
+    "functax.interp.index_positions", "functax.interp.locate",
+    "functax.interp.locate_curvilinear", "functax.interp.remap_taps",
+    "functax.interp.spline_poles", "functax.interp.tensor_stencil",
+]
+
+[[entries]]
+file = "bases-on-boxes"
+title = "Bases on lines and boxes"
+role = "primitive"
+unit = "basis"
+skill = "bases-quadrature-and-transforms"
+covers = "Laplacian eigenfunctions, Fourier and seasonal features, Legendre functions, radial bases, Gabor frames, wavelets and vector atoms"
+names = [
+    "functax.basis.features.fourier_features",
+    "functax.basis.features.gaussian_window_features",
+    "functax.basis.features.rff_cosine_forward", "functax.basis.features.rff_forward",
+    "functax.basis.features.seasonal_features",
+    "functax.basis.features.seasonal_frequencies",
+    "functax.basis.fourier.fourier_basis", "functax.basis.fourier.fourier_basis_1d",
+    "functax.basis.fourier.fourier_eigenvalues",
+    "functax.basis.fourier.fourier_eigenvalues_1d", "functax.basis.local.gabor_frame",
+    "functax.basis.local.gabor_frame_grid", "functax.basis.local.rbf_basis",
+    "functax.basis.local.spherical_rbf_basis", "functax.basis.local.wavelet_basis_1d",
+    "functax.basis.local.wavelet_basis_2d", "functax.basis.local.wendland_c2",
+    "functax.basis.local.wendland_c4", "functax.basis.polynomial.associated_legendre",
+    "functax.basis.polynomial.associated_legendre_indices",
+    "functax.basis.polynomial.legendre_polynomials",
+    "functax.basis.polynomial.legendre_series", "functax.basis.vector.curlfree_basis",
+    "functax.basis.vector.divfree_basis",
+]
+
+[[entries]]
+file = "bases-on-the-sphere"
+title = "Bases on the sphere"
+role = "primitive"
+unit = "basis"
+skill = "bases-quadrature-and-transforms"
+covers = "real and vector spherical harmonics, needlets, shell bases and Slepian functions of a cap or a region"
+names = [
+    "functax.basis.slepian.SlepianBasis", "functax.basis.slepian.SlepianCapBasis",
+    "functax.basis.slepian.shannon_number", "functax.basis.slepian.slepian_cap_basis",
+    "functax.basis.slepian.slepian_cap_eigh_per_m",
+    "functax.basis.slepian.slepian_concentration_matrix",
+    "functax.basis.slepian.slepian_polar_gap_basis",
+    "functax.basis.slepian.slepian_region_basis",
+    "functax.basis.slepian.spherical_polygon_mask",
+    "functax.basis.sphere.harmonic_degrees", "functax.basis.sphere.needlet_basis",
+    "functax.basis.sphere.needlet_window",
+    "functax.basis.sphere.real_spherical_harmonics", "functax.basis.sphere.shell_basis",
+    "functax.basis.sphere.vector_spherical_harmonics",
+]
+
+[[entries]]
+file = "data-driven-bases"
+title = "Bases from data, graphs and meshes"
+role = "primitive"
+unit = "basis"
+skill = "bases-quadrature-and-transforms"
+covers = "empirical orthogonal functions and the eigenpairs of a graph or a mesh Laplacian"
+names = [
+    "functax.basis.eigen.cotangent_laplacian_eigpairs", "functax.basis.eigen.eof_basis",
+    "functax.basis.eigen.graph_laplacian_eigpairs",
+]
+
+[[entries]]
+file = "quadrature"
+title = "Quadrature rules"
+role = "structure"
+unit = "quad"
+skill = "bases-quadrature-and-transforms"
+covers = "rules as data on an interval, a sphere, a curve and the cells of a grid"
+names = [
+    "functax.quad.CurveRule", "functax.quad.Rule", "functax.quad.SphereRule",
+    "functax.quad.cell_area", "functax.quad.clenshaw_curtis",
+    "functax.quad.gauss_legendre", "functax.quad.polyline", "functax.quad.simpson",
+    "functax.quad.sphere_fibonacci", "functax.quad.sphere_gauss_legendre",
+    "functax.quad.sphere_healpix", "functax.quad.sphere_latlon",
+    "functax.quad.trapezoid",
+]
+
+[[entries]]
+file = "derivatives"
+title = "Derivatives of fields"
+role = "primitive"
+unit = "diffops"
+skill = "bases-quadrature-and-transforms"
+covers = "gradient, divergence, curl, Laplacian and Jacobian of a callable field, and the surface operators on the sphere"
+names = [
+    "functax.diffops.curl2d", "functax.diffops.divergence", "functax.diffops.gradient",
+    "functax.diffops.jacobian_field", "functax.diffops.laplace_beltrami",
+    "functax.diffops.laplacian", "functax.diffops.surface_grad",
+    "functax.diffops.surface_grad_enu",
+]
+
+[[entries]]
+file = "projection-and-fits"
+title = "Projection and gap filling"
+role = "algorithm"
+unit = "project"
+skill = "bases-quadrature-and-transforms"
+covers = "ridge least squares, Galerkin projection, the variational smoothing fit and Laplace gap filling"
+names = [
+    "functax.project.Variational", "functax.project.fill_gaps",
+    "functax.project.galerkin", "functax.project.least_squares",
+]
+
+[[entries]]
+file = "transforms"
+title = "Transforms"
+role = "setup"
+unit = "transform"
+skill = "bases-quadrature-and-transforms"
+covers = "Chebyshev, spherical-harmonic and spherical-wavelet transforms, and non-uniform Fourier transforms"
+names = [
+    "functax.transform.ChebyshevTransform1D", "functax.transform.ChebyshevTransform2D",
+    "functax.transform.SphericalHarmonicTransform",
+    "functax.transform.SphericalWaveletTransform", "functax.transform.nonuniform_irfft",
+    "functax.transform.nonuniform_rfft",
+]

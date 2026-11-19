@@ -320,6 +320,10 @@ sequence = ["docs", { cmd = "uv run python -m http.server 8000 --directory publi
 help = "Regenerate docs/api/capabilities.md (every public name, for reuse)"
 cmd = "uv run python scripts/capabilities.py"
 
+[tool.poe.tasks.skill-shelf]
+help = "Regenerate the generated parts of the plugin's skills (plugins/functax)"
+cmd = "uv run python scripts/skill_shelf.py"
+
 # --- GitHub housekeeping ----------------------------------------------------
 
 [tool.poe.tasks.gh-labels]
