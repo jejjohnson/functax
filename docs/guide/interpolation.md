@@ -74,7 +74,7 @@ plan.read.n_taps  # 4: one frame, then 2 × 2 in space
 
 ## Moving targets: Interpolant vs Plan
 
-A plan freezes its targets when it is built, which suits fixed observations: pay the locate and the weights once, then apply the plan to every field and send residuals back with its adjoint. Particles that move at every step need the opposite, a fitted field read at targets chosen inside the trace. `scheme.fit(source, data)` returns an `Interpolant`: it keeps the coefficients (the prefiltered ones for a B-spline) and locates, weighs and gathers at every call, so it runs inside `jit`, `vmap`, `grad` and `lax.scan` without a rebuild.
+A plan freezes its targets when it is built, which suits fixed observations: pay the locate and the weights once, then apply the plan to every field and send residuals back with its adjoint. Particles that move at every step need the opposite, a fitted field read at targets chosen inside the trace. `scheme.fit(source, data)` returns an `Interpolant`: it keeps the coefficients (the prefiltered ones for a B-spline, the samples and their slopes for a 1-D series scheme) and locates, weighs and gathers at every call, so it runs inside `jit`, `vmap`, `grad` and `lax.scan` without a rebuild.
 
 ```python
 import einx
