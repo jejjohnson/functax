@@ -27,6 +27,7 @@ __all__ = [
     "EXTENT",
     "MISSING",
     "OUTSIDE",
+    "SPACING",
     "Policies",
 ]
 
@@ -42,6 +43,9 @@ BOUNDARY: tuple[str, ...] = ("mirror", "wrap", "edge", "constant")
 
 EXTENT: tuple[str, ...] = ("nodes", "cells")
 """Where the domain ends: at the end nodes, or half a cell beyond them."""
+
+SPACING: tuple[str, ...] = ("coordinates", "index")
+"""What a kernel wider than one cell does on an unevenly spaced axis."""
 
 
 def _canonical_fill(value: float | int) -> float | int:
@@ -84,6 +88,12 @@ class Policies(eqx.Module):
             union of pixel areas, half a cell wider at each end.
         fill_value: Written at invalid rows (and at missing samples under
             ``missing="fill"``); NaN by default.
+        spacing: On an unevenly spaced axis, for a kernel wider than one cell
+            (`Cubic`, and `BSpline` from order 2). Those kernels weigh their
+            taps by index position, so on uneven nodes f̂ does not reproduce
+            even f(x) = x. ``"coordinates"`` refuses such an axis with a
+            `GeometryError`; ``"index"`` reads it in index space. A traced
+            axis cannot be checked and is read in index space.
 
     Raises:
         PolicyError: If a field names an option that does not exist, or
@@ -108,6 +118,7 @@ class Policies(eqx.Module):
     fill_value: float | int = eqx.field(
         static=True, default=math.nan, converter=_canonical_fill
     )
+    spacing: str = eqx.field(static=True, default="coordinates")
 
     def __check_init__(self) -> None:
         for name, options in (
@@ -115,6 +126,7 @@ class Policies(eqx.Module):
             ("missing", MISSING),
             ("boundary", BOUNDARY),
             ("extent", EXTENT),
+            ("spacing", SPACING),
         ):
             value = getattr(self, name)
             if value not in options:

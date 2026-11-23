@@ -40,6 +40,7 @@ from functax._src.interp._locate import (
     index_positions,
     remap_taps,
     require_cell_widths,
+    require_even_spacing,
     require_no_repeats,
 )
 from functax._src.interp._policies import Policies
@@ -132,17 +133,26 @@ def check_local_source(
 ) -> None:
     """Refuse what a tensor read-out cannot do on ``source``, before it is built.
 
-    A one-node axis needs ``edges`` under ``extent="cells"``, and only the
-    nearest and linear bases read an axis with repeated nodes.
+    A one-node axis needs ``edges`` under ``extent="cells"``, only the
+    nearest and linear bases read an axis with repeated nodes, and a basis
+    with taps outside the target's cell reads an unevenly spaced axis only
+    under ``spacing="index"``.
 
     Raises:
         GeometryError: If a one-node axis has no edges under
-            ``extent="cells"``, or an axis read by another basis repeats.
+            ``extent="cells"``, an axis read by another basis repeats, or an
+            axis read by a wider basis is unevenly spaced.
     """
     require_cell_widths(source, policies.extent)
     for index, basis in enumerate(bases):
+        name = type(basis).__name__
         if not isinstance(basis, NearestBasis | LinearBasis):
-            require_no_repeats(source, type(basis).__name__, axes=(index,))
+            require_no_repeats(source, name, axes=(index,))
+        # within one cell the offset is affine in x, so the read-out follows it
+        first_tap, last_tap = basis.support
+        is_wider = first_tap < 0 or last_tap > 1
+        if is_wider and policies.spacing == "coordinates":
+            require_even_spacing(source, name, axes=(index,))
 
 
 def coordinates_to_positions(

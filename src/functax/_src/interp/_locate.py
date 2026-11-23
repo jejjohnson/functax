@@ -41,8 +41,14 @@ __all__ = [
     "locate",
     "remap_taps",
     "require_cell_widths",
+    "require_even_spacing",
     "require_no_repeats",
 ]
+
+
+# a spacing within 10⁻³ of the mean counts as even for a wide kernel: f(x) = x is
+# then read to 2 × 10⁻⁴ of a cell (measured for Cubic and BSpline(3))
+_EVEN_RTOL = 1e-3
 
 
 def _ascending(axis: Axis) -> tuple[Float[Array, " node"], bool | Bool[Array, ""]]:
@@ -193,6 +199,73 @@ def require_no_repeats(source: Any, reader: str, *, axes: Any = None) -> None:
             msg = (
                 f"{reader} cannot read repeated nodes, but axis {index} repeats "
                 f"x[{first}] = x[{first + 1}] = {float(values[first])!r}"
+            )
+            raise GeometryError(msg)
+
+
+def require_even_spacing(source: Any, reader: str, *, axes: Any = None) -> None:
+    """Raise when an axis that ``reader`` reads in index space is unevenly spaced.
+
+    With Δₖ = xₖ₊₁ − xₖ the spacings (and, on a periodic axis, the wrap gap
+    from the last node to the first one plus P) and Δ̄ their mean, an axis is
+    uneven when max |Δₖ − Δ̄| > τ |Δ̄|. τ is the larger of 10⁻³ and
+    2 ε max(|xₖ|, P) / |Δ̄|, with ε the machine epsilon of the nodes' dtype,
+    since rounding alone moves each spacing by up to ε max(|xₖ|, P). A traced
+    axis cannot be checked, and passes.
+
+    Args:
+        source: The geometry: an `Axis` or a grid with ``axes``; other grids
+            are read in index space by definition and pass.
+        reader: The basis' name, for the message.
+        axes: The indices of the axes to check; every axis when ``None``.
+
+    Raises:
+        GeometryError: If a checked axis is concrete and uneven.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from functax.geometry import Axis
+        >>> from functax._src.interp._locate import require_even_spacing
+        >>> require_even_spacing(Axis(jnp.linspace(0.0, 1.0, 11)), "CubicBasis")
+        >>> require_even_spacing(
+        ...     Axis(jnp.array([0.0, 1.0, 3.0])), "CubicBasis"
+        ... )  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+        functax.exceptions.GeometryError: CubicBasis reads in index space, ...
+    """
+    all_axes = (source,) if isinstance(source, Axis) else getattr(source, "axes", ())
+    indices = range(len(all_axes)) if axes is None else axes
+    for index in indices:
+        if index >= len(all_axes):
+            continue
+        axis = all_axes[index]
+        if axis.values.shape[0] == 1 or is_tracer(axis.values):
+            continue
+        nodes = np.asarray(axis.values)
+        # Δₖ = xₖ₊₁ − xₖ
+        spacing = np.diff(nodes)
+        if axis.period is not None:
+            # x₀ ± P − x_{N−1}, the wrap gap, in the direction of the axis
+            signed_period = np.copysign(axis.period, spacing[0])
+            wrap_gap = nodes[0] + signed_period - nodes[-1]
+            spacing = np.append(spacing, wrap_gap)
+        # Δ̄
+        mean_spacing = abs(spacing.mean())
+        # max |Δₖ − Δ̄|, for spacings of one sign
+        absolute_deviation = np.abs(np.abs(spacing) - mean_spacing)
+        deviation = absolute_deviation.max()
+        largest = max(np.abs(nodes).max(), axis.period or 0.0)
+        # 2 ε max(|xₖ|, P)
+        rounding = 2.0 * np.finfo(nodes.dtype).eps * largest
+        if deviation > max(_EVEN_RTOL * mean_spacing, rounding):
+            narrowest = float(np.abs(spacing).min())
+            widest = float(np.abs(spacing).max())
+            msg = (
+                f"{reader} reads in index space, which does not follow the "
+                f"coordinates of axis {index}: its spacing varies from "
+                f"{narrowest:.6g} to {widest:.6g}. Use a scheme that follows them "
+                "(Linear, or CubicSpline or Pchip on an Axis), or pass "
+                "Policies(spacing='index') to read in index space"
             )
             raise GeometryError(msg)
 

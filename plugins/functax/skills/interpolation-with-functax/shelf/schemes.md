@@ -22,7 +22,7 @@ All of them live in `functax.interp`. A scheme is configuration only: it holds n
 | `Fourier()` | one periodic `Axis` | Band-limited resampling from N to M nodes by two FFTs. |
 | `Delaunay(simplices=None)` | `Points` | Linear interpolation on a triangulation of scattered sources. |
 | `InverseDistance(k=8, power=2.0, radius=None)` | `Points` | Inverse-distance weighting of the `k` nearest sources. |
-| `Policies(outside="nan", missing="propagate", boundary="mirror", extent="nodes", fill_value=nan)` | | The named rules a plan follows; see the table below. |
+| `Policies(outside="nan", missing="propagate", boundary="mirror", extent="nodes", fill_value=nan, spacing="coordinates")` | | The named rules a plan follows; see the table below. |
 
 | Policy | Options |
 |---|---|
@@ -30,6 +30,7 @@ All of them live in `functax.interp`. A scheme is configuration only: it holds n
 | `missing` | `"propagate"` lets NaN through; `"renormalise"` drops those taps and divides by the remaining weight; `"fill"` replaces them by `fill_value` first. |
 | `boundary` | `"mirror"`, `"wrap"`, `"edge"` or `"constant"`, for a tap past the end of an axis; a periodic axis always wraps. |
 | `extent` | `"nodes"`: the domain ends at the first and last node; `"cells"`: half a cell wider at each end. |
+| `spacing` | `"coordinates"`: `Cubic`, and `BSpline` from order 2, refuse an unevenly spaced axis; `"index"`: they read it in index space. |
 
 ## Use it
 
@@ -86,7 +87,7 @@ assert Scheme.from_config(BSpline(3).get_config()) == BSpline(3)
 ## Rules
 
 - Pick the scheme from the source: a grid takes a `LocalScheme`, one axis takes a `SeriesScheme`, `Chebyshev` or `Fourier`, scattered points take `Delaunay`, `InverseDistance` or a kernel scheme.
-- `Linear` is the default: two taps per axis, no overshoot, exact adjoint. Use `Cubic` or `BSpline(3)` when the derivative of the read field must be continuous.
+- `Linear` is the default: two taps per axis, no overshoot, exact adjoint. Use `Cubic` or `BSpline(3)` on evenly spaced axes when the derivative of the read field must be continuous; on one uneven `Axis` use `CubicSpline` or `Pchip`.
 - `Pchip`, `Akima` and `Steffen` choose their slopes from the data, so their plans are nonlinear in the data: they have no fixed operator, and `NonlinearSchemeError` says so.
 - State the policies when a default would hide a problem. `outside="nan"` is the default, so always read `plan.valid` or expect NaN at targets off the domain.
 - A raster's pixels are cells, not nodes: pass `Policies(extent="cells", boundary="edge")` to read up to the outer pixel edges.

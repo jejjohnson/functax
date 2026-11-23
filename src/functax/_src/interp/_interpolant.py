@@ -208,11 +208,15 @@ def fit_interpolant(
     """c = 𝒮(y) for ``scheme`` on ``source``, as an `Interpolant`.
 
     Raises:
+        GeometryError: If the scheme cannot read the source (`check_local_source`).
         ValidationError: If the last axis of ``data`` is not the source size.
         PolicyError: Under ``missing="renormalise"`` with a prefilter.
     """
     shape, periodic = source_layout(source)
     bases = scheme.bases(len(shape))
+    # here as well as at each read: inside jit the source may be traced, and a
+    # traced axis cannot be checked
+    check_local_source(source, bases, policies)
     data = jnp.asarray(data)
     n_source = math.prod(shape)
     if data.ndim < 1 or data.shape[-1] != n_source:

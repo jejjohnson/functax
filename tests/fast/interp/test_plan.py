@@ -221,9 +221,8 @@ class TestOneNodeAxis:
         cells = Policies(extent="cells")
         with pytest.raises(GeometryError, match="axis 0 has one node"):
             Linear().plan(grid, targets, policies=cells)
-        field = Linear().fit(grid, jnp.zeros(3), policies=cells)
         with pytest.raises(GeometryError, match="axis 0 has one node"):
-            field(targets)
+            Linear().fit(grid, jnp.zeros(3), policies=cells)
 
 
 class TestRepeatedNodes:

@@ -16,7 +16,7 @@ $$
 
 `locate` turns each target coordinate into a cell index, an offset and an inside flag on one `Axis`, through its fractional index position $u$ (node $j$ sits at $u = j$). A regular axis uses arithmetic, a rectilinear one `searchsorted`, a descending axis its reversed nodes, and a periodic axis of period $P$ maps targets into one period and adds a wrap cell between its last node and the first one plus $P$. `remap_taps` brings the taps that run off an end back onto the axis.
 
-`Policies` names what happens at the edges. `outside` acts on targets off the domain, `missing` on non-finite source samples, `boundary` on taps past the end of an axis, and `extent` says whether the domain ends at the end nodes or half a cell beyond them. The conventions the stack used before functax map onto them as follows.
+`Policies` names what happens at the edges. `outside` acts on targets off the domain, `missing` on non-finite source samples, `boundary` on taps past the end of an axis, `extent` says whether the domain ends at the end nodes or half a cell beyond them, and `spacing` says what a kernel wider than one cell does on an unevenly spaced axis. The conventions the stack used before functax map onto them as follows.
 
 | Convention | `Policies` |
 |---|---|
@@ -38,8 +38,10 @@ A plan applies $\hat{\vect{f}} = \mat{H} \mathcal{S}(\vect{y})$ over any leading
 |---|---|---|---|---|
 | `Nearest()` | 1 | identity | constants | `RegularGridInterpolator(method="nearest")` |
 | `Linear()` | 2 | identity | affine functions | `RegularGridInterpolator`, `map_coordinates(order=1)` |
-| `Cubic(a=-0.5)` | 4 (Keys) | identity | quadratics | gaussx `cubic_interpolation_weights` |
-| `BSpline(order=k)`, $k \le 5$ | $k + 1$ | the `BandedPrefilter` from $k = 2$ | degree-$k$ polynomials away from the ends | `map_coordinates(order=k, mode="mirror")` |
+| `Cubic(a=-0.5)` | 4 (Keys) | identity | quadratics away from the ends, on an even axis | gaussx `cubic_interpolation_weights` |
+| `BSpline(order=k)`, $k \le 5$ | $k + 1$ | the `BandedPrefilter` from $k = 2$ | degree-$k$ polynomials away from the ends, on an even axis | `map_coordinates(order=k, mode="mirror")` |
+
+`Cubic`, and `BSpline` from order 2, weigh their taps by index position $u$. On uneven nodes $u$ is only piecewise linear in $x$, so they would not reproduce even $f(x) = x$, and they raise a `GeometryError` there. The check compares the spacings $\Delta_k$ (with the wrap gap of a periodic axis) to their mean, and allows a deviation of $10^{-3}$ of it, or what rounding in the nodes' dtype explains. `Policies(spacing="index")` reads such an axis in index space on purpose, and a traced axis, whose values the check cannot see, is read that way too. `Linear` follows the coordinates of any axis, and `CubicSpline`, `Pchip`, `Akima` and `Steffen` those of one uneven `Axis`.
 
 A B-spline of order $k \ge 2$ does not pass through its samples, so its plan first solves $\vect{y} = \mat{B} \vect{c}$ with the banded matrix $\mat{B}$ of B-spline values at the knots. `BandedPrefilter` does this per axis by recursive filtering, a causal and an anticausal pass for each pole $z_p$ after the gain $\lambda = \prod_p (1 - z_p)(1 - z_p^{-1})$, with the mirror boundary (or the wrap on a periodic axis), as `scipy.ndimage.spline_filter` does. The plan's adjoint applies $\mathcal{S}^\top$ after $\mat{H}^\top$.
 
