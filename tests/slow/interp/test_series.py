@@ -318,6 +318,93 @@ class TestFitInTheTrace:
             )
 
 
+FIELD_SCHEMES = [
+    *(CubicSpline(bc) for bc in ("not-a-knot", "natural", "clamped", "periodic")),
+    Pchip(),
+    Akima(),
+    Steffen(),
+]
+
+
+FIELD_IDS = [
+    "not-a-knot",
+    "natural",
+    "clamped",
+    "periodic",
+    "pchip",
+    "akima",
+    "steffen",
+]
+
+
+class TestCachedCoefficients:
+    """A field reads what the plan reads, from slopes computed at the fit (#162)."""
+
+    @pytest.mark.parametrize("kind", ["increasing", "decreasing", "repeats"])
+    @pytest.mark.parametrize("scheme", FIELD_SCHEMES, ids=FIELD_IDS)
+    def test_equals_the_plan_and_its_derivatives(self, scheme, kind: str) -> None:  # type: ignore[no-untyped-def]
+        periodic = isinstance(scheme, CubicSpline) and scheme.bc == "periodic"
+        if periodic and kind == "repeats":
+            pytest.skip("a periodic spline has no repeats")
+        knots, _ = _axis_and_data(seed=21)
+        data = np.random.default_rng(22).normal(size=(2, 3, knots.size))
+        if kind == "repeats":
+            knots[5] = knots[4]
+        if periodic:
+            data[..., -1] = data[..., 0]
+        targets = np.random.default_rng(23).uniform(
+            knots[0] - 0.3, knots[-1] + 0.3, size=15
+        )
+        if kind == "decreasing":
+            knots, data = knots[::-1], data[..., ::-1]
+        axis = Axis(
+            jnp.asarray(knots), repeats="allow" if kind == "repeats" else "forbid"
+        )
+        points = Points(jnp.asarray(targets)[:, None])
+        policies = Policies(outside="extrapolate")
+        field = scheme.fit(axis, jnp.asarray(data), policies=policies)
+        plan = scheme.plan(axis, points, policies=policies)
+        assert_matches_oracle(
+            field(points), plan(jnp.asarray(data)), rtol=1e-12, atol=1e-12
+        )
+        for order in (1, 2, 3):
+            assert_matches_oracle(
+                field.derivative(order=order)(points),
+                plan.derivative(0, order)(jnp.asarray(data)),
+                rtol=1e-12,
+                atol=1e-12,
+            )
+
+    @pytest.mark.parametrize("scheme", FIELD_SCHEMES, ids=FIELD_IDS)
+    def test_a_fitted_field_in_scan_under_jit_vmap_and_grad(self, scheme) -> None:  # type: ignore[no-untyped-def]
+        knots, values = _axis_and_data(seed=24)
+        if isinstance(scheme, CubicSpline) and scheme.bc == "periodic":
+            values[-1] = values[0]
+        axis = Axis(jnp.asarray(knots))
+        times = jnp.linspace(knots[0], knots[-1], 9)
+
+        def total(data: jax.Array) -> jax.Array:
+            field = scheme.fit(axis, data)
+
+            def step(carry: jax.Array, time: jax.Array) -> tuple[jax.Array, None]:
+                return carry + field(time[None, None])[0], None
+
+            return jax.lax.scan(step, jnp.zeros(()), times)[0]
+
+        def total_of_plan(data: jax.Array) -> jax.Array:
+            return jnp.sum(scheme.plan(axis, Points(times[:, None]))(data))
+
+        data = jnp.asarray(values)
+        value, gradient = jax.jit(jax.value_and_grad(total))(data)
+        expected, expected_gradient = jax.value_and_grad(total_of_plan)(data)
+        assert_matches_oracle(value, expected, rtol=1e-12)
+        assert_matches_oracle(gradient, expected_gradient, rtol=1e-10, atol=1e-10)
+
+        field = scheme.fit(axis, data)
+        one_by_one = jax.vmap(lambda time: field(time[None, None])[0])(times)
+        assert_matches_oracle(one_by_one, field(times[:, None]), rtol=1e-14)
+
+
 SERIES_SCHEMES = [CubicSpline(), Pchip(), Akima(), Steffen()]
 
 

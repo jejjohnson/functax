@@ -26,6 +26,7 @@ import lineax as lx
 from jaxtyping import Array, Float
 
 from functax._src.geometry._types import AffineGrid, Axis, Points, RectilinearGrid
+from functax._src.interp._fit import Identity
 from functax._src.interp._hermite import (
     HermiteFit,
     HermiteGeometry,
@@ -51,7 +52,12 @@ from functax._src.interp._spline1d import (
 )
 from functax._src.interp._stencil import Stencil
 from functax._src.interp._tensor import target_coordinates
-from functax.exceptions import GeometryError, NonlinearSchemeError, ValidationError
+from functax.exceptions import (
+    GeometryError,
+    NonlinearSchemeError,
+    PolicyError,
+    ValidationError,
+)
 
 
 __all__ = [
@@ -242,10 +248,23 @@ class NonlinearDerivativePlan(DerivativePlan):
 class SeriesInterpolant(eqx.Module):
     """A 1-D series field f̂ read at targets chosen inside the trace.
 
-    Made by ``scheme.fit(axis, y)``; the fit runs in JAX, so gradients reach
-    both y and the knot positions. It equals ``scheme.plan(axis, targets)(y)``.
+    Made by ``scheme.fit(axis, y)``, which computes the slopes d = 𝒮_d(y) once
+    and keeps the coefficients c = [y; d]; a read locates its cell and gathers
+    four of them. The fit runs in JAX, so gradients reach both y and the knot
+    positions. The field equals ``scheme.plan(axis, targets)(y)``.
     `derivative` gives the field ∂ᵐf̂/∂xᵐ, the derivative of the cubic Hermite
     read-out in closed form.
+
+    Args:
+        coefficients: c = [y; d], the N values and the N slopes in the order
+            of ``knots``, with any leading batch dims.
+        knots: The axis the coefficients are ordered along: ``source``, with
+            its knots reversed when they were seen to decrease at the fit.
+        source: The `Axis` the samples lie on.
+        scheme: The series scheme that fitted it.
+        policies: The outside rules; ``missing="fill"`` was applied at the fit.
+        reversed: Whether ``knots`` reverses ``source``.
+        derivative_order: m for the field ∂ᵐf̂/∂xᵐ, 0 for f̂ itself.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -264,11 +283,21 @@ class SeriesInterpolant(eqx.Module):
         True
     """
 
-    data: Float[Array, "*batch source"]
+    coefficients: Float[Array, "*batch coefficient"]
+    knots: Axis
     source: Axis
     scheme: SeriesScheme
     policies: Policies
+    reversed: bool = eqx.field(static=True, default=False)
     derivative_order: int = eqx.field(static=True, default=0)
+
+    @property
+    def data(self) -> Float[Array, "*batch source"]:
+        """y, the fitted samples in the order of ``source``, missing ones filled."""
+        n_nodes = self.knots.values.shape[0]
+        # c = [y; d]
+        values = self.coefficients[..., :n_nodes]
+        return values[..., ::-1] if self.reversed else values
 
     def __call__(
         self, targets: Float[Array, "target 1"] | Points
@@ -278,7 +307,23 @@ class SeriesInterpolant(eqx.Module):
             points = targets
         else:
             points = Points(jnp.asarray(targets))
-        return self.plan(points)(self.data)
+        plan = self._read_plan(target_coordinates(self.source, points))
+        # f̂(X_*) = H(X_*) c
+        return plan(self.coefficients)
+
+    def _read_plan(self, coordinates: Float[Array, "target dim"]) -> Plan:
+        """The plan that reads the coefficients (not the data) at the coordinates."""
+        # knots, not source: a concrete decreasing axis was reversed at the fit,
+        # and a traced one (the field passed into jit) could not say so here
+        stencil, local = self.scheme._read_out(self.knots, coordinates, self.policies)
+        # the fill already ran at the fit, before the slopes
+        policies = self.policies
+        if policies.missing == "fill":
+            policies = dataclasses.replace(policies, missing="propagate")
+        plan = Plan(Identity(), stencil, policies, local)
+        if self.derivative_order == 0:
+            return plan
+        return plan.derivative(0, self.derivative_order)
 
     def plan(self, target: Any) -> Plan:
         """The plan that ``scheme.plan(axis, target)`` builds, or its derivative."""
@@ -358,6 +403,43 @@ class SeriesScheme(Scheme):
     def _periodic(self) -> bool:
         return False
 
+    def _hermite_fit(self, source: Any) -> tuple[Axis, HermiteFit]:
+        """The axis with increasing knots, and the fit y ↦ [y; d] on it."""
+        if not isinstance(source, Axis):
+            msg = f"the 1-D series schemes read an Axis, got {type(source).__name__}"
+            raise GeometryError(msg)
+        ascending, reversed_axis = ascending_axis(source)
+        n_nodes = ascending.values.shape[0]
+        minimum = self._minimum_knots()
+        if n_nodes < minimum:
+            msg = f"{type(self).__name__} needs at least {minimum} knots, got {n_nodes}"
+            raise ValidationError(msg)
+        if source.repeats == "allow":
+            if self._periodic():
+                require_no_repeats(source, "CubicSpline(bc='periodic')")
+            slopes = self._slopes() if self._periodic() else self._piecewise_slopes()
+        else:
+            slopes = self._slopes()
+        fit = HermiteFit(ascending.values, slopes, reversed_axis, self.linear)
+        return ascending, fit
+
+    def _read_out(
+        self, knots: Axis, coordinates: Float[Array, "target dim"], policies: Policies
+    ) -> tuple[Stencil, HermiteGeometry]:
+        """The Hermite stencil on [y; d] at the targets, and what it was built from."""
+        local = HermiteGeometry(
+            axis=knots, coordinates=coordinates, periodic=self._periodic()
+        )
+        positions = coordinates[:, 0]
+        if self._periodic():
+            first = knots.values[0]
+            # P = x_{N−1} − x₀
+            period = knots.values[-1] - first
+            # x ↦ x₀ + ((x − x₀) mod P), as SciPy does
+            wrapped = jnp.mod(positions - first, period)
+            positions = first + wrapped
+        return hermite_stencil(knots, positions, policies), local
+
     def plan(
         self, source: Any, target: Any, *, policies: Policies | None = None
     ) -> Plan:
@@ -383,35 +465,9 @@ class SeriesScheme(Scheme):
             ValidationError: If the axis has too few knots for the scheme.
         """
         policies = Policies() if policies is None else policies
-        if not isinstance(source, Axis):
-            msg = f"the 1-D series schemes read an Axis, got {type(source).__name__}"
-            raise GeometryError(msg)
-        ascending, reversed_axis = ascending_axis(source)
-        n_nodes = ascending.values.shape[0]
-        minimum = self._minimum_knots()
-        if n_nodes < minimum:
-            msg = f"{type(self).__name__} needs at least {minimum} knots, got {n_nodes}"
-            raise ValidationError(msg)
-        target_points = target_coordinates(source, target)
-        local = HermiteGeometry(
-            axis=ascending, coordinates=target_points, periodic=self._periodic()
-        )
-        coordinates = target_points[:, 0]
-        if self._periodic():
-            first = ascending.values[0]
-            # P = x_{N−1} − x₀
-            period = ascending.values[-1] - first
-            # x ↦ x₀ + ((x − x₀) mod P), as SciPy does
-            wrapped = jnp.mod(coordinates - first, period)
-            coordinates = first + wrapped
-        stencil = hermite_stencil(ascending, coordinates, policies)
-        if source.repeats == "allow":
-            if self._periodic():
-                require_no_repeats(source, "CubicSpline(bc='periodic')")
-            slopes = self._slopes() if self._periodic() else self._piecewise_slopes()
-        else:
-            slopes = self._slopes()
-        fit = HermiteFit(ascending.values, slopes, reversed_axis, self.linear)
+        ascending, fit = self._hermite_fit(source)
+        coordinates = target_coordinates(source, target)
+        stencil, local = self._read_out(ascending, coordinates, policies)
         is_grid = isinstance(target, RectilinearGrid | AffineGrid)
         target_shape = target.shape if is_grid else None
         if self.linear:
@@ -429,16 +485,51 @@ class SeriesScheme(Scheme):
     ) -> SeriesInterpolant:
         """The field on ``source`` from y, read later at targets chosen in the trace.
 
+        The slopes d = 𝒮_d(y) are computed here, once, so a read is a locate
+        and four taps.
+
         Args:
             source: The `Axis` the data lie on.
             data: y, the samples last, with any leading batch dims.
-            policies: The outside rules.
+            policies: The outside rules; ``missing="fill"`` acts here.
 
         Returns:
             The `SeriesInterpolant`.
+
+        Raises:
+            GeometryError: If ``source`` is not an `Axis`, or a periodic
+                cubic spline meets a repeat.
+            ValidationError: If the axis has too few knots for the scheme, or
+                the last axis of ``data`` is not its number of knots.
+            PolicyError: Under ``missing="renormalise"``, which the slopes have
+                no counterpart of.
         """
         policies = Policies() if policies is None else policies
-        return SeriesInterpolant(jnp.asarray(data), source, self, policies)
+        knots, fit = self._hermite_fit(source)
+        data = jnp.asarray(data)
+        n_nodes = knots.values.shape[0]
+        if data.ndim < 1 or data.shape[-1] != n_nodes:
+            msg = (
+                f"'data' must have a last axis of length {n_nodes}, "
+                f"got shape {data.shape}"
+            )
+            raise ValidationError(msg)
+        if policies.missing == "renormalise":
+            msg = (
+                "missing='renormalise' needs a local plan (identity fit, "
+                "stencil read-out)"
+            )
+            raise PolicyError(msg)
+        if policies.missing == "fill":
+            fill = jnp.asarray(policies.fill_value, dtype=data.dtype)
+            finite = jnp.isfinite(data)
+            # yⱼ ← y_fill where yⱼ is not finite
+            data = jnp.where(finite, data, fill)
+        # c = [y; d], with d = 𝒮_d(y)
+        coefficients = fit.apply(data)
+        return SeriesInterpolant(
+            coefficients, knots, source, self, policies, fit.reversed
+        )
 
 
 class CubicSpline(SeriesScheme):
