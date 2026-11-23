@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.13](https://github.com/jejjohnson/functax/compare/v0.0.12...v0.0.13) (2026-11-23)
+
+
+### Features
+
+* **interp:** a series field computes its slopes once, at the fit ([#165](https://github.com/jejjohnson/functax/issues/165)) ([1465455](https://github.com/jejjohnson/functax/commit/14654559df65e4a30b0c82024121b94736806637)), closes [#162](https://github.com/jejjohnson/functax/issues/162)
+* **interp:** unevenly spaced axes are refused by Cubic and BSpline unless index space is asked for ([#166](https://github.com/jejjohnson/functax/issues/166)) ([5812790](https://github.com/jejjohnson/functax/commit/58127906804b3efd1a37b5d5e1a6a46c535fdc07)), closes [#163](https://github.com/jejjohnson/functax/issues/163)
+
 ## [0.0.12](https://github.com/jejjohnson/functax/compare/v0.0.11...v0.0.12) (2026-11-19)
 
 
