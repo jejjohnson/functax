@@ -269,6 +269,7 @@ class TestSchemes:
         grid, nodes = _rectilinear((5, 6), seed=97)
         field = jax.random.normal(jax.random.key(98), (30,))
         scheme = Tensor((Linear(), Cubic()))
+        policies = Policies(spacing="index")
         rng = np.random.default_rng(99)
         # offsets in (0.2, 0.8) of a cell: away from the linear kinks at the nodes
         cells = [rng.integers(1, n.size - 2, 6) for n in nodes]
@@ -281,7 +282,7 @@ class TestSchemes:
         )
 
         def read(positions: jax.Array) -> jax.Array:
-            return scheme.plan(grid, Points(positions))(field)
+            return scheme.plan(grid, Points(positions), policies=policies)(field)
 
         assert_grad_matches_fd(read, jnp.asarray(xy))
         assert_traces(read, einx.id("(b m) d -> b m d", jnp.asarray(xy), b=2))
@@ -378,7 +379,7 @@ class TestOneNodeAxis:
     @pytest.mark.parametrize("outside", ["nan", "clamp", "extrapolate"])
     def test_equals_the_plan_without_the_axis(self, scheme, outside: str) -> None:  # type: ignore[no-untyped-def]
         grid, thick, flat, targets = self._grids()
-        policies = Policies(outside=outside)
+        policies = Policies(outside=outside, spacing="index")
         field = jax.random.normal(jax.random.key(82), (30,))
         expected = scheme.plan(grid, Points(jnp.asarray(flat)), policies=policies)
         actual = scheme.plan(thick, Points(jnp.asarray(targets)), policies=policies)
@@ -387,7 +388,8 @@ class TestOneNodeAxis:
     @pytest.mark.parametrize("scheme", [Nearest(), Linear(), Cubic()])
     def test_dot_product_and_to_gaussx(self, scheme) -> None:  # type: ignore[no-untyped-def]
         grid, thick, flat, targets = self._grids()
-        plan = scheme.plan(thick, Points(jnp.asarray(targets)))
+        policies = Policies(spacing="index")
+        plan = scheme.plan(thick, Points(jnp.asarray(targets)), policies=policies)
         operator = plan.operator()
         assert_adjoint(
             lambda y: operator.mv(y), plan.adjoint, 30, 30, key=jax.random.key(83)
@@ -395,7 +397,8 @@ class TestOneNodeAxis:
         # the same sparse matrix as the plan without the axis
         indices, weights = plan.to_gaussx()
         dense = jnp.zeros((30, 30)).at[jnp.arange(30)[:, None], indices].add(weights)
-        expected = scheme.plan(grid, Points(jnp.asarray(flat))).operator().as_matrix()
+        flat_plan = scheme.plan(grid, Points(jnp.asarray(flat)), policies=policies)
+        expected = flat_plan.operator().as_matrix()
         assert_matches_oracle(dense, expected, rtol=1e-14, atol=1e-14)
 
     def test_cells_extent_with_edges(self) -> None:

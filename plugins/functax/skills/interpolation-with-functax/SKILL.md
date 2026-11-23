@@ -24,9 +24,9 @@ The geometry a plan takes is in `functax:function-approximation-with-functax`.
 | Source and need | Choose |
 |---|---|
 | A grid, read at points: the default | `Linear()` |
-| A grid, with a continuous derivative | `Cubic()` or `BSpline(3)` |
+| An evenly spaced grid, with a continuous derivative | `Cubic()` or `BSpline(3)` |
 | A grid, with a different rule per axis | `Tensor((Nearest(), Linear(), Linear()))` |
-| One axis, smooth | `CubicSpline()` |
+| One axis, even or not, smooth | `CubicSpline()` |
 | One axis, no overshoot between knots | `Pchip()` or `Steffen()` |
 | One periodic axis, band-limited | `Fourier()` |
 | Samples on Chebyshev nodes | `Chebyshev(n_coefficients)` |

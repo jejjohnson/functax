@@ -438,8 +438,18 @@ def _check_bridge(source: Any, policies: Policies) -> None:
 class Cubic(LocalScheme):
     """Keys cubic convolution on every axis: 4ᴰ taps per target, no prefilter.
 
+    The kernel weighs the taps by index position, so it needs evenly spaced
+    axes: it refuses uneven ones unless ``Policies(spacing="index")`` asks for
+    index space. Away from the ends, whose taps the boundary rule supplies, it
+    reproduces quadratics on an even axis with a = −½. `CubicSpline` and
+    `Pchip` follow the coordinates of an uneven `Axis`.
+
     Args:
-        a: The kernel parameter; −½ by default (it then reproduces quadratics).
+        a: The kernel parameter; −½ by default.
+
+    Raises:
+        GeometryError: When planned or fitted on an unevenly spaced axis, under
+            ``Policies(spacing="coordinates")``, the default.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -471,11 +481,18 @@ class BSpline(LocalScheme):
     degree k only away from the ends: the mirror boundary's influence decays by
     |z| per node for the prefilter's pole z (|z| ≈ 0.27 for the cubic).
 
+    From order 2 the taps are weighed by index position, so it needs evenly
+    spaced axes: it refuses uneven ones unless ``Policies(spacing="index")``
+    asks for index space. `CubicSpline` and `Pchip` follow the coordinates of
+    an uneven `Axis`.
+
     Args:
         order: k, from 0 to 5 (3 is the cubic B-spline).
 
     Raises:
         ValidationError: If ``order`` is not an integer in [0, 5].
+        GeometryError: When planned or fitted, from order 2, on an unevenly
+            spaced axis, under ``Policies(spacing="coordinates")``, the default.
 
     Examples:
         >>> import jax.numpy as jnp

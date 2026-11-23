@@ -53,7 +53,7 @@ geoops = Linear().plan(grid, points, policies=Policies(extent="cells", boundary=
 geoops(field[0].ravel()).tolist()  # [6.0, 16.0, nan]
 ```
 
-`outside="clamp"` reads the nearest boundary instead of NaN, `outside="extrapolate"` continues the edge cells, and `outside="raise"` refuses targets off the grid when the plan is built. `missing="renormalise"` drops non-finite samples and divides each row by the weight left. The [interpolation API page](https://jejjohnson.github.io/functax/reference/interp/) lists every policy.
+`outside="clamp"` reads the nearest boundary instead of NaN, `outside="extrapolate"` continues the edge cells, and `outside="raise"` refuses targets off the grid when the plan is built. `missing="renormalise"` drops non-finite samples and divides each row by the weight left. `Cubic` and `BSpline(3)` refuse an unevenly spaced axis, whose coordinates they do not follow, unless `spacing="index"` asks for index space. The [interpolation API page](https://jejjohnson.github.io/functax/reference/interp/) lists every policy.
 
 ## Mix schemes per axis
 
