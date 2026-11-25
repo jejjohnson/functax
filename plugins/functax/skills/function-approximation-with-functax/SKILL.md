@@ -107,6 +107,6 @@ Open the one the task needs; do not read them all.
 
 Nothing else in the stack: this is a base skill.
 
-Used by (pointers, not skills to load): gauss_flows, geonnax, geotoolz, integrix, kernellib, plumax, pyrox, spectraldiffx.
+Used by (pointers, not skills to load): gauss_flows, geonnax, geotoolz, integrix, kernellib, plumax, pyrox, sesmax, spectraldiffx, vardax.
 
 <!-- skill-tree:end -->
