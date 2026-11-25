@@ -95,7 +95,14 @@ def ascending_axis(axis: Axis) -> tuple[Axis, bool]:
         ...
         functax.exceptions.ValidationError: the 1-D series schemes need a ...
     """
-    if axis.period is not None:
+    if axis.period is not None and not axis.closed:
+        msg = (
+            "the 1-D series schemes need a non-periodic Axis, and this one is open "
+            "(it has a period its nodes do not cover); drop the period and shift "
+            "the targets into the range of the nodes"
+        )
+        raise ValidationError(msg)
+    if axis.closed:
         msg = "the 1-D series schemes need a non-periodic Axis; use bc='periodic'"
         raise ValidationError(msg)
     values = axis.values

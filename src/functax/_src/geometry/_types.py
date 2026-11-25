@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 import einx
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, ArrayLike, Bool, Float, Shaped
@@ -56,6 +57,10 @@ _UNITS_PER_SECOND: dict[str, int] = {
 # |Δₖ − Δ̄| ≤ 1e-12 |Δ̄| counts as equal spacing (Axis.is_regular)
 _REGULAR_RTOL = 1e-12
 
+# cells whose gap to the whole period is within 10⁻³ of a cell span it, so nodes
+# or edges rounded by a file, or cast from float32, still close (Axis.closed)
+_CLOSED_RTOL = 1e-3
+
 
 def _check_values(
     array: Shaped[Array, "*shape"], bad: Bool[Array, ""], message: str
@@ -82,6 +87,47 @@ def _as_epoch(epoch: Any) -> str:
     return str(np.datetime_as_string(moment, unit="ns"))
 
 
+def _host_array(array: Any) -> Shaped[np.ndarray, "*shape"] | None:
+    """``array`` on the host, or ``None`` when it is (or holds) a tracer."""
+    try:
+        return np.asarray(array)
+    except jax.errors.TracerArrayConversionError:
+        return None
+
+
+def _cells_span_period(
+    nodes: Any, edges: Any, period: float, dtype: np.dtype
+) -> bool | None:
+    """Whether the cells of an axis span its period P, decided on the host.
+
+    With edges, they do when P − |e_N − e₀| is zero to rounding; without, when
+    the wrap gap P − |x_{N−1} − x₀| is at most the sum of the two end
+    spacings, which one node has none of. Rounding is the larger of 10⁻³ of a
+    cell and 4 ε max(|x|, P), with ε the machine epsilon of ``dtype``.
+    ``None`` when the array that decides is traced.
+    """
+    ends = _host_array(nodes if edges is None else edges)
+    if ends is None or ends.ndim != 1 or ends.shape[0] < 1:
+        return None
+    # the rounding of the axis' own dtype, subtracted in float64
+    ends = ends.astype(dtype).astype(np.float64)
+    # P − |x_last − x_first|
+    gap = period - abs(ends[-1] - ends[0])
+    magnitude = max(np.abs(ends).max(), period)
+    # 4 ε max(|x|, P)
+    rounding = 4.0 * float(jnp.finfo(dtype).eps) * magnitude
+    if ends.shape[0] == 1:
+        return bool(gap <= rounding)
+    spacing = np.abs(np.diff(ends))
+    if edges is None:
+        # (x₁ − x₀) + (x_{N−1} − x_{N−2})
+        reach = spacing[0] + spacing[-1]
+        tolerance = max(_CLOSED_RTOL * reach, rounding)
+        return bool(gap <= reach + tolerance)
+    tolerance = max(_CLOSED_RTOL * spacing.mean(), rounding)
+    return bool(gap <= tolerance)
+
+
 class Axis(eqx.Module):
     """One strictly monotone coordinate axis, optionally periodic or in time.
 
@@ -89,6 +135,18 @@ class Axis(eqx.Module):
     every integer m, so its nodes must span less than P. Descending axes are
     allowed (wavelength from wavenumber). Times are stored as float seconds
     since ``epoch``; `from_datetimes` converts them on the host.
+
+    A periodic axis is closed when its cells span the period, as a global
+    longitude does, and open otherwise, as a regional longitude across the
+    date line. A closed axis has a wrap cell from its last node to its first
+    one plus P, so every target is inside. An open axis only folds a target
+    to its copy nearest the data, in [x₀ − (P − span)/2, x₀ + (P + span)/2)
+    for increasing nodes with span = x_{N−1} − x₀; past its ends it is read
+    as an axis without a period. With ``edges``, the cells span P when the
+    edges do, to rounding. Without, they do when the wrap gap P − |x_{N−1} −
+    x₀| is at most the sum of the two end spacings, so an axis one node short
+    of the circle (nodes every 1° from 0° to 358°) is closed and one two nodes
+    short is open. One node has no spacings, so without ``edges`` it is open.
 
     With ``repeats="allow"`` the nodes need only be non-decreasing (or
     non-increasing), so a repeat xₖ = xₖ₊₁ makes a cell of zero width, where
@@ -121,6 +179,13 @@ class Axis(eqx.Module):
             ``"allow"`` for non-decreasing or non-increasing ones with
             repeats. The nodes must still span a positive width, and a
             periodic axis cannot have repeats.
+        closed: Whether a periodic axis closes on itself (above), stored as
+            a static ``True`` or ``False``. ``None`` (the default) decides
+            it on the host from concrete ``values`` or ``edges``, and takes
+            traced ones as closed, so inside ``jit`` pass ``closed=False``
+            for an axis built from traced regional nodes. An axis built
+            from another's values carries its ``closed``. ``None``, whatever
+            was passed, on an axis without a period.
 
     Raises:
         GeometryError: If ``values`` is not 1-D, is empty, is not floating,
@@ -130,14 +195,17 @@ class Axis(eqx.Module):
             not positive and finite; if ``epoch`` is not a time;
             if ``edges`` is not 1-D with N + 1 floating entries, or (when
             concrete) is not strictly monotone in the direction of ``values``
-            or spans more than P.
+            or spans more than P; if ``closed`` is not a boolean or ``None``.
 
     Examples:
         >>> import jax.numpy as jnp
         >>> from functax.geometry import Axis
         >>> longitude = Axis(jnp.linspace(0.0, 357.5, 144), period=360.0)
-        >>> longitude.is_regular, longitude.is_descending
-        (True, False)
+        >>> longitude.is_regular, longitude.is_descending, longitude.closed
+        (True, False, True)
+        >>> # a region across the date line is open
+        >>> Axis(jnp.arange(170.0, 190.5), period=360.0).closed
+        False
         >>> wavelength = Axis(jnp.array([2.5, 2.0, 1.2]))
         >>> wavelength.is_regular, wavelength.is_descending
         (False, True)
@@ -164,6 +232,7 @@ class Axis(eqx.Module):
     epoch: str | None = eqx.field(static=True)
     edges: Float[Array, " edge"] | None
     repeats: str = eqx.field(static=True)
+    closed: bool | None = eqx.field(static=True)
 
     def __init__(
         self,
@@ -173,7 +242,10 @@ class Axis(eqx.Module):
         epoch: Any = None,
         edges: ArrayLike | Sequence[float] | None = None,
         repeats: str = "forbid",
+        closed: bool | None = None,
     ) -> None:
+        # kept for `closed`: under jit even a concrete array becomes a tracer
+        given_values = values
         values = jnp.asarray(values)
         if values.ndim != 1:
             msg = f"'values' must be 1-D, got shape {values.shape}"
@@ -192,6 +264,10 @@ class Axis(eqx.Module):
             raise GeometryError(msg)
         if repeats == "allow" and period is not None:
             msg = "a periodic Axis cannot have repeats; use repeats='forbid'"
+            raise GeometryError(msg)
+
+        if not (closed is None or isinstance(closed, bool)):
+            msg = f"'closed' must be a boolean or None, got {closed!r}"
             raise GeometryError(msg)
 
         # Δₖ = xₖ₊₁ − xₖ, all of one sign
@@ -225,6 +301,13 @@ class Axis(eqx.Module):
         self.epoch = None if epoch is None else _as_epoch(epoch)
         self.edges = None if edges is None else jnp.asarray(edges)
         self.repeats = repeats
+        if period is None:
+            closed = None
+        elif closed is None:
+            decided = _cells_span_period(given_values, edges, period, values.dtype)
+            # traced nodes keep the wrap cell
+            closed = True if decided is None else decided
+        self.closed = closed
 
     def __check_init__(self) -> None:
         if self.edges is None:
@@ -266,7 +349,7 @@ class Axis(eqx.Module):
 
         Without explicit edges, x_{k−½} = ½ (xₖ₋₁ + xₖ) between nodes, and the
         end cells are symmetric about their nodes, x_{−½} = x₀ − ½ (x₁ − x₀)
-        (as xrtoolz's ``_bounds_from_centres``). On a periodic axis the end
+        (as xrtoolz's ``_bounds_from_centres``). On a closed axis the end
         edges are instead the midpoint of the wrap gap between x_{N−1} and
         x₀ ± P, so x_{N−½} = ½ (x_{N−1} + x₀ ± P) and x_{−½} = x_{N−½} ∓ P,
         and the cells tile the circle.
@@ -286,6 +369,9 @@ class Axis(eqx.Module):
             >>> longitude = Axis(jnp.array([10.0, 20.0, 340.0]), period=360.0)
             >>> longitude.cell_edges().tolist()
             [-5.0, 15.0, 180.0, 355.0]
+            >>> region = Axis(jnp.array([170.0, 180.0, 190.0]), period=360.0)
+            >>> region.cell_edges().tolist()
+            [165.0, 175.0, 185.0, 195.0]
         """
         if self.edges is not None:
             return self.edges
@@ -295,7 +381,7 @@ class Axis(eqx.Module):
             raise GeometryError(msg)
         # ½ (xₖ₋₁ + xₖ) between nodes
         midpoints = 0.5 * (values[:-1] + values[1:])
-        if self.period is None:
+        if self.period is None or not self.closed:
             # x_{−½} = x₀ − ½ (x₁ − x₀)
             first = values[0] - 0.5 * (values[1] - values[0])
             # x_{N−½} = x_{N−1} + ½ (x_{N−1} − x_{N−2})

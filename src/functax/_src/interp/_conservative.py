@@ -384,7 +384,7 @@ class Conservative(Scheme):
     the product of the per-axis overlaps (`overlap_weights_1d`), so no
     polygon is clipped. Cell edges come from `Axis.cell_edges`: the axis's
     ``edges`` when given, else the midpoints between nodes; a periodic source
-    axis reads targets modulo its period.
+    axis reads targets modulo its period, and an open one covers only its cells.
 
     A `CurvilinearGrid` (source or target), or ``sphere=True``, takes the
     polygon path: every cell is a quadrilateral around its node, with corners

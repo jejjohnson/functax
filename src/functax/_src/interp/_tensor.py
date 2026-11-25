@@ -61,16 +61,18 @@ __all__ = [
 
 
 def source_layout(source: Any) -> tuple[tuple[int, ...], tuple[bool, ...]]:
-    """The node counts (N₁, …, N_D) of a source, and which of its axes are periodic.
+    """The node counts (N₁, …, N_D) of a source, and which of its axes wrap.
+
+    An axis wraps when it is periodic and closed; an open one has ends.
 
     Raises:
         GeometryError: If ``source`` is not an `Axis`, `RectilinearGrid`,
             `AffineGrid` or `CurvilinearGrid`.
     """
     if isinstance(source, Axis):
-        return (source.values.shape[0],), (source.period is not None,)
+        return (source.values.shape[0],), (bool(source.closed),)
     if isinstance(source, RectilinearGrid):
-        periodic = tuple(axis.period is not None for axis in source.axes)
+        periodic = tuple(bool(axis.closed) for axis in source.axes)
         return source.shape, periodic
     if isinstance(source, AffineGrid | CurvilinearGrid):
         return source.shape, (False, False)
@@ -239,7 +241,7 @@ def _axis_stencil(
     # --- locate ---
     lower, upper = domain_bounds(n_nodes, policies.extent)
     finite = jnp.isfinite(position)
-    # lower ≤ u ≤ upper, everywhere on a periodic axis
+    # lower ≤ u ≤ upper, everywhere on an axis that wraps
     inside = finite if periodic else finite & (position >= lower) & (position <= upper)
     # non-finite positions read node 0 and are masked; nothing else can read
     position = jnp.where(finite, position, 0.0)

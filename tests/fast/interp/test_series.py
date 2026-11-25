@@ -55,6 +55,8 @@ class TestPoliciesAndValidation:
         with pytest.raises(ValidationError, match="'bc' must be one of"):
             CubicSpline("parabolic")
         with pytest.raises(ValidationError, match="non-periodic Axis"):
+            Pchip().plan(Axis(jnp.arange(5.0), period=5.0), Points(jnp.zeros((1, 1))))
+        with pytest.raises(ValidationError, match="this one is open"):
             Pchip().plan(Axis(jnp.arange(5.0), period=10.0), Points(jnp.zeros((1, 1))))
 
     def test_outside_raise_rejects_targets_off_the_axis(self) -> None:

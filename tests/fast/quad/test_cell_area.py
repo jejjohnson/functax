@@ -36,6 +36,17 @@ def test_latitude_edges_past_the_poles_are_clipped() -> None:
     assert_matches_oracle(rule.weights.sum(), 4.0 * math.pi, rtol=0, atol=1e-14)
 
 
+def test_a_region_has_its_own_area() -> None:
+    # three 10° cells from 165° to 195°, whatever the period
+    latitude = Axis(jnp.array([-5.0, 5.0]))
+    nodes = jnp.array([170.0, 180.0, 190.0])
+    for longitude in (Axis(nodes), Axis(nodes, period=360.0)):
+        grid = RectilinearGrid((longitude, latitude))
+        rule = cell_area(grid, sphere_radius=1.0, unit="degrees")
+        expected = math.radians(30.0) * 2.0 * math.sin(math.radians(10.0))
+        assert_matches_oracle(rule.weights.sum(), expected, rtol=1e-14)
+
+
 @pytest.mark.parametrize(
     "transform",
     [

@@ -250,6 +250,37 @@ class TestGeometries:
         # [−10, 10] reads the cells at 355° and 5°, [10, 350] the 34 between
         assert_matches_oracle(remapped, [17.5, 17.5], rtol=1e-15)
 
+    def test_an_open_source_covers_only_its_cells(self) -> None:
+        # cells [165, 175], [175, 185], [185, 195], not half of the gap each
+        region = Axis(jnp.array([170.0, 180.0, 190.0]), period=360.0)
+        edges = jnp.array([-195.0, -175.0, -165.0, -155.0])
+        target = Axis(0.5 * (edges[:-1] + edges[1:]), edges=edges)
+        field = jnp.array([1.0, 3.0, 8.0])
+        remapped = Conservative().plan(region, target)(field)
+        assert_matches_oracle(remapped, [2.0, 8.0, jnp.nan], rtol=1e-15)
+        # [−170, −160] is half covered, and [160, 170] from the other side
+        edges = jnp.array([-200.0, -190.0, -170.0, -160.0])
+        target = Axis(0.5 * (edges[:-1] + edges[1:]), edges=edges)
+        for outside, expected in (
+            ("nan", [jnp.nan, 3.75, jnp.nan]),
+            ("clamp", [1.0, 3.75, 8.0]),
+            ("extrapolate", [0.5, 3.75, 4.0]),
+        ):
+            policies = Policies(outside=outside)
+            remapped = Conservative().plan(region, target, policies=policies)(field)
+            assert_matches_oracle(remapped, expected, rtol=1e-15)
+
+    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
+    @pytest.mark.parametrize("turns", [-1, 0, 1])
+    def test_an_open_source_covers_its_own_cells_in_any_convention(
+        self, turns: int, dtype: type
+    ) -> None:
+        for start in (150.04, 153.1, 161.7):
+            values = np.asarray(start + np.arange(100) / 12.0, dtype)
+            shifted = (values.astype(np.float64) + 360.0 * turns).astype(dtype)
+            plan = Conservative().plan(Axis(values, period=360.0), Axis(shifted))
+            assert plan.valid.all()
+
     def test_the_plan_windows_a_grid_target(self) -> None:
         source = RectilinearGrid((Axis(jnp.arange(8.0)),) * 2)
         target = RectilinearGrid((Axis(jnp.arange(0.5, 7.0, 2.0)),) * 2)

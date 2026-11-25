@@ -476,7 +476,7 @@ class BSpline(LocalScheme):
 
     From order 2 the plan's fit is the `BandedPrefilter`, c = B⁻¹ y per axis,
     and its adjoint applies 𝒮ᵀ after Hᵀ. The prefilter uses the mirror
-    boundary, or the wrap on a periodic axis or under ``boundary="wrap"``; it
+    boundary, or the wrap on a closed axis or under ``boundary="wrap"``; it
     equals ``scipy.ndimage.spline_filter`` there. It reproduces polynomials of
     degree k only away from the ends: the mirror boundary's influence decays by
     |z| per node for the prefilter's pole z (|z| ≈ 0.27 for the cubic).

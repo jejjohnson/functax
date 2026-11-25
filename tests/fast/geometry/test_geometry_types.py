@@ -4,6 +4,8 @@ behaviour, validation and small closed-form checks, each well under a second.
 
 from __future__ import annotations
 
+import dataclasses
+import inspect
 import types
 
 import equinox as eqx
@@ -227,6 +229,155 @@ class TestAxisEdges:
         np.testing.assert_array_equal(
             build(jnp.array([2.0, 1.0, 0.0])), [2.0, 1.0, 0.0]
         )
+
+
+class TestClosed:
+    """Whether a periodic axis closes on itself, decided once from its cells."""
+
+    @pytest.mark.parametrize("descending", [False, True])
+    @pytest.mark.parametrize(
+        ("values", "closed"),
+        [
+            (np.arange(0.0, 360.0), True),
+            (np.arange(-180.0, 180.0, 0.25, dtype=np.float32), True),
+            (np.arange(1080, dtype=np.float32) / np.float32(3.0), True),
+            (np.asarray(np.arange(4320) / 12.0, np.float32).astype(np.float64), True),
+            # one node short: the wrap gap is the two end spacings
+            (np.arange(0.0, 359.0), True),
+            (np.asarray(0.1 * np.arange(3599) - 180.0, np.float32), True),
+            (np.arange(0.1, 358.5, dtype=np.float32), True),
+            (np.asarray(np.arange(4319) / 12.0, np.float32).astype(np.float64), True),
+            (np.array([0.0, 100.0, 300.0]), True),
+            (np.array([0.0, 180.0]), True),
+            # two nodes short, and regions
+            (np.arange(0.0, 358.0), False),
+            (np.asarray(0.1 * np.arange(3598) - 180.0, np.float32), False),
+            (np.arange(170.0, 190.5), False),
+            (np.array([170.0, 171.0]), False),
+            # one node has no spacings to close with
+            (np.array([10.0]), False),
+        ],
+    )
+    def test_the_wrap_gap_decides(
+        self, values: np.ndarray, closed: bool, descending: bool
+    ) -> None:
+        axis = Axis(values[::-1] if descending else values, period=360.0)
+        assert axis.closed is closed
+
+    def test_the_period_may_be_two_pi(self) -> None:
+        period = 2.0 * np.pi
+        ring = np.arange(144, dtype=np.float32) * np.float32(period / 144)
+        assert Axis(ring, period=period).closed is True
+        assert Axis(ring[:100], period=period).closed is False
+
+    @pytest.mark.parametrize(
+        ("edges", "closed"),
+        [
+            (np.arange(-0.5, 360.0), True),
+            (np.asarray(np.linspace(-0.5, 359.5, 361), np.float32), True),
+            # half of the last cell is missing
+            (np.concatenate([np.arange(-0.5, 359.0), [359.0]]), False),
+        ],
+    )
+    def test_edges_decide_when_given(self, edges: np.ndarray, closed: bool) -> None:
+        # by the nodes alone the axis is closed
+        axis = Axis(np.arange(0.0, 360.0), period=360.0, edges=edges)
+        assert axis.closed is closed
+
+    def test_edges_decide_for_one_node(self) -> None:
+        zonal_mean = Axis([180.0], period=360.0, edges=[0.0, 360.0])
+        strip = Axis([180.0], period=360.0, edges=[179.0, 181.0])
+        assert (zonal_mean.closed, strip.closed) == (True, False)
+
+    def test_an_explicit_value_wins(self) -> None:
+        region = jnp.arange(170.0, 190.5)
+        assert Axis(region, period=360.0, closed=True).closed is True
+        globe = jnp.arange(0.0, 360.0)
+        assert Axis(globe, period=360.0, closed=False).closed is False
+
+    def test_without_a_period_it_is_none(self) -> None:
+        assert Axis(jnp.arange(3.0)).closed is None
+        assert Axis(jnp.arange(3.0), closed=True).closed is None
+        periodic = Axis(jnp.arange(360.0), period=360.0)
+        assert dataclasses.replace(periodic, period=None).closed is None
+
+    def test_rejects_a_non_boolean(self) -> None:
+        build = inspect.unwrap(Axis.__init__)
+        axis = object.__new__(Axis)
+        with pytest.raises(GeometryError, match="'closed' must be a boolean or None"):
+            build(axis, jnp.arange(3.0), period=10.0, closed=1)
+
+    def test_concrete_values_decide_under_jit(self) -> None:
+        # asarray makes a concrete array a tracer there; the input still decides
+        on_host = np.arange(170.0, 190.5)
+        on_device = jnp.asarray(on_host)
+        decided = []
+
+        def build(x: jax.Array) -> jax.Array:
+            for values in (on_host, on_device, on_host.tolist()):
+                decided.append(Axis(values, period=360.0).closed)
+            edges = np.arange(169.5, 191.0)
+            decided.append(Axis(x + on_host, period=360.0, edges=edges).closed)
+            return x
+
+        jax.jit(build)(0.0)
+        assert decided == [False] * 4
+
+    def test_traced_values_keep_the_wrap_cell(self) -> None:
+        decided = []
+
+        def build(values: jax.Array) -> jax.Array:
+            decided.append(Axis(values, period=360.0).closed)
+            decided.append(Axis(values, period=360.0, closed=False).closed)
+            return values
+
+        jax.jit(build)(jnp.arange(170.0, 190.5))
+        assert decided == [True, False]
+
+    def test_updates_carry_it(self) -> None:
+        region = Axis(jnp.arange(170.0, 190.5), period=360.0)
+        moved = dataclasses.replace(region, values=region.values + 1.0)
+        swapped = eqx.tree_at(lambda axis: axis.values, region, region.values + 1.0)
+        traced = jax.jit(lambda axis: dataclasses.replace(axis, values=axis.values))
+        assert (moved.closed, swapped.closed) == (False, False)
+        assert traced(region).closed is False
+
+    def test_a_rebuilt_global_axis_keeps_its_tree_structure(self) -> None:
+        globe = Axis(jnp.arange(0.0, 360.0), period=360.0)
+        rebuilt = jax.jit(lambda values: Axis(values, period=360.0))(globe.values)
+        assert jax.tree.structure(rebuilt) == jax.tree.structure(globe)
+        final, _ = jax.lax.scan(
+            lambda axis, _: (Axis(axis.values + 1.0, period=360.0), None),
+            globe,
+            length=2,
+        )
+        assert final.values[0] == 2.0
+
+    def test_it_is_static(self) -> None:
+        count = 0
+
+        @jax.jit
+        def read(axis: Axis) -> jax.Array:
+            nonlocal count
+            count += 1
+            return axis.values[0] if axis.closed else -axis.values[0]
+
+        region = Axis(jnp.arange(170.0, 190.5), period=360.0)
+        assert read(region) == -170.0
+        assert read(dataclasses.replace(region, values=region.values + 1.0)) == -171.0
+        assert count == 1
+        assert read(dataclasses.replace(region, closed=True)) == 170.0
+        assert count == 2
+
+    @pytest.mark.parametrize("descending", [False, True])
+    def test_the_end_cells_of_an_open_axis_are_symmetric(
+        self, descending: bool
+    ) -> None:
+        values = jnp.array([170.0, 180.0, 184.0])
+        expected = [165.0, 175.0, 182.0, 186.0]
+        if descending:
+            values, expected = values[::-1], expected[::-1]
+        assert Axis(values, period=360.0).cell_edges().tolist() == expected
 
 
 class TestDatetimes:

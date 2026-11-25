@@ -281,6 +281,12 @@ def _periodic_grid(axis: Any, name: str) -> tuple[float, float, int]:
     if axis.period is None:
         msg = f"'{name}' must be periodic (an Axis with a period)"
         raise GeometryError(msg)
+    if not axis.closed:
+        msg = (
+            f"'{name}' is an open periodic axis (closed=False), whose nodes do not "
+            "cover the period the Fourier series needs"
+        )
+        raise GeometryError(msg)
     values = np.asarray(axis.values, dtype=np.float64)
     n_nodes = values.shape[0]
     period = axis.period
@@ -360,9 +366,9 @@ class Fourier(Scheme):
             The `Plan`, with the identity fit and a `FourierReadout`.
 
         Raises:
-            GeometryError: If an axis is not periodic, ascending and equally
-                spaced over its whole period, or the two differ in period or
-                origin.
+            GeometryError: If an axis is not periodic, is open, or is not
+                ascending and equally spaced over its whole period, or the two
+                differ in period or origin.
             PolicyError: Under ``missing="renormalise"``, which needs a local
                 stencil.
         """

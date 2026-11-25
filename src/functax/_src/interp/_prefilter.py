@@ -324,7 +324,7 @@ def prefilter_for(
 
     Raises:
         PolicyError: If an axis needs a prefilter and its boundary is neither
-            ``"mirror"`` nor a wrap (``boundary="wrap"`` or a periodic axis).
+            ``"mirror"`` nor a wrap (``boundary="wrap"`` or a closed axis).
     """
     if all(order is None for order in orders):
         return None

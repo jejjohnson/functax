@@ -135,7 +135,7 @@ class BrownianBridge(PosteriorCovariance):
 
     so σ_*² = σ² Δᵢ t (1 − t), zero at the knots and σ² Δᵢ / 4 at mid-cell.
     Targets in different cells are independent, because Brownian motion is
-    Markov: the knots between two cells screen them off. On a periodic axis
+    Markov: the knots between two cells screen them off. On a closed axis
     of period T_period the wrap cell between the last node and the first one
     has width T_period − |x_{N−1} − x₀|.
 
@@ -155,7 +155,7 @@ class BrownianBridge(PosteriorCovariance):
 
     Args:
         cell: i, the cell of each target, in [0, N − 1) (or [0, N) on a
-            periodic axis).
+            closed periodic axis).
         offset: t ∈ [0, 1], the offset of each target in its cell.
         scale: σ² Δᵢ, the variance rate times the width of each target's cell.
 
@@ -224,7 +224,7 @@ class BrownianBridge(PosteriorCovariance):
 
         The cell is i = ⌊u⌋ and the offset t = u − i, with u clipped to the
         axis ([0, N − 1]) so that a target off it reads a knot; a plan marks
-        those rows invalid. On a periodic axis i = ⌊u⌋ mod N. Non-finite
+        those rows invalid. On a closed axis i = ⌊u⌋ mod N. Non-finite
         positions read knot 0.
 
         Args:
@@ -249,7 +249,7 @@ class BrownianBridge(PosteriorCovariance):
         positions = jnp.where(finite, positions, zero)
         # ⌊u⌋
         lower = jnp.floor(positions)
-        if axis.period is not None:
+        if axis.period is not None and axis.closed:
             # x_{N−1} − x₀
             span = values[-1] - values[0]
             # the wrap cell x_{N−1} → x₀ + T_period has width
