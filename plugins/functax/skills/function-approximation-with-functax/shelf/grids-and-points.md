@@ -11,7 +11,7 @@ All of them live in `functax.geometry`.
 
 | Name | What it is |
 |---|---|
-| `Axis(values, *, period=None, epoch=None, edges=None, repeats="forbid")` | One strictly monotone coordinate axis. `period=` makes it periodic, `edges=` gives the cell edges when they are not midway between nodes, `epoch=` makes it a time axis in seconds. `axis.cell_edges()`, `axis.is_regular()` and `axis.is_descending()` describe it. |
+| `Axis(values, *, period=None, epoch=None, edges=None, repeats="forbid", closed=None)` | One strictly monotone coordinate axis. `period=` makes it periodic, `closed=` says whether its cells go round the whole period (decided from concrete values when `None`), `edges=` gives the cell edges when they are not midway between nodes, `epoch=` makes it a time axis in seconds. `axis.cell_edges()`, `axis.is_regular()` and `axis.is_descending()` describe it. |
 | `AffineGrid(transform, shape)` | A regular 2-D grid from a six-number affine transform `(a, b, c, d, e, f)` and `(rows, cols)`: a raster. |
 | `RectilinearGrid(axes)` | A tensor-product grid with one `Axis` per dimension, in any number of dimensions. |
 | `CurvilinearGrid(x, y)` | A 2-D grid whose node coordinates are given per node, such as a satellite swath. |
@@ -69,5 +69,6 @@ assert nodes.shape == (9,)
 - An `AffineGrid` needs `jax_enable_x64`: map coordinates in metres lose pixels in float32, so it raises `GeometryError` without it.
 - The geometry carries no CRS. Reproject first, then build the grid in the coordinates you will interpolate in.
 - A periodic axis must span less than its period, so do not repeat the first node at the end.
+- A periodic axis is closed (a global longitude, with a wrap cell) or open (a region: targets in any convention fold to it, and `outside` applies past its ends). A traced axis counts as closed, so pass `closed=False` for a regional one built inside `jit`, and `closed=True` for one node that stands for the whole circle.
 - Use `Points(metric="geodesic")` or `"chord"` for sites on the sphere; a kernel scheme then measures neighbours the same way.
 - A malformed axis, grid or point set raises `GeometryError`, which is also a `ValueError`.

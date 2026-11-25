@@ -82,8 +82,8 @@ class Policies(eqx.Module):
         boundary: At a tap past the end of an axis of N samples.
             ``"mirror"`` reflects about the end sample (j ↦ −j and
             j ↦ 2(N − 1) − j); ``"wrap"`` is j mod N; ``"edge"`` clips to
-            [0, N − 1]; ``"constant"`` drops the tap (weight 0). A periodic
-            axis always wraps.
+            [0, N − 1]; ``"constant"`` drops the tap (weight 0). A closed
+            periodic axis always wraps; an open one has ends (`Axis`).
         extent: ``"nodes"``, the domain is [x₀, x_{N−1}]; ``"cells"``, the
             union of pixel areas, half a cell wider at each end.
         fill_value: Written at invalid rows (and at missing samples under

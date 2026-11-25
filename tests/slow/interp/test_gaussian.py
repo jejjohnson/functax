@@ -145,6 +145,15 @@ class TestBridge:
             variance = Linear(prior_variance_rate=RATE).plan(axis, targets).variance()
             assert_matches_oracle(variance, jnp.array(expected), rtol=1e-12, atol=1e-12)
 
+    def test_an_open_axis_has_no_wrap_cell(self) -> None:
+        region = Axis(jnp.arange(170.0, 195.0, 10.0), period=360.0)
+        targets = Points(jnp.array([[-175.0], [185.0], [190.0], [0.0]]))
+        plan = Linear(prior_variance_rate=RATE).plan(region, targets)
+        # mid-cell in both conventions, the last knot, then outside
+        expected = jnp.array([RATE * 10.0 / 4, RATE * 10.0 / 4, 0.0])
+        assert_matches_oracle(plan.variance()[:3], expected, rtol=1e-12, atol=1e-12)
+        assert plan.valid.tolist() == [True, True, True, False]
+
     def test_float32_stays_float32(self) -> None:
         axis = Axis(jnp.arange(4.0, dtype=jnp.float32))
         targets = Points(jnp.array([[0.5], [2.25]], dtype=jnp.float32))

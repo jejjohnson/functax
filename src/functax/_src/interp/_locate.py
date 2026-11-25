@@ -5,12 +5,13 @@ position u on each axis of N nodes x₀, …, x_{N−1}, so that node j sits at
 u = j. On a regular axis with origin x₀ and spacing Δ, u = (x − x₀)/Δ; on a
 rectilinear axis, u = i + t with cell i from ``searchsorted`` and
 t = (x − xᵢ)/(xᵢ₊₁ − xᵢ), extended linearly past the end cells. A descending
-axis is located on its reversed values; a periodic axis of period P first maps
-x into one period and gains a wrap cell between its last node and the first
-one plus P. An axis of one node x₀ has no spacing: u = 0 at x₀, and its
-edges, when it has them, sit at u = ∓½. On an axis with repeats, u is
-right-continuous: a target at a repeated node sits at the last node of the
-repeat.
+axis is located on its reversed values; a closed periodic axis of period P
+(`Axis`) first maps x into one period and gains a wrap cell between its last
+node and the first one plus P, and an open one folds x to its copy nearest the
+nodes and is then located as an axis without a period. An axis of one node x₀
+has no spacing: u = 0 at x₀, and its edges, when it has them, sit at u = ∓½.
+On an axis with repeats, u is right-continuous: a target at a repeated node
+sits at the last node of the repeat.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ require_jax(__name__)
 
 from typing import Any
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, ArrayLike, Bool, Float, Int
@@ -206,7 +208,7 @@ def require_no_repeats(source: Any, reader: str, *, axes: Any = None) -> None:
 def require_even_spacing(source: Any, reader: str, *, axes: Any = None) -> None:
     """Raise when an axis that ``reader`` reads in index space is unevenly spaced.
 
-    With Δₖ = xₖ₊₁ − xₖ the spacings (and, on a periodic axis, the wrap gap
+    With Δₖ = xₖ₊₁ − xₖ the spacings (and, on a closed axis, the wrap gap
     from the last node to the first one plus P) and Δ̄ their mean, an axis is
     uneven when max |Δₖ − Δ̄| > τ |Δ̄|. τ is the larger of 10⁻³ and
     2 ε max(|xₖ|, P) / |Δ̄|, with ε the machine epsilon of the nodes' dtype,
@@ -244,7 +246,7 @@ def require_even_spacing(source: Any, reader: str, *, axes: Any = None) -> None:
         nodes = np.asarray(axis.values)
         # Δₖ = xₖ₊₁ − xₖ
         spacing = np.diff(nodes)
-        if axis.period is not None:
+        if axis.closed:
             # x₀ ± P − x_{N−1}, the wrap gap, in the direction of the axis
             signed_period = np.copysign(axis.period, spacing[0])
             wrap_gap = nodes[0] + signed_period - nodes[-1]
@@ -337,6 +339,38 @@ def require_cell_widths(source: Any, extent: str) -> None:
             raise GeometryError(msg)
 
 
+def _fold_to_nodes(
+    nodes: Float[Array, " node"],
+    positions: Float[Array, "*target"],
+    period: float,
+) -> Float[Array, "*target"]:
+    """x − mP, the copy of each target nearest the increasing nodes of an open axis.
+
+    With the origin x_o = ½ (x₀ + x_{N−1} − P), the turns m = ⌊(x − x_o)/P⌋
+    bring x into [x_o, x_o + P), which is centred on the nodes. A target with
+    m = 0 is returned unchanged to the last bit. One with m ≠ 0 carries the
+    rounding of x and of mP, up to 2 ε (|x| + |m| P), so where that puts it
+    just past an end node, it is the end node.
+    """
+    first, last = nodes[0], nodes[-1]
+    # x_o = ½ (x₀ + x_{N−1} − P)
+    origin = 0.5 * (first + last - period)
+    # m = ⌊(x − x_o)/P⌋
+    turns = jnp.floor((positions - origin) / period)
+    # x − mP, with derivative 1
+    shift = turns * period
+    folded = positions - shift
+    # the distance back to [x₀, x_{N−1}], 0 inside
+    overshoot = jnp.clip(folded, first, last) - folded
+    # 2 ε (|x| + |m| P)
+    epsilon = jnp.finfo(folded.dtype).eps
+    rounding = 2.0 * epsilon * (jnp.abs(positions) + jnp.abs(shift))
+    is_rounding = (turns != 0) & (jnp.abs(overshoot) <= rounding)
+    zero = jnp.zeros((), folded.dtype)
+    correction = jnp.where(is_rounding, overshoot, zero)
+    return folded + jax.lax.stop_gradient(correction)
+
+
 def index_positions(
     axis: Axis, positions: Float[Array, "*target"]
 ) -> Float[Array, "*target"]:
@@ -344,9 +378,12 @@ def index_positions(
 
     u = (x − x₀)/Δ on a regular axis and i + (x − xᵢ)/(xᵢ₊₁ − xᵢ) on a
     rectilinear one, continued linearly past the end cells, so u < 0 or
-    u > N − 1 outside. On a periodic axis x first maps into one period, and u
+    u > N − 1 outside. On a closed axis x first maps into one period, and u
     lies in [0, N) on an increasing axis, the cell (N − 1, N) being the wrap
-    cell between the last node and the first one plus P. On an axis of one
+    cell between the last node and the first one plus P. On an open axis x
+    first folds to its copy nearest the nodes, in
+    [x₀ − (P − span)/2, x₀ + (P + span)/2) for span = x_{N−1} − x₀ on an
+    increasing axis, and u is that of an axis without a period. On an axis of one
     node x₀, u = 0 at x₀ and ∓½ at its edges (``sign(x − x₀)`` without edges).
     On an axis with repeats, u is right-continuous, so a target at a repeat
     sits at its last node, and past the ends it continues with the outermost
@@ -354,8 +391,9 @@ def index_positions(
 
     Algorithm:
         1. Sort the nodes increasing, noting whether the axis was reversed.
-        2. On a periodic axis, map x into one period and append the wrap
-           node x₀ + P; on one node, use ``sign(x − x₀)`` or the edges.
+        2. On a closed axis, map x into one period and append the wrap
+           node x₀ + P; on an open one, fold x to its copy nearest the
+           nodes; on one node, use ``sign(x − x₀)`` or the edges.
         3. Locate u on the increasing nodes: (x − x₀)/Δ on a regular axis,
            i + t from ``searchsorted`` otherwise (right-continuous at repeats).
         4. On a reversed axis, return (N − 1) − u.
@@ -380,16 +418,24 @@ def index_positions(
         ... ).tolist()
         [0.5]
 
-        A periodic axis maps x into one period first:
+        A closed axis maps x into one period first:
 
         >>> periodic = Axis(jnp.arange(4.0), period=4.0)
         >>> index_positions(periodic, jnp.array([-0.5, 5.0])).tolist()
         [3.5, 1.0]
+
+        An open axis, here across the date line, folds x to its nodes:
+
+        >>> region = Axis(jnp.arange(170.0, 190.5), period=360.0)
+        >>> index_positions(region, jnp.array([-175.0, 185.0, 160.0])).tolist()
+        [15.0, 15.0, -10.0]
     """
     positions = jnp.asarray(positions)
     n_nodes = axis.values.shape[0]
     nodes, descending = _ascending(axis)
-    if axis.period is not None:
+    if axis.period is not None and not axis.closed:
+        positions = _fold_to_nodes(nodes, positions, axis.period)
+    if axis.period is not None and axis.closed:
         origin = nodes[0]
         # (x − x₀) mod P
         within_period = jnp.mod(positions - origin, axis.period)
@@ -454,7 +500,7 @@ def locate(
 
     i = ⌊u⌋ and t = u − i for the index position u of `index_positions`.
     A target is inside when u lies in the domain of ``extent`` and is finite; a
-    periodic axis is inside everywhere. JAX clamps out-of-range gathers
+    closed periodic axis is inside everywhere. JAX clamps out-of-range gathers
     silently, so a scheme reads ``inside`` rather than trusting i.
 
     Args:
@@ -486,7 +532,7 @@ def locate(
     offset = position - cell_float
     cell = cell_float.astype(jnp.int32)
     finite = jnp.isfinite(position)
-    if axis.period is not None:
+    if axis.closed:
         inside = finite
     else:
         inside = finite & (position >= lower) & (position <= upper)
@@ -505,7 +551,7 @@ def remap_taps(
     mirror reflects about the end samples, j ↦ −j for j < 0 and
     j ↦ 2(N − 1) − j for j > N − 1, repeated with period 2(N − 1); wrap is
     j mod N; edge clips to [0, N − 1]; constant clips too, but marks the tap
-    as dropped, so its weight becomes 0. A periodic axis always wraps. These
+    as dropped, so its weight becomes 0. A closed axis always wraps. These
     match ``scipy.ndimage`` modes ``"mirror"``, ``"grid-wrap"``,
     ``"nearest"`` and ``"grid-constant"``.
 
@@ -513,7 +559,7 @@ def remap_taps(
         taps: j, the tap indices, any integers.
         n_nodes: N, the number of nodes on the axis.
         boundary: ``"mirror"``, ``"wrap"``, ``"edge"`` or ``"constant"``.
-        periodic: Whether the axis is periodic, which forces wrap.
+        periodic: Whether the axis is periodic and closed, which forces wrap.
 
     Returns:
         ``(indices, kept)``: indices in [0, N − 1], and False where a

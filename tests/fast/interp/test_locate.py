@@ -124,6 +124,88 @@ class TestRepeats:
             jax.jit(build)(jnp.array([0.0, 1.0, 2.0]))
 
 
+class TestOpenAxis:
+    """A periodic axis whose nodes do not cover the circle."""
+
+    region = Axis(jnp.arange(170.0, 190.5), period=360.0)
+
+    def test_targets_fold_to_the_copy_nearest_the_nodes(self) -> None:
+        # the window is [180 − 180, 180 + 180)
+        targets = jnp.array([-175.0, 185.0, 545.0, 195.0, 160.0, 0.0, 359.0, 360.0])
+        positions = index_positions(self.region, targets)
+        assert positions.tolist() == [15, 15, 15, 25, -10, -170, 189, -170]
+
+    def test_a_descending_axis(self) -> None:
+        axis = Axis(self.region.values[::-1], period=360.0)
+        positions = index_positions(axis, jnp.array([-175.0, 185.0, 160.0]))
+        assert positions.tolist() == [5, 5, 30]
+
+    def test_a_traced_axis_folds_by_its_static_field(self) -> None:
+        targets = jnp.array([-175.0, 185.0, 160.0])
+        for axis in (self.region, Axis(self.region.values[::-1], period=360.0)):
+            located = jax.jit(index_positions)(axis, targets)
+            np.testing.assert_array_equal(located, index_positions(axis, targets))
+
+    def test_locate_is_inside_only_on_the_nodes(self) -> None:
+        targets = jnp.array([-175.0, 170.0, -170.0, -169.6, -169.4, jnp.nan, jnp.inf])
+        _, _, nodes = locate(self.region, targets)
+        _, _, cells = locate(self.region, targets, extent="cells")
+        assert nodes.tolist() == [True, True, True, False, False, False, False]
+        assert cells.tolist() == [True, True, True, True, False, False, False]
+
+    @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+    def test_targets_in_the_window_locate_to_the_bit_as_without_a_period(
+        self, dtype: jnp.dtype
+    ) -> None:
+        values = jnp.asarray(150.04 + np.arange(400) / 12.0, dtype)
+        targets = jnp.linspace(0.0, 330.0, 1001, dtype=dtype)
+        np.testing.assert_array_equal(
+            index_positions(Axis(values, period=360.0), targets),
+            index_positions(Axis(values), targets),
+        )
+
+    @pytest.mark.parametrize("turns", [-2, -1, 1, 3])
+    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
+    def test_the_rounding_of_a_turn_leaves_no_node_outside(
+        self, dtype: type, turns: int
+    ) -> None:
+        for start in (150.04, 153.1, 161.7):
+            values = np.asarray(start + np.arange(100) / 12.0, dtype)
+            # the other convention, rounded to dtype
+            targets = (values.astype(np.float64) + 360.0 * turns).astype(dtype)
+            _, _, inside = locate(Axis(values, period=360.0), jnp.asarray(targets))
+            assert inside.all()
+
+    def test_one_node(self) -> None:
+        strip = Axis([180.0], period=360.0, edges=[179.0, 181.0])
+        targets = jnp.array([180.0, -180.0, -179.5, -178.0, 0.0])
+        _, _, inside = locate(strip, targets, extent="cells")
+        assert inside.tolist() == [True, True, True, False, False]
+        # without edges only the node, in either convention, is inside
+        _, _, inside = locate(Axis([180.0], period=360.0), targets)
+        assert inside.tolist() == [True, True, False, False, False]
+
+    @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+    @pytest.mark.parametrize("descending", [False, True])
+    @pytest.mark.parametrize("n_nodes", [360, 359])
+    def test_a_closed_axis_keeps_its_wrap_cell_to_the_bit(
+        self, n_nodes: int, descending: bool, dtype: jnp.dtype
+    ) -> None:
+        nodes = jnp.arange(n_nodes, dtype=dtype) - 180
+        targets = jnp.linspace(-700.0, 700.0, 997, dtype=dtype)
+        # x̃ = x₀ + ((x − x₀) mod P) on x₀, …, x_{N−1}, x₀ + P
+        wrapped = nodes[0] + jnp.mod(targets - nodes[0], 360.0)
+        extended = jnp.append(nodes, nodes[0] + 360.0)
+        insertion = jnp.searchsorted(extended, wrapped, side="right") - 1
+        cell = jnp.clip(insertion, 0, n_nodes - 1)
+        width = extended[cell + 1] - extended[cell]
+        expected = cell + (wrapped - extended[cell]) / width
+        if descending:
+            expected = (n_nodes - 1) - expected
+        axis = Axis(nodes[::-1] if descending else nodes, period=360.0)
+        np.testing.assert_array_equal(index_positions(axis, targets), expected)
+
+
 class TestLocate:
     def test_extent_nodes_and_cells(self) -> None:
         axis = Axis(jnp.arange(4.0))

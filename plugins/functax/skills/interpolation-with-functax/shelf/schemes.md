@@ -28,7 +28,7 @@ All of them live in `functax.interp`. A scheme is configuration only: it holds n
 |---|---|
 | `outside` | `"nan"` marks the row invalid and writes `fill_value`; `"clamp"` moves the target to the nearest boundary; `"extrapolate"` keeps the scheme's weights; `"raise"` raises `OutsideDomainError` when the plan is built. |
 | `missing` | `"propagate"` lets NaN through; `"renormalise"` drops those taps and divides by the remaining weight; `"fill"` replaces them by `fill_value` first. |
-| `boundary` | `"mirror"`, `"wrap"`, `"edge"` or `"constant"`, for a tap past the end of an axis; a periodic axis always wraps. |
+| `boundary` | `"mirror"`, `"wrap"`, `"edge"` or `"constant"`, for a tap past the end of an axis; a closed periodic axis always wraps. |
 | `extent` | `"nodes"`: the domain ends at the first and last node; `"cells"`: half a cell wider at each end. |
 | `spacing` | `"coordinates"`: `Cubic`, and `BSpline` from order 2, refuse an unevenly spaced axis; `"index"`: they read it in index space. |
 

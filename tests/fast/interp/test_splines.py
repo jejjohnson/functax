@@ -121,9 +121,14 @@ class TestUnevenSpacing:
         for step in (10.0, -10.0):
             even = Axis(jnp.arange(0.0, 36 * step, step), period=360.0)
             Cubic().plan(even, targets)
-        gap = Axis(jnp.arange(0.0, 340.0, 10.0), period=360.0)
-        with pytest.raises(GeometryError, match="from 10 to 30"):
+        # one node short of the circle, so closed with a gap of two spacings
+        gap = Axis(jnp.arange(0.0, 350.0, 10.0), period=360.0)
+        with pytest.raises(GeometryError, match="from 10 to 20"):
             Cubic().plan(gap, targets)
+
+    def test_an_open_axis_has_no_wrap_gap(self) -> None:
+        region = Axis(jnp.arange(0.0, 340.0, 10.0), period=360.0)
+        Cubic().plan(region, Points(jnp.array([[-35.0]])))
 
     def test_a_traced_axis_is_read_in_index_space(self) -> None:
         def read(nodes: jax.Array) -> jax.Array:

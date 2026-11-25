@@ -8,6 +8,7 @@ from __future__ import annotations
 import functools
 
 import einx
+import equinox as eqx
 import hypothesis.strategies as st
 import jax
 import jax.numpy as jnp
@@ -24,6 +25,7 @@ from hypothesis import given, settings
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import map_coordinates
 
+from functax import OutsideDomainError
 from functax.geometry import AffineGrid, Axis, Points, RectilinearGrid
 from functax.interp import BSpline, Cubic, Linear, Nearest, Policies, Tensor
 
@@ -309,6 +311,91 @@ class TestSchemes:
         assert_matches_oracle(
             Linear().plan(affine, affine)(field), field, rtol=1e-14, atol=1e-15
         )
+
+
+class TestOpenAxis:
+    """Reads of a region whose axis has a period (functax#170)."""
+
+    longitude = jnp.arange(170.0, 190.5)
+    targets = jnp.array([[-175.0], [185.0], [195.0], [0.0], [160.0]])
+
+    @pytest.mark.parametrize("descending", [False, True])
+    @pytest.mark.parametrize("extent", ["nodes", "cells"])
+    @pytest.mark.parametrize("scheme", [Linear(), Nearest(), Cubic(), BSpline(3)])
+    def test_outside_applies_past_the_ends(
+        self, scheme: object, extent: str, descending: bool
+    ) -> None:
+        # a field whose value is its own longitude
+        nodes = self.longitude[::-1] if descending else self.longitude
+        grid = RectilinearGrid((Axis(nodes, period=360.0),))
+        policies = Policies(outside="nan", extent=extent)
+        field = scheme.fit(grid, nodes, policies=policies)
+        expected = jnp.array([185.0, 185.0, jnp.nan, jnp.nan, jnp.nan])
+        for read in (field, eqx.filter_jit(field)):
+            assert_matches_oracle(read(self.targets), expected, rtol=1e-12)
+        plan = scheme.plan(grid, Points(self.targets), policies=policies)
+        assert_matches_oracle(plan(nodes), expected, rtol=1e-12)
+        assert plan.valid.tolist() == [True, True, False, False, False]
+
+    def test_clamp_reads_the_nearest_end(self) -> None:
+        axis = Axis(self.longitude, period=360.0)
+        targets = Points(jnp.array([[195.0], [-165.0], [160.0], [-200.0]]))
+        plan = Linear().plan(axis, targets, policies=Policies(outside="clamp"))
+        assert plan(self.longitude).tolist() == [190.0, 190.0, 170.0, 170.0]
+
+    def test_extrapolate_continues_the_end_cells(self) -> None:
+        axis = Axis(self.longitude, period=360.0)
+        targets = Points(jnp.array([[195.0], [-165.0], [160.0]]))
+        plan = Linear().plan(axis, targets, policies=Policies(outside="extrapolate"))
+        assert_matches_oracle(
+            plan(self.longitude), jnp.array([195.0, 195.0, 160.0]), rtol=1e-13
+        )
+
+    def test_outside_raise(self) -> None:
+        axis = Axis(self.longitude, period=360.0)
+        raises = Policies(outside="raise")
+        Linear().plan(axis, Points(self.targets[:2]), policies=raises)
+        with pytest.raises(OutsideDomainError, match="3 of 5 targets"):
+            Linear().plan(axis, Points(self.targets), policies=raises)
+
+    @pytest.mark.parametrize("boundary", ["mirror", "wrap", "edge", "constant"])
+    def test_boundary_applies_at_the_ends(self, boundary: str) -> None:
+        policies = Policies(boundary=boundary)
+        targets = Points(jnp.array([[170.25], [189.75]]))
+        field = jax.random.normal(jax.random.key(3), self.longitude.shape)
+        open_axis = Axis(self.longitude, period=360.0)
+        plan = Cubic().plan(open_axis, targets, policies=policies)
+        without = Cubic().plan(Axis(self.longitude), targets, policies=policies)
+        np.testing.assert_array_equal(plan(field), without(field))
+
+    def test_gradients_are_finite_on_both_sides_of_the_fold(self) -> None:
+        axis = Axis(self.longitude, period=360.0)
+        values = jnp.sin(self.longitude)
+        # the fold is at 0° and 360°; −175° and 185° are one point inside
+        targets = jnp.array([-1e-9, 0.0, 1e-9, 360.0, 360.0 - 1e-9, -175.4, 184.6])
+        for outside in ("nan", "clamp", "extrapolate"):
+            field = Linear().fit(axis, values, policies=Policies(outside=outside))
+
+            def read(x: jax.Array, field: object = field) -> jax.Array:
+                return field(jnp.reshape(x, (1, 1)))[0]
+
+            slopes = jax.vmap(jax.grad(read))(targets)
+            assert jnp.isfinite(slopes).all()
+            assert_matches_oracle(slopes[5], slopes[6], rtol=1e-9)
+            if outside != "extrapolate":
+                assert slopes[:5].tolist() == [0.0] * 5
+
+    def test_a_grid_with_a_regional_longitude(self) -> None:
+        latitude = jnp.arange(-10.0, 10.5, 2.0)
+        grid = RectilinearGrid((Axis(latitude), Axis(self.longitude, period=360.0)))
+        phi, lam = jnp.meshgrid(latitude, self.longitude, indexing="ij")
+        targets = Points(jnp.array([[1.0, -175.5], [1.0, 184.5], [1.0, 0.0]]))
+        plan = Linear().plan(grid, targets)
+        values = plan(einx.id("row col -> (row col)", 1000.0 * phi + lam))
+        expected = jnp.array([1184.5, 1184.5, jnp.nan])
+        assert_matches_oracle(values, expected, rtol=1e-13)
+        size = latitude.size * self.longitude.size
+        assert_adjoint(plan, plan.adjoint, size, 3, key=jax.random.key(0), rtol=1e-12)
 
 
 class TestMissing:

@@ -92,7 +92,7 @@ def plan_key(
     b₁, …, b_N are those N arrays' C-contiguous little-endian bytes in the
     same order. Equal inputs give
     the same key in any process; a change of one ULP in any coordinate, of
-    a dtype, a shape, a static field (period, epoch, metric) or the functax
+    a dtype, a shape, a static field (period, closed, epoch, metric) or the functax
     version gives another. Runs on the host.
 
     Algorithm:

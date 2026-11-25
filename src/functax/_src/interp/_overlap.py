@@ -38,6 +38,10 @@ __all__ = [
 ]
 
 
+# the rounding of a target cell shifted by a whole number of periods, in machine
+# epsilons of the larger of the edges and the period
+_SHIFT_EPSILONS = 4.0
+
 # a source whose edges span the period P to this relative tolerance covers the circle
 _FULL_CIRCLE_RTOL = 1e-12
 
@@ -224,9 +228,16 @@ def overlap_band(
         target_lower = shifted_lower
         full_circle = span >= period * (1.0 - _FULL_CIRCLE_RTOL)
         all_covered = np.full(target_lengths.shape, full_circle)
+        # the shift rounds, so a cell that ends on the source's end may miss it
+        largest = max(np.abs(source).max(), np.abs(target).max(), period)
+        rounding = _SHIFT_EPSILONS * np.finfo(dtype).eps * largest
         # Eᵢ₊₁ ≤ e_max
-        below_upper = target_upper <= domain_upper
-        covered = all_covered | below_upper
+        below_upper = target_upper <= domain_upper + rounding
+        # or a cell that starts on the source's start, one period on:
+        # Eᵢ ≥ e_min + P and Eᵢ₊₁ ≤ e_max + P
+        above_lower = target_lower >= domain_lower + period - rounding
+        below_shifted_upper = target_upper <= domain_upper + period + rounding
+        covered = all_covered | below_upper | (above_lower & below_shifted_upper)
         # the source again, one period on
         shifted_cell_lower = cell_lower + period
         shifted_cell_upper = cell_upper + period
