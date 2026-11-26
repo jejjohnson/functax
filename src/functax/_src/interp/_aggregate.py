@@ -274,6 +274,58 @@ def _nearest_by_edges(
     )
 
 
+def _linear_over_cells(
+    target: Axis | RectilinearGrid, source: Points, sampling: Policies
+) -> Stencil:
+    """H of cloud-in-cell over the cells, from the first edge to the last.
+
+    Each open axis gets a ghost node past each end, its end node reflected in
+    the end edge, g = 2e − x. A sample between an end node and its edge then
+    splits between that node and the ghost, and the ghost's tap folds back
+    onto the node, so the weights of every sample inside the edges sum to 1. A
+    periodic axis needs no ghost. Samples outside the edges fall in no cell.
+    """
+    axes = (target,) if isinstance(target, Axis) else target.axes
+    padded_axes = []
+    kept = jnp.ones(source.xy.shape[0], dtype=bool)
+    for index, axis in enumerate(axes):
+        if axis.period is not None:
+            padded_axes.append(axis)
+            continue
+        values = axis.values
+        edges = axis.cell_edges()
+        # g = 2e − x at both ends
+        first = 2.0 * edges[0] - values[0]
+        last = 2.0 * edges[-1] - values[-1]
+        nodes = einx.id(", node, -> (1 + node + 1)", first, values, last)
+        padded_axes.append(Axis(nodes))
+        coordinate = source.xy[:, index]
+        lower = jnp.minimum(edges[0], edges[-1])
+        upper = jnp.maximum(edges[0], edges[-1])
+        # 1[e_lower ≤ x < e_upper], as nearest binning between edges
+        kept = kept & (coordinate >= lower) & (coordinate < upper)
+    padded = (
+        padded_axes[0] if isinstance(target, Axis) else RectilinearGrid(padded_axes)
+    )
+    bases = (LinearBasis(),) * len(axes)
+    stencil = tensor_stencil(padded, source, bases, policies=sampling)
+    # --- fold each ghost's tap onto its end node ---
+    padded_shape = tuple(axis.values.shape[0] for axis in padded_axes)
+    shape = tuple(axis.values.shape[0] for axis in axes)
+    coordinates = jnp.unravel_index(stencil.indices, padded_shape)
+    folded = []
+    for coordinate, axis, size in zip(coordinates, axes, shape, strict=True):
+        moved = coordinate if axis.period is not None else coordinate - 1
+        folded.append(jnp.clip(moved, 0, size - 1))
+    indices = jnp.ravel_multi_index(tuple(folded), shape, mode="clip")
+    valid = stencil.valid & kept
+    zero = jnp.zeros((), stencil.weights.dtype)
+    weights = einx.where("obs, obs tap, -> obs tap", valid, stencil.weights, zero)
+    return Stencil(
+        indices, weights, n_source=int(np.prod(shape)), valid=valid, check=False
+    )
+
+
 def _has_edges(target: Any) -> bool:
     """Whether a rectilinear target has an axis with explicit, non-periodic edges."""
     if not isinstance(target, Axis | RectilinearGrid):
@@ -310,9 +362,12 @@ class Binning(Scheme):
         3. Read Hᵀ y through a `TransposedStencil`, scaled by 1/Nⱼ for the
            mean (by 1 where Nⱼ = 0, then marked invalid).
 
-    The domain is the union of the cells for nearest weights, and the hull of
-    the nodes for linear ones (a sample past the end nodes is dropped, so the
-    deposited total equals the total of the samples inside). The plan traces
+    The domain is the union of the cells for nearest weights. For linear ones
+    it is the hull of the nodes by default (a sample past the end nodes is
+    dropped, so the deposited total equals the total of the samples inside),
+    and the union of the cells under ``Policies(extent="cells")``, where a
+    sample between an end node and its edge goes wholly to the end node, so
+    that a deposit at a wall loses no mass. The plan traces
     in the positions, so ``jax.grad`` of a cloud-in-cell loss reaches them.
 
     Args:
@@ -372,8 +427,10 @@ class Binning(Scheme):
             policies: ``outside`` (``"nan"`` or ``"raise"``) acts on samples
                 off the grid, ``fill_value`` is written at empty cells under
                 the mean, and ``missing`` (``"propagate"`` or ``"fill"``) at
-                non-finite samples; ``extent`` and ``boundary`` are not used,
-                since ``weights`` fixes the domain.
+                non-finite samples. ``extent="cells"`` extends linear weights
+                to the cells' edges (on an `Axis` or a `RectilinearGrid`);
+                nearest weights always use the cells, and ``boundary`` is not
+                used.
 
         Returns:
             The `BinningPlan`; a grid keeps its shape as ``target_shape``.
@@ -382,7 +439,8 @@ class Binning(Scheme):
             GeometryError: If the source is not euclidean `Points` or the
                 target is not a grid, or their dimensions differ.
             PolicyError: Under ``outside="clamp"`` or ``"extrapolate"``, or
-                ``missing="renormalise"``.
+                ``missing="renormalise"``, or ``extent="cells"`` with linear
+                weights on an `AffineGrid` or a `CurvilinearGrid`.
             OutsideDomainError: Under ``outside="raise"`` when a sample is off
                 the grid.
         """
@@ -415,8 +473,17 @@ class Binning(Scheme):
             boundary="constant",
         )
         n_axes = 1 if isinstance(target, Axis) else len(target.shape)
+        over_cells = not nearest and policies.extent == "cells"
+        if over_cells and not isinstance(target, Axis | RectilinearGrid):
+            msg = (
+                "Binning with weights='linear' supports extent='cells' on an Axis "
+                f"or a RectilinearGrid, got {type(target).__name__}"
+            )
+            raise PolicyError(msg)
         if nearest and _has_edges(target):
             stencil = _nearest_by_edges(target, source, sampling)
+        elif over_cells:
+            stencil = _linear_over_cells(target, source, sampling)
         else:
             stencil = tensor_stencil(
                 target, source, (basis,) * n_axes, policies=sampling

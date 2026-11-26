@@ -48,7 +48,7 @@ A mesh that already has its triangles (an icosphere patch, a finite-element mesh
 
 ## Binning and cloud-in-cell
 
-When there are many samples per cell, aggregate them instead of interpolating. [`Binning`](xref:api#functax.interp.Binning) is sampling run backwards: the stencil $\mat{H}$ that would read the grid at the sample positions, applied as $\mat{H}^\top$, sends each sample to its cells. With `weights="nearest"` a sample lands in one cell (between the axis's `edges` when it has them, and otherwise in the cell of its nearest node), so the sums are a histogram and the means divide by the counts $\vect{n} = \mat{H}^\top \vect{1}$; with `weights="linear"` a sample spreads over the $2^D$ nodes around it, which is cloud-in-cell deposition:
+When there are many samples per cell, aggregate them instead of interpolating. [`Binning`](xref:api#functax.interp.Binning) is sampling run backwards: the stencil $\mat{H}$ that would read the grid at the sample positions, applied as $\mat{H}^\top$, sends each sample to its cells. With `weights="nearest"` a sample lands in one cell (between the axis's `edges` when it has them, and otherwise in the cell of its nearest node), so the sums are a histogram and the means divide by the counts $\vect{n} = \mat{H}^\top \vect{1}$; with `weights="linear"` a sample spreads over the $2^D$ nodes around it, which is cloud-in-cell deposition. By default a linear deposit covers the hull of the nodes, and a sample between an end node and its edge is dropped; `policies=Policies(extent="cells")` covers the cells to their edges instead, giving such a sample wholly to the end node, so that a deposit at a wall (the ground under a footprint, say) loses no mass:
 
 ```python
 from functax.interp import Binning

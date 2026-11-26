@@ -7,6 +7,7 @@ eagerly.
 from __future__ import annotations
 
 import functools
+import itertools
 
 import hypothesis.strategies as st
 import jax
@@ -275,3 +276,126 @@ def test_nearest_with_edges_traces() -> None:
 
     batch = jnp.asarray(np.random.default_rng(9).uniform(-1.0, 11.0, (3, 4, 1)))
     assert_traces(counts, batch)
+
+
+# --- linear weights over the cells (#169) --------------------------------------
+
+OVER_CELLS = Policies(extent="cells")
+
+
+def _grid(dim: int, *, stretched: bool) -> RectilinearGrid:
+    edges = (np.arange(9) / 8.0) ** 2 * 10.0 if stretched else np.linspace(0, 10, 9)
+    return RectilinearGrid([_with_edges(edges)] * dim)
+
+
+def _ghost_and_fold(grid: RectilinearGrid, xy: np.ndarray, m: np.ndarray) -> np.ndarray:
+    """A ghost node per end, reflected in the end edge, deposited and folded back.
+
+    Samples outside the edges are dropped first, as the caller of this
+    construction drops them.
+    """
+    inside = np.ones(len(m), dtype=bool)
+    for column, axis in enumerate(grid.axes):
+        edges = np.asarray(axis.edges)
+        inside &= (xy[:, column] >= edges[0]) & (xy[:, column] < edges[-1])
+    m = np.where(inside, m, 0.0)
+    ghosts = []
+    for axis in grid.axes:
+        edges, nodes = np.asarray(axis.edges), np.asarray(axis.values)
+        ghosts.append(
+            Axis(
+                jnp.asarray(
+                    [2 * edges[0] - nodes[0], *nodes, 2 * edges[-1] - nodes[-1]]
+                )
+            )
+        )
+    plan = Binning("sum", weights="linear").plan(
+        Points(jnp.asarray(xy)), RectilinearGrid(ghosts)
+    )
+    padded = np.asarray(plan(jnp.asarray(m))).reshape([n + 2 for n in grid.shape])
+    for axis in range(len(grid.shape)):
+        inner = np.take(padded, range(1, padded.shape[axis] - 1), axis=axis)
+        first = [slice(None)] * inner.ndim
+        first[axis] = slice(0, 1)
+        last = [slice(None)] * inner.ndim
+        last[axis] = slice(-1, None)
+        inner[tuple(first)] += np.take(padded, [0], axis=axis)
+        inner[tuple(last)] += np.take(padded, [-1], axis=axis)
+        padded = inner
+    return padded.ravel()
+
+
+@pytest.mark.parametrize("dim", [1, 2, 3])
+@pytest.mark.parametrize("stretched", [False, True], ids=["uniform", "stretched"])
+def test_linear_over_the_cells_keeps_every_mass_inside_the_edges(
+    dim: int, stretched: bool
+) -> None:
+    rng = np.random.default_rng(10 + dim)
+    # some past the edges on each axis, which are dropped
+    xy = rng.uniform(-0.5, 10.5, (800, dim))
+    m = rng.uniform(0.5, 2.0, 800)
+    grid = _grid(dim, stretched=stretched)
+    plan = Binning("sum", weights="linear").plan(
+        Points(jnp.asarray(xy)), grid, policies=OVER_CELLS
+    )
+    deposited = plan(jnp.asarray(m))
+    inside = ((xy >= 0.0) & (xy < 10.0)).all(axis=1)
+    assert 0 < inside.sum() < 800
+    assert_matches_oracle(jnp.sum(deposited), m[inside].sum(), rtol=1e-12)
+    assert_matches_oracle(
+        deposited, _ghost_and_fold(grid, xy, m), rtol=1e-12, atol=1e-12
+    )
+
+
+def test_extent_nodes_is_unchanged_bit_for_bit() -> None:
+    positions, _ = _samples()
+    masses = jnp.asarray(RNG.uniform(0.5, 2.0, N_SAMPLES))
+    default = Binning("sum", weights="linear").plan(Points(positions), GRID)(masses)
+    nodes = Binning("sum", weights="linear").plan(
+        Points(positions), GRID, policies=Policies(extent="nodes")
+    )(masses)
+    assert jnp.array_equal(default, nodes)
+
+
+def test_linear_over_the_cells_passes_the_dot_product_test() -> None:
+    rng = np.random.default_rng(20)
+    xy = jnp.asarray(rng.uniform(0.0, 10.0, (50, 2)))
+    plan = Binning("sum", weights="linear").plan(
+        Points(xy), _grid(2, stretched=True), policies=OVER_CELLS
+    )
+    assert_adjoint(plan.operator().mv, plan.adjoint, 50, 64, key=jax.random.key(4))
+
+
+def test_linear_over_the_cells_has_the_gradient_of_its_weights() -> None:
+    """Away from the nodes; in a half cell at a wall the weights are constant."""
+    grid = _grid(1, stretched=True)
+    nodes = np.asarray(grid.axes[0].values)
+    # one sample in each interior gap, and one in the half cell below the first node
+    xy = jnp.asarray(
+        [
+            [0.6 * nodes[0]],
+            *[[0.5 * (a + b)] for a, b in itertools.pairwise(nodes)],
+        ]
+    )
+    masses = jnp.ones(xy.shape[0])
+    target = jnp.asarray(np.random.default_rng(21).normal(size=8))
+
+    def loss(points: jax.Array) -> jax.Array:
+        plan = Binning("sum", weights="linear").plan(
+            Points(points), grid, policies=OVER_CELLS
+        )
+        return jnp.sum((plan(masses) - target) ** 2)
+
+    assert_grad_matches_fd(loss, xy, eps=1e-6, rtol=1e-6)
+    assert float(jax.grad(loss)(xy)[0, 0]) == 0.0
+
+
+def test_linear_over_the_cells_needs_a_rectilinear_target() -> None:
+    from functax import PolicyError
+    from functax.geometry import AffineGrid
+
+    grid = AffineGrid.from_affine((1.0, 0.0, 0.0, 0.0, -1.0, 4.0), (4, 4))
+    with pytest.raises(PolicyError, match="extent='cells'"):
+        Binning("sum", weights="linear").plan(
+            Points(jnp.ones((3, 2))), grid, policies=OVER_CELLS
+        )
