@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.15](https://github.com/jejjohnson/functax/compare/v0.0.14...v0.0.15) (2026-11-27)
+
+
+### Bug Fixes
+
+* **interp:** nearest Binning between explicit edges works when the edges are traced ([#182](https://github.com/jejjohnson/functax/issues/182)) ([f92ac08](https://github.com/jejjohnson/functax/commit/f92ac08b3509692199f3098f133a93db9537c3d4))
+
 ## [0.0.14](https://github.com/jejjohnson/functax/compare/v0.0.13...v0.0.14) (2026-11-27)
 
 
