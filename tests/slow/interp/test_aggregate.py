@@ -278,6 +278,27 @@ def test_nearest_with_edges_traces() -> None:
     assert_traces(counts, batch)
 
 
+@pytest.mark.parametrize("descending", [False, True])
+def test_nearest_with_traced_edges_traces(descending: bool) -> None:
+    """Edges that are arguments of the program bin as concrete ones do."""
+    edges = np.array([0.0, 1.0, 4.0, 10.0])
+    x = jnp.asarray(np.random.default_rng(10).uniform(-1.0, 11.0, (16, 1)))
+    values = jnp.ones(16)
+
+    def counts(edge: jax.Array) -> jax.Array:
+        centres = 0.5 * (edge[1:] + edge[:-1])
+        grid = Axis(centres, edges=edge)
+        return Binning("count").plan(Points(x), grid)(values)
+
+    order = edges[::-1] if descending else edges
+    expected = Binning("count").plan(
+        Points(x), _with_edges(edges, descending=descending)
+    )(values)
+    assert_matches_oracle(jax.jit(counts)(jnp.asarray(order)), expected, rtol=0.0)
+    batch = jnp.asarray(np.stack([order, 2.0 * order]))
+    assert_traces(counts, batch)
+
+
 # --- linear weights over the cells (#169) --------------------------------------
 
 OVER_CELLS = Policies(extent="cells")
