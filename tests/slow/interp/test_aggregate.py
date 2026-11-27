@@ -205,3 +205,73 @@ def test_batches_and_grid_shape() -> None:
     assert isinstance(plan.read, TransposedStencil)
     assert plan.grid_shape == (2, 3)
     assert plan(jnp.ones((4, 3))).shape == (4, 6)
+
+
+# --- explicit edges (#168) -----------------------------------------------------
+
+STRETCHED = ((np.arange(11) / 10.0) ** 2, np.array([-3.0, -1.0, 0.5, 2.5, 3.0]))
+
+
+def _with_edges(edges: np.ndarray, *, descending: bool = False) -> Axis:
+    centres = 0.5 * (edges[1:] + edges[:-1])
+    if descending:
+        centres, edges = centres[::-1], edges[::-1]
+    return Axis(jnp.asarray(centres), edges=jnp.asarray(edges))
+
+
+@pytest.mark.parametrize("statistic", ["mean", "sum", "count"])
+def test_nearest_bins_between_explicit_edges(statistic: str) -> None:
+    rng = np.random.default_rng(7)
+    # past the first and the last edge on both axes too
+    positions = np.column_stack(
+        [rng.uniform(-0.1, 1.1, 500), rng.uniform(-3.5, 3.5, 500)]
+    )
+    values = rng.normal(size=500)
+    grid = RectilinearGrid([_with_edges(edges) for edges in STRETCHED])
+    plan = Binning(statistic).plan(Points(jnp.asarray(positions)), grid)
+    expected = binned_statistic_dd(
+        positions, values, statistic, bins=list(STRETCHED)
+    ).statistic
+    assert_matches_oracle(plan(jnp.asarray(values)), expected.ravel(), rtol=1e-12)
+
+
+def test_a_descending_axis_bins_between_its_edges() -> None:
+    edges = np.array([0.0, 1.0, 4.0, 10.0])
+    x = jnp.array([[0.5], [1.2], [3.9], [4.5], [9.9], [10.5]])
+    rising = Binning("count").plan(Points(x), _with_edges(edges))(jnp.ones(6))
+    falling = Binning("count").plan(Points(x), _with_edges(edges, descending=True))(
+        jnp.ones(6)
+    )
+    assert rising.tolist() == [1.0, 2.0, 2.0]
+    assert falling.tolist() == [2.0, 2.0, 1.0]
+
+
+def test_an_axis_without_edges_bins_as_before() -> None:
+    """Edges on one axis change nothing on the other."""
+    positions, values = _samples()
+    edges = _cell_edges(NODES[0])
+    with_edges = Axis(jnp.asarray(NODES[0]), edges=jnp.asarray(edges))
+    mixed = RectilinearGrid([with_edges, Axis(jnp.asarray(NODES[1]))])
+    found = Binning("sum").plan(Points(positions), mixed)(jnp.asarray(values))
+    before = Binning("sum").plan(Points(positions), GRID)(jnp.asarray(values))
+    assert_matches_oracle(found, before, rtol=1e-12)
+
+
+def test_nearest_with_edges_passes_the_dot_product_test() -> None:
+    rng = np.random.default_rng(8)
+    positions = np.column_stack([rng.uniform(0.0, 1.0, 40), rng.uniform(-3, 3, 40)])
+    grid = RectilinearGrid([_with_edges(edges) for edges in STRETCHED])
+    plan = Binning("sum").plan(Points(jnp.asarray(positions)), grid)
+    apply = plan.operator().mv
+    assert_adjoint(apply, plan.adjoint, 40, 40, key=jax.random.key(3))
+
+
+def test_nearest_with_edges_traces() -> None:
+    grid = _with_edges(np.array([0.0, 1.0, 4.0, 10.0]))
+    values = jnp.ones(4)
+
+    def counts(x: jax.Array) -> jax.Array:
+        return Binning("count").plan(Points(x), grid)(values)
+
+    batch = jnp.asarray(np.random.default_rng(9).uniform(-1.0, 11.0, (3, 4, 1)))
+    assert_traces(counts, batch)

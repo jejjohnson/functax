@@ -23,6 +23,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
+import numpy as np
 from jaxtyping import Array, Bool, Float
 
 from functax._src.geometry._types import (
@@ -229,6 +230,58 @@ class BinningPlan(Plan):
         return super().linearize(data)
 
 
+def _nearest_by_edges(
+    target: Axis | RectilinearGrid, source: Points, sampling: Policies
+) -> Stencil:
+    """H of nearest binning, with an axis that has edges binned by its edges.
+
+    On an axis with explicit ``edges`` (and no period), sample x falls in the
+    cell k with e_k ≤ x < e_{k+1}, by `jax.numpy.searchsorted`, and outside the
+    first and last edge it falls in none. Every other axis keeps the cell of its
+    nearest node, from the 1-D nearest stencil. The cells are row-major.
+    """
+    axes = (target,) if isinstance(target, Axis) else target.axes
+    n_samples = source.xy.shape[0]
+    flat = jnp.zeros(n_samples, dtype=int)
+    inside = jnp.ones(n_samples, dtype=bool)
+    for index, axis in enumerate(axes):
+        coordinate = source.xy[:, index]
+        n_cells = axis.values.shape[0]
+        if axis.edges is not None and axis.period is None:
+            edges = jnp.asarray(axis.edges, coordinate.dtype)
+            descending = axis.is_descending
+            ascending = edges[::-1] if descending else edges
+            # k = max{ j : e_j ≤ x }, and 1[0 ≤ k < M]
+            cell = jnp.searchsorted(ascending, coordinate, side="right") - 1
+            kept = (cell >= 0) & (cell < n_cells) & jnp.isfinite(coordinate)
+            if descending:
+                cell = n_cells - 1 - cell
+        else:
+            column = Points(einx.id("obs -> obs 1", coordinate))
+            one = tensor_stencil(axis, column, (NearestBasis(),), policies=sampling)
+            cell, kept = one.indices[:, 0], one.valid
+        flat = flat * n_cells + jnp.where(kept, cell, 0)
+        inside = inside & kept
+    n_cells = int(np.prod([axis.values.shape[0] for axis in axes]))
+    dtype = source.xy.dtype
+    weights = jnp.where(inside, jnp.ones((), dtype), jnp.zeros((), dtype))
+    return Stencil(
+        einx.id("obs -> obs 1", flat),
+        einx.id("obs -> obs 1", weights),
+        n_source=n_cells,
+        valid=inside,
+        check=False,
+    )
+
+
+def _has_edges(target: Any) -> bool:
+    """Whether a rectilinear target has an axis with explicit, non-periodic edges."""
+    if not isinstance(target, Axis | RectilinearGrid):
+        return False
+    axes = (target,) if isinstance(target, Axis) else target.axes
+    return any(axis.edges is not None and axis.period is None for axis in axes)
+
+
 class Binning(Scheme):
     """Aggregate scattered samples into grid cells: Hᵀ y, normalised for the mean.
 
@@ -238,9 +291,11 @@ class Binning(Scheme):
         sums  (Hᵀ y)ⱼ,   counts  Nⱼ = (Hᵀ 1)ⱼ,   means  ȳⱼ = (Hᵀ y)ⱼ / Nⱼ,
 
     with NaN (``fill_value``) where Nⱼ = 0. With ``weights="nearest"`` H has
-    one tap per sample, so each sample falls in the cell of its nearest node
-    (the cell's boundaries sit half-way between nodes, and half a cell past the
-    end nodes) and this is a histogram, as ``scipy.stats.binned_statistic_dd``.
+    one tap per sample, so each sample falls in one cell and this is a
+    histogram, as ``scipy.stats.binned_statistic_dd``: on an axis with explicit
+    ``edges``, the cell between them (e_k ≤ x < e_{k+1}); on any other, the
+    cell of its nearest node (the boundaries half-way between nodes, and half a
+    cell past the end nodes).
     With ``weights="linear"`` H is the 2ᴰ-tap linear stencil on D grid axes,
     so a sample spreads over the nodes around it: cloud-in-cell gridding,
     which conserves the total and is differentiable in the positions.
@@ -248,7 +303,9 @@ class Binning(Scheme):
     Algorithm:
         1. Build H by `tensor_stencil` at the sample positions, with
            ``outside="nan"``: a sample off the grid gets zero weights and is
-           dropped from every cell, never clamped onto the edge.
+           dropped from every cell, never clamped onto the edge. With nearest
+           weights, an axis with explicit ``edges`` locates each sample between
+           its edges instead.
         2. Nⱼ = (Hᵀ 1)ⱼ by the stencil's scatter-add (`Stencil.apply_adjoint`).
         3. Read Hᵀ y through a `TransposedStencil`, scaled by 1/Nⱼ for the
            mean (by 1 where Nⱼ = 0, then marked invalid).
@@ -358,7 +415,12 @@ class Binning(Scheme):
             boundary="constant",
         )
         n_axes = 1 if isinstance(target, Axis) else len(target.shape)
-        stencil = tensor_stencil(target, source, (basis,) * n_axes, policies=sampling)
+        if nearest and _has_edges(target):
+            stencil = _nearest_by_edges(target, source, sampling)
+        else:
+            stencil = tensor_stencil(
+                target, source, (basis,) * n_axes, policies=sampling
+            )
         inside = stencil.valid
         if source.valid is not None:
             # padding counts in no cell, and is never outside
