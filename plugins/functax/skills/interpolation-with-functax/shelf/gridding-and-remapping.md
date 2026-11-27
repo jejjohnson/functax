@@ -66,5 +66,6 @@ assert lengths.sum(axis=1).tolist() == [3.0, 3.0]
 - On a lon/lat grid pass `Conservative(sphere=True, unit="degrees")`, so that cells are weighted by their area on the sphere.
 - `Policies(missing="renormalise")` averages over the source cells that have data, which is what a land mask or a cloud mask needs.
 - A cell that receives no sample is NaN under `"mean"` and 0 under `"sum"` and `"count"`. Read `plan.valid` to tell an empty cell from a zero.
+- A linear `Binning` covers the hull of the nodes, so a sample in the outer half of an end cell is dropped; pass `policies=Policies(extent="cells")` to keep it, on the end node (an `Axis` or a `RectilinearGrid` only).
 - With `weights="nearest"` an axis with `edges` bins each sample between them, e_k ≤ x < e_{k+1}, as `numpy.histogram` does on stretched cells; an axis without edges bins by the nearest node.
 - Binning is the adjoint of sampling: `Binning("sum")` on the samples of a nearest-neighbour plan is that plan's `adjoint`.
