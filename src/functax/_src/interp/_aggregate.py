@@ -249,13 +249,13 @@ def _nearest_by_edges(
         n_cells = axis.values.shape[0]
         if axis.edges is not None and axis.period is None:
             edges = jnp.asarray(axis.edges, coordinate.dtype)
-            descending = axis.is_descending
-            ascending = edges[::-1] if descending else edges
+            # a flag in the program, since traced edges have no direction on the host
+            descending = edges[0] > edges[-1]
+            ascending = jnp.where(descending, edges[::-1], edges)
             # k = max{ j : e_j ≤ x }, and 1[0 ≤ k < M]
             cell = jnp.searchsorted(ascending, coordinate, side="right") - 1
             kept = (cell >= 0) & (cell < n_cells) & jnp.isfinite(coordinate)
-            if descending:
-                cell = n_cells - 1 - cell
+            cell = jnp.where(descending, n_cells - 1 - cell, cell)
         else:
             column = Points(einx.id("obs -> obs 1", coordinate))
             one = tensor_stencil(axis, column, (NearestBasis(),), policies=sampling)
