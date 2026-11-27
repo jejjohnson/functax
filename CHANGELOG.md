@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.0.14](https://github.com/jejjohnson/functax/compare/v0.0.13...v0.0.14) (2026-11-27)
+
+
+### Features
+
+* **interp:** linear Binning keeps the mass of samples in the outer half cells, under extent="cells" ([#181](https://github.com/jejjohnson/functax/issues/181)) ([829f9d0](https://github.com/jejjohnson/functax/commit/829f9d0641147d66bd409f368446b810f4808467))
+
+
+### Bug Fixes
+
+* **interp:** a regional axis with a period is read only where its data reach ([#173](https://github.com/jejjohnson/functax/issues/173)) ([4d4c9f0](https://github.com/jejjohnson/functax/commit/4d4c9f0993b2eef2b38a52d0add0cc8cdcc8a509)), closes [#170](https://github.com/jejjohnson/functax/issues/170)
+* **interp:** nearest Binning bins between an axis's explicit edges, so stretched cells get their own samples ([#180](https://github.com/jejjohnson/functax/issues/180)) ([9996ac5](https://github.com/jejjohnson/functax/commit/9996ac571089022a1defa05800f1a95a64eebe84))
+
 ## [0.0.13](https://github.com/jejjohnson/functax/compare/v0.0.12...v0.0.13) (2026-11-23)
 
 
